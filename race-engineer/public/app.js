@@ -1,18 +1,8 @@
 const S = {
-  raceId: Number(localStorage.getItem("raceId") || 1),
-
   live: [],
   stints: [],
   drivers: [],
   pits: [],
-
-  activeView: "live",
-  loaded: {
-    stints: false,
-    drivers: false,
-    pits: false
-  },
-
   timer: null
 };
 
@@ -115,13 +105,9 @@ function stintNo(row) {
 // ============================================================
 
 async function api(path) {
-
-  const r = await fetch(
-    `${path}?race_id=${encodeURIComponent(S.raceId)}`,
-    {
-      cache: "no-store"
-    }
-  );
+  const r = await fetch(path, {
+    cache: "no-store"
+  });
 
   if (!r.ok) {
     throw new Error(await r.text());
@@ -771,61 +757,6 @@ async function loadActiveView(force = false) {
     await loadPits(force);
   }
 }
-
-
-// ============================================================
-// RACE ID
-// ============================================================
-
-$("raceId").value =
-  S.raceId;
-
-
-$("raceId").addEventListener(
-  "change",
-  async () => {
-
-    S.raceId =
-      Number(
-        $("raceId").value || 1
-      );
-
-    localStorage.setItem(
-      "raceId",
-      S.raceId
-    );
-
-
-    // Clear all old race data
-    S.live = [];
-    S.stints = [];
-    S.drivers = [];
-    S.pits = [];
-
-    S.loaded.stints = false;
-    S.loaded.drivers = false;
-    S.loaded.pits = false;
-
-
-    teams();
-
-    renderLive();
-    renderStints();
-    renderDrivers();
-    renderPits();
-
-
-    // Always establish the LIVE state of the new race.
-    await refreshLive();
-
-
-    // If another tab is currently selected,
-    // load that race's corresponding data too.
-    if (S.activeView !== "live") {
-      await loadActiveView(true);
-    }
-  }
-);
 
 
 // ============================================================
