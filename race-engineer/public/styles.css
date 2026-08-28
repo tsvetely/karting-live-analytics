@@ -590,14 +590,13 @@ tbody tr:hover {
 
 .detailDrawer {
   position: fixed;
-
   top: 0;
   right: 0;
-  bottom: 0;
 
   width: min(520px, 92vw);
+  height: 100vh;
 
-  z-index: 50;
+  z-index: 1000;
 
   padding: 20px;
 
@@ -610,15 +609,20 @@ tbody tr:hover {
   box-shadow:
     -18px 0 50px rgba(0, 0, 0, 0.45);
 
-  transform: translateX(105%);
-  transition: transform 0.18s ease;
-}
+  transform: translateX(110%);
+  visibility: hidden;
+  pointer-events: none;
 
+  transition:
+    transform 0.18s ease,
+    visibility 0.18s ease;
+}
 
 .detailDrawer.open {
   transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
 }
-
 
 .detailHeader {
   display: flex;
