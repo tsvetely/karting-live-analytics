@@ -1,4 +1,4 @@
-# NextGen Race Engineer - Cloudflare MVP
+# Race Engineer - Cloudflare MVP
 
 This folder is the temporary online Race Engineer UI/API.
 It does not modify the existing `index.js` collector.
