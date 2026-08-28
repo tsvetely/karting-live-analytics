@@ -164,6 +164,7 @@ async function saveLapEvent(apexId, lapNumber, lapTime) {
 // }
 
 async function handleDriverChange(apexId, driverName) {
+
   if (!driverName) return;
 
   const { data: before } = await supabase
@@ -183,6 +184,98 @@ async function handleDriverChange(apexId, driverName) {
     lapCount: before.lap_count
   });
 
+
+  // ============================================================
+  // CLOSE THE CURRENT LIVE STINT BEFORE CHANGING THE DRIVER
+  // ============================================================
+
+  const { data: liveStint, error: liveStintError } = await supabase
+    .from("live_stint_stats")
+    .select("*")
+    .eq("race_id", raceId)
+    .eq("apex_id", String(apexId))
+    .maybeSingle();
+
+  if (liveStintError) {
+    console.error(
+      "LIVE STINT READ ERROR:",
+      apexId,
+      liveStintError.message
+    );
+  }
+
+  if (
+    liveStint &&
+    liveStint.driver_name &&
+    liveStint.driver_name !== driverName
+  ) {
+
+    const { error: completedStintError } = await supabase
+      .from("completed_stint_stats")
+      .insert({
+        race_id: raceId,
+        apex_id: String(apexId),
+
+        team_name: liveStint.team_name,
+        driver_name: liveStint.driver_name,
+
+        start_lap_count: liveStint.start_lap_count,
+        end_lap_count: liveStint.current_lap_count,
+
+        total_laps: liveStint.total_laps,
+        valid_laps: liveStint.valid_laps,
+
+        avg_lap: liveStint.avg_lap,
+
+        best_lap: liveStint.best_lap,
+        best_lap_number: liveStint.best_lap_number,
+
+        worst_lap: liveStint.worst_lap,
+        worst_lap_number: liveStint.worst_lap_number,
+
+        consistency: liveStint.consistency,
+
+        stint_started_at: liveStint.stint_started_at,
+        stint_ended_at: new Date().toISOString()
+      });
+
+    if (completedStintError) {
+      console.error(
+        "COMPLETED STINT INSERT ERROR:",
+        apexId,
+        completedStintError.message
+      );
+    } else {
+
+      console.log("LIVE STINT CLOSED:", {
+        apexId,
+        driver: liveStint.driver_name,
+        startLap: liveStint.start_lap_count,
+        endLap: liveStint.current_lap_count,
+        laps: liveStint.total_laps
+      });
+
+      const { error: deleteLiveStintError } = await supabase
+        .from("live_stint_stats")
+        .delete()
+        .eq("race_id", raceId)
+        .eq("apex_id", String(apexId));
+
+      if (deleteLiveStintError) {
+        console.error(
+          "LIVE STINT DELETE ERROR:",
+          apexId,
+          deleteLiveStintError.message
+        );
+      }
+    }
+  }
+
+
+  // ============================================================
+  // NOW CHANGE THE CURRENT DRIVER
+  // ============================================================
+
   await supabase
     .from("apex_entries")
     .update({
@@ -191,6 +284,11 @@ async function handleDriverChange(apexId, driverName) {
     })
     .eq("race_id", raceId)
     .eq("apex_id", apexId);
+
+
+  // ============================================================
+  // EXISTING PIT/STINT LOGIC
+  // ============================================================
 
   await fetchAndSavePits(apexId, before.team_name);
 }
@@ -463,13 +561,43 @@ async function updateLapCount(apexId, newLapCount) {
 
   const currentLapCount = entry?.lap_count ?? 0;
 
-  if (newLapCount < currentLapCount) {
+  if (newLapCount <= currentLapCount) {
     return;
   }
 
   await upsertEntry({
     apex_id: apexId,
     lap_count: newLapCount
+  });
+
+  await processLiveLap(apexId, newLapCount);
+}
+
+async function processLiveLap(apexId, lapNumber) {
+  const { data: entry, error } = await supabase
+    .from("apex_entries")
+    .select("team_name,current_driver,last_lap,lap_count")
+    .eq("race_id", raceId)
+    .eq("apex_id", apexId)
+    .maybeSingle();
+
+  if (error || !entry) return;
+
+  const lapTime = Number(entry.last_lap);
+
+  if (!Number.isFinite(lapTime)) return;
+  if (!Number.isFinite(Number(lapNumber))) return;
+
+  // persistent lap history
+  await saveLapEvent(apexId, lapNumber, lapTime);
+
+  // current stint state
+  await updateLiveStintStats({
+    apexId,
+    lapNumber: Number(lapNumber),
+    lapTime,
+    teamName: entry.team_name,
+    driverName: entry.current_driver
   });
 }
 
@@ -511,6 +639,132 @@ async function handlePitEvent({ apexId, pitNo, pitLap, driverName, totalTime, pi
     stint_start_at: new Date().toISOString(),
     start_lap_count: pitLap
   });
+}
+
+async function updateLiveStintStats({
+  apexId,
+  lapNumber,
+  lapTime,
+  teamName,
+  driverName
+}) {
+  const { data: current } = await supabase
+    .from("live_stint_stats")
+    .select("*")
+    .eq("race_id", raceId)
+    .eq("apex_id", String(apexId))
+    .maybeSingle();
+
+  const now = new Date().toISOString();
+
+  // first lap of live state / new stint
+  if (!current || current.driver_name !== driverName) {
+    await supabase
+      .from("live_stint_stats")
+      .upsert({
+        race_id: raceId,
+        apex_id: String(apexId),
+        team_name: teamName,
+        driver_name: driverName,
+
+        start_lap_count: lapNumber,
+        current_lap_count: lapNumber,
+
+        total_laps: 1,
+        valid_laps: 1,
+
+        lap_sum: lapTime,
+        lap_sum_squares: lapTime * lapTime,
+
+        last_lap: lapTime,
+        avg_lap: lapTime,
+
+        best_lap: lapTime,
+        best_lap_number: lapNumber,
+
+        worst_lap: lapTime,
+        worst_lap_number: lapNumber,
+
+        consistency: 0,
+
+        stint_started_at: now,
+        updated_at: now
+      }, {
+        onConflict: "race_id,apex_id"
+      });
+
+    return;
+  }
+
+  // idempotency: do not count the same lap twice
+  if (
+    current.current_lap_count !== null &&
+    Number(lapNumber) <= Number(current.current_lap_count)
+  ) {
+    return;
+  }
+
+  const validLaps = Number(current.valid_laps || 0) + 1;
+  const totalLaps = Number(current.total_laps || 0) + 1;
+
+  const sum =
+    Number(current.lap_sum || 0) +
+    lapTime;
+
+  const sumSquares =
+    Number(current.lap_sum_squares || 0) +
+    lapTime * lapTime;
+
+  const avg = sum / validLaps;
+
+  const variance =
+    Math.max(0, sumSquares / validLaps - avg * avg);
+
+  const consistency = Math.sqrt(variance);
+
+  const isBest =
+    current.best_lap === null ||
+    lapTime < Number(current.best_lap);
+
+  const isWorst =
+    current.worst_lap === null ||
+    lapTime > Number(current.worst_lap);
+
+  await supabase
+    .from("live_stint_stats")
+    .update({
+      team_name: teamName,
+      driver_name: driverName,
+
+      current_lap_count: lapNumber,
+
+      total_laps: totalLaps,
+      valid_laps: validLaps,
+
+      lap_sum: sum,
+      lap_sum_squares: sumSquares,
+
+      last_lap: lapTime,
+      avg_lap: avg,
+
+      best_lap: isBest ? lapTime : current.best_lap,
+      best_lap_number: isBest
+        ? lapNumber
+        : current.best_lap_number,
+
+      worst_lap: isWorst
+        ? lapTime
+        : current.worst_lap,
+
+      worst_lap_number: isWorst
+        ? lapNumber
+        : current.worst_lap_number,
+
+      consistency,
+      updated_at: now
+    })
+    .eq("race_id", raceId)
+    .eq("apex_id", String(apexId));
 }
 
 async function parseAndSave(payload) {
