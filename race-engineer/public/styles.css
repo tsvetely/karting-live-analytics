@@ -52,7 +52,7 @@ body {
 .header {
   min-height: 88px;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(260px, 1fr) auto auto;
   align-items: center;
   gap: 28px;
 
@@ -243,6 +243,125 @@ body {
 
 main {
   padding: 20px;
+}
+
+
+/* ========================================================== */
+/* LIVE / HISTORY MODE                                        */
+/* ========================================================== */
+
+.modeBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  min-width: 260px;
+  padding: 9px 12px;
+
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  background: var(--panel);
+}
+
+.modeBanner span {
+  flex: 0 0 auto;
+
+  padding: 5px 8px;
+
+  border-radius: 999px;
+
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.modeBanner strong {
+  overflow: hidden;
+
+  font-size: 12px;
+  font-weight: 700;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+
+/* ACTIVE LIVE SESSION */
+
+.modeBanner.live {
+  border-color: rgba(41, 229, 140, 0.45);
+  background: var(--green-soft);
+}
+
+.modeBanner.live span {
+  background: var(--green);
+  color: #03120b;
+}
+
+
+/* NO ACTIVE LIVE SESSION */
+
+.modeBanner.noLive {
+  border-color: var(--border);
+}
+
+.modeBanner.noLive span {
+  background: #52606d;
+  color: #ffffff;
+}
+
+
+/* HISTORICAL RACE */
+
+.modeBanner.history {
+  border-color: rgba(245, 196, 81, 0.5);
+  background: rgba(245, 196, 81, 0.08);
+}
+
+.modeBanner.history span {
+  background: var(--yellow);
+  color: #1c1600;
+}
+
+
+/* ========================================================== */
+/* HISTORY RACE / SESSION SELECTOR                             */
+/* ========================================================== */
+
+.historySelector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  margin-bottom: 12px;
+  padding: 10px 12px;
+
+  border: 1px solid rgba(245, 196, 81, 0.45);
+  border-radius: 8px;
+
+  background: rgba(245, 196, 81, 0.06);
+}
+
+.historySelector > span {
+  flex: 0 0 auto;
+
+  color: var(--yellow);
+
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.historySelector select {
+  width: min(500px, 100%);
+}
+
+
+/* Generic hidden state */
+
+.hidden {
+  display: none !important;
 }
 
 
