@@ -17,7 +17,10 @@ const S = {
   },
 
   liveMeta: null,
-  timer: null
+  timer: null,
+
+  mode: "live",
+  selectedRaceId: null
 };
 
 
@@ -109,8 +112,14 @@ function average(values) {
 // API
 // ============================================================
 
-async function api(path) {
-  const response = await fetch(path, {
+async function api(path, raceId = null) {
+  const url = new URL(path, window.location.origin);
+
+  if (raceId !== null && raceId !== undefined && raceId !== "") {
+    url.searchParams.set("race_id", String(raceId));
+  }
+
+  const response = await fetch(url, {
     cache: "no-store"
   });
 
@@ -123,7 +132,7 @@ async function api(path) {
 
 
 // ============================================================
-// STATUS / HEADER
+// STATUS / HEADER / MODE
 // ============================================================
 
 function setStatus(ok, message) {
@@ -133,8 +142,7 @@ function setStatus(ok, message) {
 
 
 function updateHeader(meta = S.liveMeta) {
-  const active =
-    meta?.active === true;
+  const active = meta?.active === true;
 
   $("sessionName").textContent =
     meta?.session_name ||
@@ -147,16 +155,107 @@ function updateHeader(meta = S.liveMeta) {
       : "NO LIVE SESSION";
 
   $("headerTeamCount").textContent =
-    S.live.length;
+    S.mode === "live" && active
+      ? S.live.length
+      : 0;
 
   $("teamCount").textContent =
-    filterRows(S.live).length;
+    S.mode === "live" && active
+      ? filterRows(S.live).length
+      : 0;
+
+  const banner = $("modeBanner");
+  const label = $("modeLabel");
+  const title = $("modeTitle");
+
+  if (banner && label && title) {
+    banner.classList.remove(
+      "live",
+      "noLive",
+      "history"
+    );
+
+    if (S.mode === "history") {
+      banner.classList.add("history");
+
+      label.textContent = "HISTORY";
+
+      const selected =
+        $("historyRace")?.selectedOptions?.[0];
+
+      title.textContent =
+        selected?.value
+          ? selected.textContent
+          : "Select race / session";
+
+    } else if (active) {
+      banner.classList.add("live");
+
+      label.textContent = "LIVE";
+
+      title.textContent =
+        meta?.session_name ||
+        meta?.session ||
+        "Active Apex Timing session";
+
+    } else {
+      banner.classList.add("noLive");
+
+      label.textContent = "NO LIVE";
+
+      title.textContent =
+        "No active timing session";
+    }
+  }
+
+  const historySelector =
+    $("historySelector");
+
+  if (historySelector) {
+    historySelector.classList.toggle(
+      "hidden",
+      S.mode !== "history"
+    );
+  }
+
+  const auto = $("auto");
+
+  if (auto) {
+    auto.disabled =
+      S.mode !== "live";
+  }
 }
 
 
 // ============================================================
 // FILTERS
 // ============================================================
+
+function currentRowsForFilters() {
+  switch (S.activeView) {
+    case "live":
+      return S.live;
+
+    case "stints":
+      return S.stints;
+
+    case "drivers":
+      return S.drivers;
+
+    case "teamsView":
+      return S.teams;
+
+    case "pits":
+      return S.pits;
+
+    case "events":
+      return S.events;
+
+    default:
+      return [];
+  }
+}
+
 
 function filterRows(rows) {
   const search =
@@ -208,24 +307,18 @@ function filterRows(rows) {
       !search ||
       searchable.includes(search);
 
-    return teamOk && driverOk && searchOk;
+    return (
+      teamOk &&
+      driverOk &&
+      searchOk
+    );
   });
-}
-
-
-function allKnownRows() {
-  return [
-    ...S.live,
-    ...S.stints,
-    ...S.drivers,
-    ...S.pits
-  ];
 }
 
 
 function rebuildFilters() {
   const rows =
-    allKnownRows();
+    currentRowsForFilters();
 
   const teamSelect =
     $("teamFilter");
@@ -239,7 +332,6 @@ function rebuildFilters() {
   const oldDriver =
     driverSelect.value;
 
-
   const teams = [
     ...new Set(
       rows
@@ -247,7 +339,6 @@ function rebuildFilters() {
         .filter(Boolean)
     )
   ].sort();
-
 
   const drivers = [
     ...new Set(
@@ -261,7 +352,6 @@ function rebuildFilters() {
     )
   ].sort();
 
-
   teamSelect.innerHTML =
     '<option value="">All teams</option>' +
     teams
@@ -271,7 +361,6 @@ function rebuildFilters() {
       )
       .join("");
 
-
   driverSelect.innerHTML =
     '<option value="">All drivers</option>' +
     drivers
@@ -280,7 +369,6 @@ function rebuildFilters() {
           `<option value="${esc(driver)}">${esc(driver)}</option>`
       )
       .join("");
-
 
   if (teams.includes(oldTeam)) {
     teamSelect.value = oldTeam;
@@ -313,14 +401,12 @@ function stintNumber(row) {
     return row.stint_number;
   }
 
-
   if (
     row.start_lap_count === undefined ||
     row.start_lap_count === null
   ) {
     return "—";
   }
-
 
   const teamStints =
     S.stints
@@ -335,14 +421,12 @@ function stintNumber(row) {
           Number(b.start_lap_count || 0)
       );
 
-
   const index =
     teamStints.findIndex(
       stint =>
         String(stint.start_lap_count) ===
         String(row.start_lap_count)
     );
-
 
   return index >= 0
     ? index + 1
@@ -366,7 +450,6 @@ function renderLive() {
   $("headerTeamCount").textContent =
     S.live.length;
 
-
   $("liveBody").innerHTML =
     rows
       .map(
@@ -374,6 +457,7 @@ function renderLive() {
 <tr
   class="clickableRow"
   data-detail-type="team"
+  data-team="${esc(row.team_name || "")}"
   data-apex-id="${esc(row.apex_id)}"
 >
 
@@ -400,15 +484,22 @@ function renderLive() {
     ${esc(
       pick(
         row,
-        "lap_count",
         "valid_laps",
+        "lap_count",
+        "live_lap_count",
         "total_laps"
       ) ?? "—"
     )}
   </td>
 
   <td>
-    ${time(row.live_last_lap)}
+    ${time(
+      pick(
+        row,
+        "live_last_lap",
+        "last_lap"
+      )
+    )}
   </td>
 
   <td>
@@ -490,11 +581,14 @@ function renderLive() {
     `
 <tr class="empty">
   <td colspan="12">
-    No live race data.
+    ${
+      S.liveMeta?.active === false
+        ? "No active live timing session."
+        : "No live race data."
+    }
   </td>
 </tr>
 `;
-
 }
 
 
@@ -506,15 +600,15 @@ function renderStints() {
   const rows =
     filterRows(S.stints);
 
-
   $("stintsBody").innerHTML =
     rows
       .map(
-        (row, index) => `
+        row => `
 <tr
   class="clickableRow"
-  data-detail-type="stint"
-  data-stint-index="${index}"
+  data-detail-type="team"
+  data-team="${esc(row.team_name || "")}"
+  data-apex-id="${esc(row.apex_id)}"
 >
 
   <td class="team">
@@ -551,8 +645,8 @@ function renderStints() {
     ${esc(
       pick(
         row,
-        "lap_count",
         "valid_laps",
+        "lap_count",
         "total_laps"
       ) ?? "—"
     )}
@@ -620,11 +714,14 @@ function renderStints() {
     `
 <tr class="empty">
   <td colspan="12">
-    No stint data.
+    ${
+      S.selectedRaceId
+        ? "No stint data for this race."
+        : "Select a race / session."
+    }
   </td>
 </tr>
 `;
-
 }
 
 
@@ -635,7 +732,6 @@ function renderStints() {
 function renderDrivers() {
   const rows =
     filterRows(S.drivers);
-
 
   $("driversBody").innerHTML =
     rows
@@ -703,11 +799,14 @@ function renderDrivers() {
     `
 <tr class="empty">
   <td colspan="9">
-    No driver data.
+    ${
+      S.selectedRaceId
+        ? "No driver data for this race."
+        : "Select a race / session."
+    }
   </td>
 </tr>
 `;
-
 }
 
 
@@ -719,12 +818,10 @@ function buildTeams() {
   const groups =
     new Map();
 
-
   for (const driver of S.drivers) {
     const key =
       driver.team_name ||
       `APEX ${driver.apex_id}`;
-
 
     if (!groups.has(key)) {
       groups.set(key, []);
@@ -734,7 +831,6 @@ function buildTeams() {
       .get(key)
       .push(driver);
   }
-
 
   S.teams =
     [...groups.entries()]
@@ -746,20 +842,17 @@ function buildTeams() {
             row => row.valid_laps
           );
 
-
         const totalLaps =
           sum(
             drivers,
             row => row.total_laps
           );
 
-
         const validStints =
           sum(
             drivers,
             row => row.valid_stint_count
           );
-
 
         const weightedAverageNumerator =
           drivers.reduce(
@@ -782,13 +875,11 @@ function buildTeams() {
             0
           );
 
-
         const avgLap =
           validLaps > 0
             ? weightedAverageNumerator /
               validLaps
             : null;
-
 
         const bestValues =
           drivers
@@ -802,12 +893,10 @@ function buildTeams() {
                 value > 0
             );
 
-
         const bestLap =
           bestValues.length
             ? Math.min(...bestValues)
             : null;
-
 
         const consistency =
           average(
@@ -816,7 +905,6 @@ function buildTeams() {
                 row.avg_consistency
             )
           );
-
 
         const driverPaces =
           drivers
@@ -830,13 +918,11 @@ function buildTeams() {
                 value > 0
             );
 
-
         const driverSpread =
           driverPaces.length > 1
             ? Math.max(...driverPaces) -
               Math.min(...driverPaces)
             : 0;
-
 
         return {
           team_name: teamName,
@@ -888,7 +974,6 @@ function renderTeams() {
   const rows =
     filterRows(S.teams);
 
-
   $("teamsBody").innerHTML =
     rows
       .map(
@@ -897,6 +982,7 @@ function renderTeams() {
   class="clickableRow"
   data-detail-type="team"
   data-team="${esc(row.team_name)}"
+  data-apex-id="${esc(row.apex_id)}"
 >
 
   <td class="team">
@@ -943,11 +1029,14 @@ function renderTeams() {
     `
 <tr class="empty">
   <td colspan="9">
-    No team data.
+    ${
+      S.selectedRaceId
+        ? "No team data for this race."
+        : "Select a race / session."
+    }
   </td>
 </tr>
 `;
-
 }
 
 
@@ -958,7 +1047,6 @@ function renderTeams() {
 function renderPits() {
   const rows =
     filterRows(S.pits);
-
 
   $("pitsBody").innerHTML =
     rows
@@ -1019,11 +1107,14 @@ function renderPits() {
     `
 <tr class="empty">
   <td colspan="8">
-    No pit data.
+    ${
+      S.selectedRaceId
+        ? "No pit data for this race."
+        : "Select a race / session."
+    }
   </td>
 </tr>
 `;
-
 }
 
 
@@ -1039,13 +1130,16 @@ function renderEvents() {
     body.innerHTML = `
 <tr class="empty">
   <td colspan="7">
-    No race events loaded.
+    ${
+      S.selectedRaceId
+        ? "No race events loaded."
+        : "Select a race / session."
+    }
   </td>
 </tr>
 `;
     return;
   }
-
 
   body.innerHTML =
     S.events
@@ -1122,7 +1216,7 @@ function renderActiveView() {
 
 
 // ============================================================
-// LOAD LIVE
+// LIVE
 // ============================================================
 
 async function refreshLive() {
@@ -1133,15 +1227,21 @@ async function refreshLive() {
     S.liveMeta =
       data;
 
+    S.mode =
+      "live";
+
+    // IMPORTANT:
+    // LIVE NEVER SHOWS HISTORICAL / STALE ROWS.
     S.live =
-      data.current || [];
+      data.active === true
+        ? (data.current || [])
+        : [];
 
     rebuildFilters();
 
     renderLive();
 
     updateHeader(data);
-
 
     if (data.active === false) {
       setStatus(
@@ -1154,7 +1254,6 @@ async function refreshLive() {
 
       return;
     }
-
 
     setStatus(
       true,
@@ -1179,10 +1278,108 @@ async function refreshLive() {
 
 
 // ============================================================
-// LOAD STINTS
+// HISTORY DATA
+// ============================================================
+
+function clearHistoryData() {
+  S.stints = [];
+  S.drivers = [];
+  S.teams = [];
+  S.pits = [];
+  S.events = [];
+
+  S.loaded.stints = false;
+  S.loaded.drivers = false;
+  S.loaded.teams = false;
+  S.loaded.pits = false;
+  S.loaded.events = false;
+}
+
+
+async function loadHistoryRaces() {
+  try {
+    const data =
+      await api("/api/races");
+
+    const races =
+      data.rows || [];
+
+    const select =
+      $("historyRace");
+
+    const current =
+      String(S.selectedRaceId || "");
+
+    select.innerHTML =
+      '<option value="">Select race / session</option>' +
+      races
+        .map(race => {
+          const id =
+            race.id ??
+            race.race_id;
+
+          const label =
+            race.name ||
+            race.session_name ||
+            race.title ||
+            `Race ${id}`;
+
+          return `
+<option value="${esc(id)}">
+  ${esc(label)}
+</option>
+`;
+        })
+        .join("");
+
+    if (
+      current &&
+      races.some(
+        race =>
+          String(
+            race.id ??
+            race.race_id
+          ) === current
+      )
+    ) {
+      select.value =
+        current;
+    }
+
+  } catch (error) {
+    console.error(error);
+
+    const select =
+      $("historyRace");
+
+    select.innerHTML = `
+<option value="">
+  Historical race list unavailable
+</option>
+`;
+
+    setStatus(
+      false,
+      "ERROR"
+    );
+
+    $("updated").textContent =
+      error.message;
+  }
+}
+
+
+// ============================================================
+// STINTS
 // ============================================================
 
 async function loadStints(force = false) {
+  if (!S.selectedRaceId) {
+    S.stints = [];
+    renderStints();
+    return;
+  }
+
   if (
     S.loaded.stints &&
     !force
@@ -1191,10 +1388,12 @@ async function loadStints(force = false) {
     return;
   }
 
-
   try {
     const data =
-      await api("/api/stints");
+      await api(
+        "/api/stints",
+        S.selectedRaceId
+      );
 
     S.stints =
       data.rows || [];
@@ -1213,10 +1412,19 @@ async function loadStints(force = false) {
 
 
 // ============================================================
-// LOAD DRIVERS
+// DRIVERS
 // ============================================================
 
 async function loadDrivers(force = false) {
+  if (!S.selectedRaceId) {
+    S.drivers = [];
+    S.teams = [];
+
+    renderDrivers();
+
+    return;
+  }
+
   if (
     S.loaded.drivers &&
     !force
@@ -1225,10 +1433,12 @@ async function loadDrivers(force = false) {
     return;
   }
 
-
   try {
     const data =
-      await api("/api/drivers");
+      await api(
+        "/api/drivers",
+        S.selectedRaceId
+      );
 
     S.drivers =
       data.rows || [];
@@ -1252,10 +1462,16 @@ async function loadDrivers(force = false) {
 
 
 // ============================================================
-// LOAD TEAMS
+// TEAMS
 // ============================================================
 
 async function loadTeams(force = false) {
+  if (!S.selectedRaceId) {
+    S.teams = [];
+    renderTeams();
+    return;
+  }
+
   if (
     !S.loaded.drivers ||
     force
@@ -1268,15 +1484,23 @@ async function loadTeams(force = false) {
   S.loaded.teams =
     true;
 
+  rebuildFilters();
+
   renderTeams();
 }
 
 
 // ============================================================
-// LOAD PITS
+// PITS
 // ============================================================
 
 async function loadPits(force = false) {
+  if (!S.selectedRaceId) {
+    S.pits = [];
+    renderPits();
+    return;
+  }
+
   if (
     S.loaded.pits &&
     !force
@@ -1285,10 +1509,12 @@ async function loadPits(force = false) {
     return;
   }
 
-
   try {
     const data =
-      await api("/api/pits");
+      await api(
+        "/api/pits",
+        S.selectedRaceId
+      );
 
     S.pits =
       data.rows || [];
@@ -1307,7 +1533,7 @@ async function loadPits(force = false) {
 
 
 // ============================================================
-// LOAD EVENTS
+// EVENTS
 // ============================================================
 
 async function loadEvents() {
@@ -1316,7 +1542,7 @@ async function loadEvents() {
 
 
 // ============================================================
-// LOAD CURRENT TAB
+// LOAD ACTIVE TAB
 // ============================================================
 
 async function loadActiveView(force = false) {
@@ -1390,6 +1616,13 @@ function closeDrawer() {
 
 
 async function showTeamDetail(teamName, apexId) {
+  if (
+    S.mode === "history" &&
+    !S.selectedRaceId
+  ) {
+    return;
+  }
+
   if (!S.loaded.drivers) {
     await loadDrivers();
   }
@@ -1397,7 +1630,6 @@ async function showTeamDetail(teamName, apexId) {
   if (!S.loaded.stints) {
     await loadStints();
   }
-
 
   const drivers =
     S.drivers.filter(
@@ -1413,7 +1645,6 @@ async function showTeamDetail(teamName, apexId) {
         )
     );
 
-
   const stints =
     S.stints.filter(
       row =>
@@ -1428,13 +1659,11 @@ async function showTeamDetail(teamName, apexId) {
         )
     );
 
-
   const name =
     teamName ||
     drivers[0]?.team_name ||
     stints[0]?.team_name ||
     `APEX ${apexId}`;
-
 
   openDrawer(
     name,
@@ -1477,6 +1706,7 @@ async function showTeamDetail(teamName, apexId) {
             row => `
 <div class="detailListRow">
   <strong>${esc(row.driver_name)}</strong>
+
   <span>
     Avg ${time(row.avg_lap_time)}
     · Best ${time(row.best_lap_time)}
@@ -1498,6 +1728,7 @@ async function showTeamDetail(teamName, apexId) {
           .map(
             row => `
 <div class="detailListRow">
+
   <strong>
     #${esc(stintNumber(row))}
     ${esc(row.driver_name || "")}
@@ -1507,11 +1738,12 @@ async function showTeamDetail(teamName, apexId) {
     ${esc(
       pick(
         row,
-        "lap_count",
         "valid_laps",
+        "lap_count",
         "total_laps"
       ) ?? "—"
     )} laps
+
     · Avg ${time(
       pick(
         row,
@@ -1519,7 +1751,16 @@ async function showTeamDetail(teamName, apexId) {
         "avg_lap"
       )
     )}
+
+    · Best ${time(
+      pick(
+        row,
+        "best_lap_time",
+        "best_lap"
+      )
+    )}
   </span>
+
 </div>
 `
           )
@@ -1532,11 +1773,17 @@ async function showTeamDetail(teamName, apexId) {
 }
 
 
-async function showDriverDetail(teamName, driverName) {
+async function showDriverDetail(
+  teamName,
+  driverName
+) {
+  if (!S.selectedRaceId) {
+    return;
+  }
+
   if (!S.loaded.stints) {
     await loadStints();
   }
-
 
   const driver =
     S.drivers.find(
@@ -1545,14 +1792,12 @@ async function showDriverDetail(teamName, driverName) {
         row.driver_name === driverName
     );
 
-
   const stints =
     S.stints.filter(
       row =>
         row.team_name === teamName &&
         row.driver_name === driverName
     );
-
 
   openDrawer(
     driverName || "Driver",
@@ -1626,11 +1871,12 @@ async function showDriverDetail(teamName, driverName) {
     ${esc(
       pick(
         row,
-        "lap_count",
         "valid_laps",
+        "lap_count",
         "total_laps"
       ) ?? "—"
     )} laps
+
     · Avg ${time(
       pick(
         row,
@@ -1638,6 +1884,7 @@ async function showDriverDetail(teamName, driverName) {
         "avg_lap"
       )
     )}
+
     · Best ${time(
       pick(
         row,
@@ -1676,10 +1923,8 @@ document.addEventListener(
       return;
     }
 
-
     const type =
       row.dataset.detailType;
-
 
     if (type === "team") {
       await showTeamDetail(
@@ -1689,7 +1934,6 @@ document.addEventListener(
 
       return;
     }
-
 
     if (type === "driver") {
       await showDriverDetail(
@@ -1702,7 +1946,7 @@ document.addEventListener(
 
 
 // ============================================================
-// CSV EXPORT
+// CSV
 // ============================================================
 
 function csvValue(value) {
@@ -1731,12 +1975,17 @@ function csvValue(value) {
 }
 
 
-function downloadCsv(filename, rows) {
+function downloadCsv(
+  filename,
+  rows
+) {
   if (!rows.length) {
-    alert("No data available for export.");
+    alert(
+      "No data available for export."
+    );
+
     return;
   }
-
 
   const columns =
     [...new Set(
@@ -1744,7 +1993,6 @@ function downloadCsv(filename, rows) {
         row => Object.keys(row)
       )
     )];
-
 
   const csv = [
     columns
@@ -1762,7 +2010,6 @@ function downloadCsv(filename, rows) {
     )
   ].join("\n");
 
-
   const blob =
     new Blob(
       [csv],
@@ -1772,10 +2019,8 @@ function downloadCsv(filename, rows) {
       }
     );
 
-
   const url =
     URL.createObjectURL(blob);
-
 
   const link =
     document.createElement("a");
@@ -1798,82 +2043,303 @@ function downloadCsv(filename, rows) {
 }
 
 
-async function exportDataset(type) {
-  switch (type) {
-    case "live":
-      if (!S.live.length) {
-        await refreshLive();
-      }
+// ============================================================
+// RACE ANALYTICS REPORT DATA
+// ============================================================
 
-      downloadCsv(
-        "race-live.csv",
-        S.live
-      );
+async function ensureRaceDatasetsLoaded() {
+  if (!S.selectedRaceId) {
+    alert(
+      "Select a historical race / session first."
+    );
 
-      break;
-
-
-    case "stints":
-      await loadStints();
-
-      downloadCsv(
-        "race-stints.csv",
-        S.stints
-      );
-
-      break;
-
-
-    case "drivers":
-      await loadDrivers();
-
-      downloadCsv(
-        "race-drivers.csv",
-        S.drivers
-      );
-
-      break;
-
-
-    case "teams":
-      await loadTeams();
-
-      downloadCsv(
-        "race-teams.csv",
-        S.teams.map(
-          ({ drivers, ...team }) =>
-            team
-        )
-      );
-
-      break;
-
-
-    case "pits":
-      await loadPits();
-
-      downloadCsv(
-        "race-pits.csv",
-        S.pits
-      );
-
-      break;
+    return false;
   }
+
+  await Promise.all([
+    loadStints(),
+    loadDrivers(),
+    loadPits()
+  ]);
+
+  buildTeams();
+
+  return true;
 }
 
 
-document
-  .querySelectorAll("[data-export]")
-  .forEach(button => {
-    button.addEventListener(
-      "click",
-      async () => {
-        await exportDataset(
-          button.dataset.export
-        );
-      }
-    );
+function completeRaceRows() {
+  const rows = [];
+
+  S.stints.forEach(
+    row =>
+      rows.push({
+        dataset: "stints",
+        ...row
+      })
+  );
+
+  S.drivers.forEach(
+    row =>
+      rows.push({
+        dataset: "drivers",
+        ...row
+      })
+  );
+
+  S.teams.forEach(row => {
+    const {
+      drivers,
+      ...team
+    } = row;
+
+    rows.push({
+      dataset: "teams",
+      ...team
+    });
   });
+
+  S.pits.forEach(
+    row =>
+      rows.push({
+        dataset: "pits",
+        ...row
+      })
+  );
+
+  return rows;
+}
+
+
+// ============================================================
+// PDF
+// ============================================================
+
+function printTablePdf(
+  title,
+  rows
+) {
+  if (!rows.length) {
+    alert(
+      "No data available for PDF."
+    );
+
+    return;
+  }
+
+  const columns =
+    [...new Set(
+      rows.flatMap(
+        row => Object.keys(row)
+      )
+    )];
+
+  const win =
+    window.open(
+      "",
+      "_blank"
+    );
+
+  if (!win) {
+    alert(
+      "The browser blocked the PDF window."
+    );
+
+    return;
+  }
+
+  const table = `
+<table>
+
+  <thead>
+
+    <tr>
+      ${
+        columns
+          .map(
+            column =>
+              `<th>${esc(column)}</th>`
+          )
+          .join("")
+      }
+    </tr>
+
+  </thead>
+
+  <tbody>
+
+    ${
+      rows
+        .map(
+          row => `
+<tr>
+
+  ${
+    columns
+      .map(
+        column =>
+          `<td>${esc(row[column] ?? "")}</td>`
+      )
+      .join("")
+  }
+
+</tr>
+`
+        )
+        .join("")
+    }
+
+  </tbody>
+
+</table>
+`;
+
+  win.document.write(`
+<!doctype html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8">
+
+<title>
+  ${esc(title)}
+</title>
+
+<style>
+
+body {
+  font-family: Arial, sans-serif;
+  margin: 24px;
+  color: #111;
+}
+
+h1 {
+  font-size: 20px;
+  margin-bottom: 16px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 9px;
+}
+
+th,
+td {
+  border: 1px solid #bbb;
+  padding: 4px 5px;
+  text-align: left;
+}
+
+th {
+  background: #eee;
+}
+
+@page {
+  size: landscape;
+  margin: 10mm;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<h1>
+  ${esc(title)}
+</h1>
+
+${table}
+
+</body>
+
+</html>
+`);
+
+  win.document.close();
+
+  win.focus();
+
+  setTimeout(
+    () => win.print(),
+    250
+  );
+}
+
+
+// ============================================================
+// RACE ANALYTICS CSV / PDF BUTTONS
+// ============================================================
+
+$("downloadRaceCsv")
+  ?.addEventListener(
+    "click",
+    async () => {
+      const ready =
+        await ensureRaceDatasetsLoaded();
+
+      if (!ready) {
+        return;
+      }
+
+      downloadCsv(
+        `race-${S.selectedRaceId}-analytics.csv`,
+        completeRaceRows()
+      );
+    }
+  );
+
+
+$("downloadRacePdf")
+  ?.addEventListener(
+    "click",
+    async () => {
+      const ready =
+        await ensureRaceDatasetsLoaded();
+
+      if (!ready) {
+        return;
+      }
+
+      printTablePdf(
+        `Race ${S.selectedRaceId} Analytics`,
+        completeRaceRows()
+      );
+    }
+  );
+
+
+// ============================================================
+// ORGANISER REPORT BUTTONS
+// ============================================================
+//
+// IMPORTANT:
+// These remain disabled until worker.js has the exact generators.
+// We do NOT generate a random table and call it the organiser report.
+// ============================================================
+
+[
+  "organiserReport1Csv",
+  "organiserReport1Pdf",
+  "organiserReport2Csv",
+  "organiserReport2Pdf"
+].forEach(id => {
+  const button =
+    $(id);
+
+  if (!button) {
+    return;
+  }
+
+  button.disabled =
+    true;
+
+  button.title =
+    "Organiser report generator not connected yet";
+});
 
 
 // ============================================================
@@ -1905,6 +2371,42 @@ $("resetFilters").addEventListener(
 
 
 // ============================================================
+// HISTORY RACE SELECTOR
+// ============================================================
+
+$("historyRace")
+  ?.addEventListener(
+    "change",
+    async event => {
+      const value =
+        event.target.value;
+
+      S.selectedRaceId =
+        value || null;
+
+      clearHistoryData();
+
+      $("teamFilter").value = "";
+      $("driverFilter").value = "";
+      $("search").value = "";
+
+      updateHeader();
+
+      rebuildFilters();
+
+      if (!S.selectedRaceId) {
+        renderActiveView();
+        return;
+      }
+
+      await loadActiveView(true);
+
+      rebuildFilters();
+    }
+  );
+
+
+// ============================================================
 // MANUAL REFRESH
 // ============================================================
 
@@ -1923,6 +2425,7 @@ $("refresh").addEventListener(
 document
   .querySelectorAll(".tab")
   .forEach(button => {
+
     button.addEventListener(
       "click",
       async () => {
@@ -1936,7 +2439,6 @@ document
               )
           );
 
-
         document
           .querySelectorAll(".view")
           .forEach(
@@ -1946,28 +2448,57 @@ document
               )
           );
 
-
         button.classList.add(
           "active"
         );
 
-
         const view =
           button.dataset.view;
-
 
         $(view).classList.add(
           "active"
         );
 
-
         S.activeView =
           view;
 
+        $("teamFilter").value = "";
+        $("driverFilter").value = "";
+        $("search").value = "";
+
+        closeDrawer();
+
+        if (view === "live") {
+          S.mode =
+            "live";
+
+          updateHeader();
+
+          await refreshLive();
+
+          rebuildFilters();
+
+          return;
+        }
+
+        // Every non-LIVE tab is explicitly historical.
+        S.mode =
+          "history";
+
+        updateHeader();
+
+        if (
+          !$("historyRace").options.length ||
+          $("historyRace").options.length <= 1
+        ) {
+          await loadHistoryRaces();
+        }
 
         if (view !== "reports") {
           await loadActiveView();
         }
+
+        rebuildFilters();
       }
     );
   });
@@ -1998,8 +2529,7 @@ document.addEventListener(
 // ============================================================
 //
 // ONLY LIVE is refreshed automatically.
-// Historical/statistical endpoints are never hammered every
-// 1.5 seconds.
+// HISTORY is never refreshed every 1.5 seconds.
 // ============================================================
 
 S.timer =
@@ -2007,7 +2537,8 @@ S.timer =
     () => {
       if (
         $("auto").checked &&
-        S.activeView === "live"
+        S.activeView === "live" &&
+        S.mode === "live"
       ) {
         refreshLive();
       }
@@ -2019,5 +2550,7 @@ S.timer =
 // ============================================================
 // INITIAL LOAD
 // ============================================================
+
+updateHeader();
 
 refreshLive();
