@@ -19,12 +19,22 @@
 </nav>
 <main>
   <section class="controls">
-    <label>Race ID <input id="raceId" type="number" min="1" value="1"></label>
-    <select id="teamFilter"><option value="">All teams</option></select>
-    <input id="search" placeholder="Search team / driver / Apex ID" />
-    <label class="check"><input id="auto" type="checkbox" checked> Live refresh</label>
-    <button id="refresh">Refresh</button>
-  </section>
+  <select id="teamFilter">
+    <option value="">All teams</option>
+  </select>
+
+  <input
+    id="search"
+    placeholder="Search team / driver / Apex ID"
+  />
+
+  <label class="check">
+    <input id="auto" type="checkbox" checked>
+    Live refresh
+  </label>
+
+  <button id="refresh">Refresh</button>
+</section>
 
   <section id="live" class="view active">
     <div class="sectionHead"><div><h2>Live current stints</h2><p>Our race metrics, updated from the current race data.</p></div><div><b id="teamCount">0</b> teams</div></div>
