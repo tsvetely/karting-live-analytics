@@ -568,16 +568,32 @@ async function refreshLive() {
       await api("/api/live");
 
     S.live =
-      live.current || [];
+  live.current || [];
 
-    teams();
+teams();
 
-    renderLive();
+renderLive();
 
-    setStatus(
-      true,
-      "ONLINE"
-    );
+if (live.active === false) {
+
+  setStatus(
+    true,
+    "NO LIVE SESSION"
+  );
+
+  $("updated").textContent =
+    "No active Apex timing session";
+
+  return;
+}
+
+setStatus(
+  true,
+  "LIVE"
+);
+
+$("updated").textContent =
+  `Updated ${new Date().toLocaleTimeString()}`;
 
     $("updated").textContent =
       `Updated ${new Date().toLocaleTimeString()}`;
