@@ -106,7 +106,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") {
-        return json({ ok: true, service: "nextgen-race-engineer", now: new Date().toISOString() });
+        return json({ ok: true, service: "race-engineer", now: new Date().toISOString() });
       }
 
       const raceId = safeRaceId(url, env);
