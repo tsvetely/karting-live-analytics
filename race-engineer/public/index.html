@@ -1,7 +1,10 @@
 <!doctype html>
 <html lang="en">
+
 <head>
+
   <meta charset="utf-8" />
+
   <meta
     name="viewport"
     content="width=device-width,initial-scale=1"
@@ -13,11 +16,21 @@
     rel="stylesheet"
     href="/styles.css"
   />
+
 </head>
+
 
 <body>
 
+
+<!-- ======================================================== -->
+<!-- HEADER                                                   -->
+<!-- ======================================================== -->
+
 <header class="header">
+
+
+  <!-- BRAND -->
 
   <div class="brand">
 
@@ -26,32 +39,90 @@
     </div>
 
     <div>
-      <h1>Race Engineer</h1>
-      <span>Live Race Analytics</span>
+
+      <h1>
+        Race Engineer
+      </h1>
+
+      <span>
+        Live Race Analytics
+      </span>
+
     </div>
 
   </div>
 
+
+  <!-- ====================================================== -->
+  <!-- LIVE / HISTORY MODE                                    -->
+  <!-- ====================================================== -->
+
+  <div
+    id="modeBanner"
+    class="modeBanner noLive"
+  >
+
+    <span id="modeLabel">
+      NO LIVE
+    </span>
+
+    <strong id="modeTitle">
+      No active timing session
+    </strong>
+
+  </div>
+
+
+  <!-- ====================================================== -->
+  <!-- RACE / SESSION INFORMATION                             -->
+  <!-- ====================================================== -->
 
   <div class="raceSummary">
 
     <div class="raceSummaryItem">
-      <span>SESSION</span>
-      <strong id="sessionName">—</strong>
+
+      <span>
+        SESSION
+      </span>
+
+      <strong id="sessionName">
+        —
+      </strong>
+
     </div>
 
-    <div class="raceSummaryItem">
-      <span>STATUS</span>
-      <strong id="sessionStatus">—</strong>
-    </div>
 
     <div class="raceSummaryItem">
-      <span>TEAMS</span>
-      <strong id="headerTeamCount">0</strong>
+
+      <span>
+        STATUS
+      </span>
+
+      <strong id="sessionStatus">
+        —
+      </strong>
+
+    </div>
+
+
+    <div class="raceSummaryItem">
+
+      <span>
+        TEAMS
+      </span>
+
+      <strong id="headerTeamCount">
+        0
+      </strong>
+
     </div>
 
   </div>
 
+
+  <!-- ====================================================== -->
+  <!-- CONNECTION STATUS                                      -->
+  <!-- ====================================================== -->
 
   <div class="statusbar">
 
@@ -70,10 +141,17 @@
 
   </div>
 
+
 </header>
 
 
+
+<!-- ======================================================== -->
+<!-- MAIN NAVIGATION                                          -->
+<!-- ======================================================== -->
+
 <nav class="tabs">
+
 
   <button
     class="tab active"
@@ -82,12 +160,14 @@
     LIVE
   </button>
 
+
   <button
     class="tab"
     data-view="stints"
   >
     STINTS
   </button>
+
 
   <button
     class="tab"
@@ -96,12 +176,14 @@
     DRIVERS
   </button>
 
+
   <button
     class="tab"
     data-view="teamsView"
   >
     TEAMS
   </button>
+
 
   <button
     class="tab"
@@ -110,12 +192,14 @@
     PITS
   </button>
 
+
   <button
     class="tab"
     data-view="events"
   >
     EVENTS
   </button>
+
 
   <button
     class="tab"
@@ -124,28 +208,61 @@
     REPORTS
   </button>
 
+
 </nav>
+
 
 
 <main>
 
+
   <!-- ====================================================== -->
-  <!-- GLOBAL CONTROLS                                        -->
+  <!-- HISTORY RACE / SESSION SELECTOR                        -->
+  <!-- ====================================================== -->
+
+  <section
+    id="historySelector"
+    class="historySelector hidden"
+  >
+
+    <span>
+      RACE / SESSION
+    </span>
+
+    <select id="historyRace">
+
+      <option value="">
+        Select race / session
+      </option>
+
+    </select>
+
+  </section>
+
+
+
+  <!-- ====================================================== -->
+  <!-- GLOBAL FILTERS                                         -->
   <!-- ====================================================== -->
 
   <section class="controls">
 
+
     <select id="teamFilter">
+
       <option value="">
         All teams
       </option>
+
     </select>
 
 
     <select id="driverFilter">
+
       <option value="">
         All drivers
       </option>
+
     </select>
 
 
@@ -180,7 +297,9 @@
       Refresh
     </button>
 
+
   </section>
+
 
 
   <!-- ====================================================== -->
@@ -191,6 +310,7 @@
     id="live"
     class="view active"
   >
+
 
     <div class="sectionHead">
 
@@ -210,8 +330,15 @@
       <div class="sectionStats">
 
         <div>
-          <b id="teamCount">0</b>
-          <span>teams</span>
+
+          <b id="teamCount">
+            0
+          </b>
+
+          <span>
+            teams
+          </span>
+
         </div>
 
       </div>
@@ -222,6 +349,7 @@
     <div class="tableWrap">
 
       <table>
+
 
         <thead>
 
@@ -258,11 +386,14 @@
 
         <tbody id="liveBody"></tbody>
 
+
       </table>
 
     </div>
 
+
   </section>
+
 
 
   <!-- ====================================================== -->
@@ -273,6 +404,7 @@
     id="stints"
     class="view"
   >
+
 
     <div class="sectionHead">
 
@@ -288,20 +420,13 @@
 
       </div>
 
-
-      <button
-        class="secondary exportButton"
-        data-export="stints"
-      >
-        Download CSV
-      </button>
-
     </div>
 
 
     <div class="tableWrap">
 
       <table>
+
 
         <thead>
 
@@ -338,11 +463,14 @@
 
         <tbody id="stintsBody"></tbody>
 
+
       </table>
 
     </div>
 
+
   </section>
+
 
 
   <!-- ====================================================== -->
@@ -354,6 +482,7 @@
     class="view"
   >
 
+
     <div class="sectionHead">
 
       <div>
@@ -363,18 +492,10 @@
         </h2>
 
         <p>
-          Complete driver performance across the race.
+          Complete driver performance across the selected race.
         </p>
 
       </div>
-
-
-      <button
-        class="secondary exportButton"
-        data-export="drivers"
-      >
-        Download CSV
-      </button>
 
     </div>
 
@@ -382,6 +503,7 @@
     <div class="tableWrap">
 
       <table>
+
 
         <thead>
 
@@ -412,11 +534,14 @@
 
         <tbody id="driversBody"></tbody>
 
+
       </table>
 
     </div>
 
+
   </section>
+
 
 
   <!-- ====================================================== -->
@@ -427,6 +552,7 @@
     id="teamsView"
     class="view"
   >
+
 
     <div class="sectionHead">
 
@@ -442,20 +568,13 @@
 
       </div>
 
-
-      <button
-        class="secondary exportButton"
-        data-export="teams"
-      >
-        Download CSV
-      </button>
-
     </div>
 
 
     <div class="tableWrap">
 
       <table>
+
 
         <thead>
 
@@ -486,11 +605,14 @@
 
         <tbody id="teamsBody"></tbody>
 
+
       </table>
 
     </div>
 
+
   </section>
+
 
 
   <!-- ====================================================== -->
@@ -501,6 +623,7 @@
     id="pits"
     class="view"
   >
+
 
     <div class="sectionHead">
 
@@ -516,20 +639,13 @@
 
       </div>
 
-
-      <button
-        class="secondary exportButton"
-        data-export="pits"
-      >
-        Download CSV
-      </button>
-
     </div>
 
 
     <div class="tableWrap">
 
       <table>
+
 
         <thead>
 
@@ -558,11 +674,14 @@
 
         <tbody id="pitsBody"></tbody>
 
+
       </table>
 
     </div>
 
+
   </section>
+
 
 
   <!-- ====================================================== -->
@@ -573,6 +692,7 @@
     id="events"
     class="view"
   >
+
 
     <div class="sectionHead">
 
@@ -606,6 +726,7 @@
     <div class="tableWrap">
 
       <table>
+
 
         <thead>
 
@@ -642,11 +763,14 @@
 
         </tbody>
 
+
       </table>
 
     </div>
 
+
   </section>
+
 
 
   <!-- ====================================================== -->
@@ -658,6 +782,7 @@
     class="view"
   >
 
+
     <div class="sectionHead">
 
       <div>
@@ -667,7 +792,7 @@
         </h2>
 
         <p>
-          Race data, analytics and organiser-style reports.
+          Race analytics and organiser files in CSV and PDF format.
         </p>
 
       </div>
@@ -675,90 +800,128 @@
     </div>
 
 
+
     <div class="reportGrid">
 
 
+      <!-- ================================================== -->
+      <!-- COMPLETE RACE ANALYTICS                            -->
+      <!-- ================================================== -->
+
       <article class="reportCard">
 
+
         <h3>
-          Complete race data
+          Race analytics
         </h3>
 
+
         <p>
-          All currently available analytics datasets.
+          Complete statistics for the selected race.
         </p>
+
 
         <div class="reportActions">
 
-          <button data-export="live">
-            Live CSV
+
+          <button id="downloadRaceCsv">
+            Download CSV
           </button>
 
-          <button data-export="stints">
-            Stints CSV
+
+          <button id="downloadRacePdf">
+            Download PDF
           </button>
 
-          <button data-export="drivers">
-            Drivers CSV
-          </button>
-
-          <button data-export="teams">
-            Teams CSV
-          </button>
-
-          <button data-export="pits">
-            Pits CSV
-          </button>
 
         </div>
+
 
       </article>
 
 
+
+      <!-- ================================================== -->
+      <!-- ORGANISER REPORT 1                                 -->
+      <!-- ================================================== -->
+
       <article class="reportCard">
+
 
         <h3>
           Organiser report 1
         </h3>
 
+
         <p>
-          Generated immediately from stored race data.
+          Generated immediately from the stored race data.
         </p>
 
-        <button
-          id="organiserReport1"
-          disabled
-        >
-          Generate
-        </button>
+
+        <div class="reportActions">
+
+
+          <button id="organiserReport1Csv">
+            CSV
+          </button>
+
+
+          <button id="organiserReport1Pdf">
+            PDF
+          </button>
+
+
+        </div>
+
 
       </article>
 
 
+
+      <!-- ================================================== -->
+      <!-- ORGANISER REPORT 2                                 -->
+      <!-- ================================================== -->
+
       <article class="reportCard">
+
 
         <h3>
           Organiser report 2
         </h3>
 
+
         <p>
-          Generated immediately from stored race data.
+          Generated immediately from the stored race data.
         </p>
 
-        <button
-          id="organiserReport2"
-          disabled
-        >
-          Generate
-        </button>
+
+        <div class="reportActions">
+
+
+          <button id="organiserReport2Csv">
+            CSV
+          </button>
+
+
+          <button id="organiserReport2Pdf">
+            PDF
+          </button>
+
+
+        </div>
+
 
       </article>
 
+
     </div>
+
 
   </section>
 
+
 </main>
+
 
 
 <!-- ======================================================== -->
@@ -770,17 +933,22 @@
   class="detailDrawer"
 >
 
+
   <div class="detailHeader">
 
+
     <div>
+
 
       <span class="eyebrow">
         DETAIL
       </span>
 
+
       <h2 id="detailTitle">
         —
       </h2>
+
 
     </div>
 
@@ -792,21 +960,29 @@
       ×
     </button>
 
+
   </div>
 
 
+
   <div id="detailContent">
+
 
     <p class="muted">
       Select a team or driver.
     </p>
 
+
   </div>
+
 
 </aside>
 
 
+
 <script src="/app.js"></script>
 
+
 </body>
+
 </html>
