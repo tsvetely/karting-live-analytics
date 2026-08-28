@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>NextGen Race Engineer</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header class="header">
+  <div class="brand"><div class="mark">NG</div><div><h1>Race Engineer</h1><span>NextGen Racing Academy</span></div></div>
+  <div class="statusbar"><span id="liveDot" class="dot"></span><strong id="status">CONNECTING</strong><span id="updated">—</span></div>
+</header>
+<nav class="tabs">
+  <button class="tab active" data-view="live">LIVE</button>
+  <button class="tab" data-view="stints">STINTS</button>
+  <button class="tab" data-view="drivers">DRIVERS</button>
+  <button class="tab" data-view="pits">PITS</button>
+</nav>
+<main>
+  <section class="controls">
+    <label>Race ID <input id="raceId" type="number" min="1" value="1"></label>
+    <select id="teamFilter"><option value="">All teams</option></select>
+    <input id="search" placeholder="Search team / driver / Apex ID" />
+    <label class="check"><input id="auto" type="checkbox" checked> Live refresh</label>
+    <button id="refresh">Refresh</button>
+  </section>
+
+  <section id="live" class="view active">
+    <div class="sectionHead"><div><h2>Live current stints</h2><p>Our race metrics, updated from the current race data.</p></div><div><b id="teamCount">0</b> teams</div></div>
+    <div class="tableWrap"><table><thead><tr>
+      <th>Team</th><th>Driver</th><th>Stint</th><th>Laps</th><th>Last</th><th>Average</th><th>Best</th><th>Worst</th><th>Consistency</th><th>Updated</th>
+    </tr></thead><tbody id="liveBody"></tbody></table></div>
+  </section>
+
+  <section id="stints" class="view">
+    <div class="sectionHead"><div><h2>Stint history</h2><p>Every stored stint for every team and driver.</p></div></div>
+    <div class="tableWrap"><table><thead><tr>
+      <th>Team</th><th>Driver</th><th>Start</th><th>End</th><th>Laps</th><th>Average</th><th>Best</th><th>Worst</th><th>Consistency</th>
+    </tr></thead><tbody id="stintsBody"></tbody></table></div>
+  </section>
+
+  <section id="drivers" class="view">
+    <div class="sectionHead"><div><h2>Drivers</h2><p>Driver totals from the clean race statistics layer.</p></div></div>
+    <div class="tableWrap"><table><thead><tr>
+      <th>Team</th><th>Driver</th><th>Valid stints</th><th>Short stints</th><th>Valid laps</th><th>Total laps</th><th>Average</th><th>Best</th><th>Consistency</th>
+    </tr></thead><tbody id="driversBody"></tbody></table></div>
+  </section>
+
+  <section id="pits" class="view">
+    <div class="sectionHead"><div><h2>Pits</h2><p>Raw stored pit/stint data. Pit-loss comparison comes next.</p></div></div>
+    <div class="tableWrap"><table><thead><tr>
+      <th>Team/Apex</th><th>Pit #</th><th>Driver</th><th>Lap</th><th>Hour</th><th>On track</th><th>Pit time</th><th>Out</th>
+    </tr></thead><tbody id="pitsBody"></tbody></table></div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

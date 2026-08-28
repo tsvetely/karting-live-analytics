@@ -1,0 +1,10 @@
+name = "nextgen-race-engineer"
+main = "worker.js"
+compatibility_date = "2026-08-28"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[vars]
+DEFAULT_RACE_ID = "1"
