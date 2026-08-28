@@ -83,195 +83,297 @@ async function supabase(env, path, params = {}) {
 
 async function livePayload(env, raceId) {
 
-  const [entries, liveStints] = await Promise.all([
+  const entries = await supabase(env, "apex_entries", {
+    select: "*",
+    race_id: `eq.${raceId}`,
+    order: "updated_at.desc"
+  });
 
-    supabase(env, "apex_entries", {
-      select: "*",
-      race_id: `eq.${raceId}`,
-      order: "updated_at.desc"
-    }),
+  // ==========================================================
+  // IS THERE ACTUALLY A LIVE SESSION RIGHT NOW?
+  // ==========================================================
 
-    supabase(env, "live_stint_stats", {
-      select: "*",
-      race_id: `eq.${raceId}`,
-      order: "team_name.asc"
-    })
+  const now = Date.now();
 
-  ]);
+  const newestTimestamp = entries.reduce((latest, entry) => {
+    const t = Date.parse(entry.updated_at || "");
+    return Number.isFinite(t) ? Math.max(latest, t) : latest;
+  }, 0);
 
+  /*
+   * If NOTHING from Apex has been updated for 3 minutes,
+   * there is no active live session.
+   *
+   * Important:
+   * We return NO live teams.
+   * We do NOT display historical apex_entries as LIVE.
+   */
+  const LIVE_TIMEOUT_MS = 3 * 60 * 1000;
 
-  const entryMap = new Map(
-    entries.map(entry => [
-      String(entry.apex_id),
-      entry
-    ])
-  );
-
-
-  // ----------------------------------------------------------
-  // Keep the names expected by the existing UI.
-  //
-  // live_stint_stats uses:
-  //
-  //   avg_lap
-  //   best_lap
-  //   worst_lap
-  //
-  // Existing Race Engineer UI was written against:
-  //
-  //   avg_lap_time
-  //   best_lap_time
-  //   worst_lap_time
-  //
-  // Therefore we map them HERE instead of rewriting the UI.
-  // ----------------------------------------------------------
-
-  const current = liveStints.map(stint => {
-
-    const entry =
-      entryMap.get(String(stint.apex_id)) || {};
-
+  if (
+    !newestTimestamp ||
+    now - newestTimestamp > LIVE_TIMEOUT_MS
+  ) {
     return {
-
-      race_id: stint.race_id,
-      apex_id: stint.apex_id,
-
-      team_name:
-        stint.team_name ??
-        entry.team_name ??
-        null,
-
-      driver_name:
-        stint.driver_name ??
-        entry.current_driver ??
-        null,
-
-      current_driver:
-        stint.driver_name ??
-        entry.current_driver ??
-        null,
-
-
-      // current stint boundaries
-      start_lap_count:
-        stint.start_lap_count ?? null,
-
-      end_lap_count: null,
-
-
-      // current stint lap count
-      lap_count:
-        stint.valid_laps ??
-        stint.total_laps ??
-        0,
-
-
-      // values expected by the existing UI
-      avg_lap_time:
-        stint.avg_lap ?? null,
-
-      best_lap_time:
-        stint.best_lap ?? null,
-
-      best_lap_number:
-        stint.best_lap_number ?? null,
-
-      worst_lap_time:
-        stint.worst_lap ?? null,
-
-      worst_lap_number:
-        stint.worst_lap_number ?? null,
-
-      consistency:
-        stint.consistency ?? null,
-
-
-      // current Apex values
-      live_last_lap:
-        stint.last_lap ??
-        entry.last_lap ??
-        null,
-
-      live_best_lap:
-        stint.best_lap ??
-        entry.best_lap ??
-        null,
-
-      live_lap_count:
-        entry.lap_count ??
-        stint.current_lap_count ??
-        null,
-
-      updated_at:
-        stint.updated_at ??
-        entry.updated_at ??
-        null
+      race_id: Number(raceId),
+      generated_at: new Date().toISOString(),
+      active: false,
+      current: [],
+      entries: []
     };
+  }
+
+
+  // ==========================================================
+  // CURRENT ACTIVE FIELD
+  // ==========================================================
+  //
+  // During an active session we only accept entries belonging
+  // to the current wave of Apex updates.
+  //
+  // This removes stale karts left from previous sessions.
+  // ==========================================================
+
+  const CURRENT_FIELD_WINDOW_MS = 3 * 60 * 1000;
+
+  const activeEntries = entries.filter(entry => {
+
+    const t =
+      Date.parse(entry.updated_at || "");
+
+    if (!Number.isFinite(t)) {
+      return false;
+    }
+
+    return (
+      newestTimestamp - t <= CURRENT_FIELD_WINDOW_MS
+    );
   });
 
 
-  // ----------------------------------------------------------
-  // A kart/team may already exist in apex_entries before its
-  // first live_stint_stats record has been created.
-  //
-  // We still want it visible in LIVE.
-  // ----------------------------------------------------------
+  // ==========================================================
+  // LIVE STINT SNAPSHOTS
+  // ==========================================================
 
-  const seen = new Set(
-    current.map(row =>
-      String(row.apex_id)
-    )
+  const liveStints = await supabase(
+    env,
+    "live_stint_stats",
+    {
+      select: "*",
+      race_id: `eq.${raceId}`,
+      order: "team_name.asc"
+    }
   );
 
 
-  for (const entry of entries) {
+  const activeApexIds =
+    new Set(
+      activeEntries.map(
+        entry => String(entry.apex_id)
+      )
+    );
 
-    if (seen.has(String(entry.apex_id))) {
+
+  /*
+   * live_stint_stats can itself contain a row left from a
+   * previous session.
+   *
+   * Keep ONLY Apex IDs currently active in Apex timing.
+   */
+  const activeLiveStints =
+    liveStints.filter(
+      stint =>
+        activeApexIds.has(
+          String(stint.apex_id)
+        )
+    );
+
+
+  const entryMap =
+    new Map(
+      activeEntries.map(
+        entry => [
+          String(entry.apex_id),
+          entry
+        ]
+      )
+    );
+
+
+  const current =
+    activeLiveStints.map(stint => {
+
+      const entry =
+        entryMap.get(
+          String(stint.apex_id)
+        ) || {};
+
+      return {
+
+        race_id:
+          stint.race_id,
+
+        apex_id:
+          stint.apex_id,
+
+        team_name:
+          stint.team_name ??
+          entry.team_name ??
+          null,
+
+        driver_name:
+          stint.driver_name ??
+          entry.current_driver ??
+          null,
+
+        current_driver:
+          stint.driver_name ??
+          entry.current_driver ??
+          null,
+
+        start_lap_count:
+          stint.start_lap_count ??
+          null,
+
+        end_lap_count:
+          null,
+
+        lap_count:
+          stint.valid_laps ??
+          stint.total_laps ??
+          0,
+
+        avg_lap_time:
+          stint.avg_lap ??
+          null,
+
+        best_lap_time:
+          stint.best_lap ??
+          null,
+
+        best_lap_number:
+          stint.best_lap_number ??
+          null,
+
+        worst_lap_time:
+          stint.worst_lap ??
+          null,
+
+        worst_lap_number:
+          stint.worst_lap_number ??
+          null,
+
+        consistency:
+          stint.consistency ??
+          null,
+
+        live_last_lap:
+          stint.last_lap ??
+          entry.last_lap ??
+          null,
+
+        live_best_lap:
+          stint.best_lap ??
+          entry.best_lap ??
+          null,
+
+        live_lap_count:
+          entry.lap_count ??
+          stint.current_lap_count ??
+          null,
+
+        updated_at:
+          stint.updated_at ??
+          entry.updated_at ??
+          null
+      };
+    });
+
+
+  // ==========================================================
+  // ENTRY EXISTS BUT LIVE STINT HAS NOT STARTED YET
+  // ==========================================================
+
+  const seen =
+    new Set(
+      current.map(
+        row => String(row.apex_id)
+      )
+    );
+
+
+  for (const entry of activeEntries) {
+
+    if (
+      seen.has(
+        String(entry.apex_id)
+      )
+    ) {
       continue;
     }
 
     current.push({
 
-      race_id: entry.race_id,
-      apex_id: entry.apex_id,
+      race_id:
+        entry.race_id,
+
+      apex_id:
+        entry.apex_id,
 
       team_name:
-        entry.team_name ?? null,
+        entry.team_name ??
+        null,
 
       driver_name:
-        entry.current_driver ?? null,
+        entry.current_driver ??
+        null,
 
       current_driver:
-        entry.current_driver ?? null,
+        entry.current_driver ??
+        null,
 
-      start_lap_count: null,
-      end_lap_count: null,
+      start_lap_count:
+        null,
 
-      lap_count: 0,
+      end_lap_count:
+        null,
 
-      avg_lap_time: null,
+      lap_count:
+        0,
+
+      avg_lap_time:
+        null,
 
       best_lap_time:
-        entry.best_lap ?? null,
+        null,
 
-      best_lap_number: null,
+      best_lap_number:
+        null,
 
-      worst_lap_time: null,
-      worst_lap_number: null,
+      worst_lap_time:
+        null,
 
-      consistency: null,
+      worst_lap_number:
+        null,
+
+      consistency:
+        null,
 
       live_last_lap:
-        entry.last_lap ?? null,
+        entry.last_lap ??
+        null,
 
       live_best_lap:
-        entry.best_lap ?? null,
+        entry.best_lap ??
+        null,
 
       live_lap_count:
-        entry.lap_count ?? null,
+        entry.lap_count ??
+        null,
 
       updated_at:
-        entry.updated_at ?? null
+        entry.updated_at ??
+        null
     });
   }
 
@@ -279,8 +381,9 @@ async function livePayload(env, raceId) {
   return {
     race_id: Number(raceId),
     generated_at: new Date().toISOString(),
+    active: true,
     current,
-    entries
+    entries: activeEntries
   };
 }
 
