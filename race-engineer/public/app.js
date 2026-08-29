@@ -368,6 +368,152 @@ function apiUrl(path) {
 
 
 // ============================================================
+// FILE DOWNLOAD
+//
+// IMPORTANT:
+// We no longer navigate the browser directly to the endpoint.
+// We fetch the file, inspect HTTP errors and only then trigger
+// the browser download.
+// ============================================================
+
+async function downloadFileFromEndpoint(
+  path,
+  fallbackFilename =
+    "download"
+) {
+  const response =
+    await fetch(
+      apiUrl(path),
+      {
+        method: "GET",
+        cache: "no-store"
+      }
+    );
+
+
+  if (!response.ok) {
+    let message = "";
+
+    try {
+      message =
+        await response.text();
+    } catch {
+      message = "";
+    }
+
+    throw new Error(
+      message ||
+      `Download failed: HTTP ${response.status}`
+    );
+  }
+
+
+  const blob =
+    await response.blob();
+
+
+  if (
+    !blob ||
+    blob.size === 0
+  ) {
+    throw new Error(
+      "The server returned an empty file."
+    );
+  }
+
+
+  const disposition =
+    response.headers.get(
+      "content-disposition"
+    ) || "";
+
+
+  let filename =
+    fallbackFilename;
+
+
+  const utf8Match =
+    /filename\*=UTF-8''([^;]+)/i
+      .exec(disposition);
+
+
+  const normalMatch =
+    /filename="([^"]+)"/i
+      .exec(disposition);
+
+
+  if (
+    utf8Match?.[1]
+  ) {
+    try {
+      filename =
+        decodeURIComponent(
+          utf8Match[1]
+        );
+    } catch {
+      filename =
+        utf8Match[1];
+    }
+
+  } else if (
+    normalMatch?.[1]
+  ) {
+    filename =
+      normalMatch[1];
+  }
+
+
+  const objectUrl =
+    URL.createObjectURL(
+      blob
+    );
+
+
+  try {
+    const link =
+      document.createElement(
+        "a"
+      );
+
+    link.href =
+      objectUrl;
+
+    link.download =
+      filename;
+
+    link.style.display =
+      "none";
+
+
+    document.body
+      .appendChild(
+        link
+      );
+
+
+    link.click();
+    link.remove();
+
+  } finally {
+    window.setTimeout(
+      () =>
+        URL.revokeObjectURL(
+          objectUrl
+        ),
+      1000
+    );
+  }
+
+
+  return {
+    filename,
+    size:
+      blob.size
+  };
+}
+
+
+// ============================================================
 // STATUS
 // ============================================================
 
@@ -918,11 +1064,6 @@ function rebuildFilters() {
     );
 
 
-  /*
-   * IMPORTANT:
-   * Filters come from the whole loaded race,
-   * not only the currently visible tab.
-   */
   const rows =
     allRaceRows();
 
@@ -1280,7 +1421,7 @@ function renderFilterSummary() {
 
 
 // ============================================================
-// CURRENT DATA CLEAR
+// CLEAR DATA
 // ============================================================
 
 function clearRaceData() {
@@ -1577,7 +1718,7 @@ function updateRaceContext() {
 
 
 // ============================================================
-// OVERVIEW RENDER
+// OVERVIEW
 // ============================================================
 
 function renderOverview() {
@@ -1615,10 +1756,7 @@ function renderOverview() {
 >
 
 <td class="position">
-  ${esc(
-    row.position ??
-    "—"
-  )}
+  ${esc(row.position ?? "—")}
 </td>
 
 <td class="team">
@@ -1648,17 +1786,11 @@ function renderOverview() {
 </td>
 
 <td>
-  ${esc(
-    row.pit_count ??
-    "—"
-  )}
+  ${esc(row.pit_count ?? "—")}
 </td>
 
 <td>
-  #${esc(
-    row.stint_number ??
-    "—"
-  )}
+  #${esc(row.stint_number ?? "—")}
 </td>
 
 <td>
@@ -1673,10 +1805,7 @@ function renderOverview() {
 </td>
 
 <td>
-  ${esc(
-    row.valid_laps ??
-    "—"
-  )}
+  ${esc(row.valid_laps ?? "—")}
 </td>
 
 <td>
@@ -1764,10 +1893,6 @@ function renderOverview() {
 }
 
 
-// ============================================================
-// SUMMARY
-// ============================================================
-
 function renderOverviewSummary() {
   const rows =
     S.overview;
@@ -1831,47 +1956,33 @@ function renderOverviewSummary() {
       );
 
 
-  if (
-    $("summaryTeams")
-  ) {
-    $("summaryTeams")
-      .textContent =
-        rows.length ||
-        "—";
+  if ($("summaryTeams")) {
+    $("summaryTeams").textContent =
+      rows.length || "—";
   }
 
 
-  if (
-    $("summaryRaceLap")
-  ) {
-    $("summaryRaceLap")
-      .textContent =
-        raceLap ||
-        "—";
+  if ($("summaryRaceLap")) {
+    $("summaryRaceLap").textContent =
+      raceLap || "—";
   }
 
 
-  if (
-    $("summaryPits")
-  ) {
-    $("summaryPits")
-      .textContent =
-        pitStops;
+  if ($("summaryPits")) {
+    $("summaryPits").textContent =
+      pitStops;
   }
 
 
-  if (
-    $("summaryBestLap")
-  ) {
-    $("summaryBestLap")
-      .textContent =
-        best.length
-          ? time(
-              Math.min(
-                ...best
-              )
+  if ($("summaryBestLap")) {
+    $("summaryBestLap").textContent =
+      best.length
+        ? time(
+            Math.min(
+              ...best
             )
-          : "—";
+          )
+        : "—";
   }
 }
 
@@ -1913,35 +2024,22 @@ function renderStints() {
 </td>
 
 <td>
-  ${esc(
-    row.driver_name ||
-    "—"
-  )}
+  ${esc(row.driver_name || "—")}
 </td>
 
 <td>
-  #${esc(
-    row.stint_number ??
-    "—"
-  )}
+  #${esc(row.stint_number ?? "—")}
 </td>
 
 <td>
-  ${esc(
-    row.start_lap_count ??
-    "—"
-  )}
+  ${esc(row.start_lap_count ?? "—")}
 </td>
 
 <td>
   ${
-    row.end_lap_count !==
-      null &&
-    row.end_lap_count !==
-      undefined
-      ? esc(
-          row.end_lap_count
-        )
+    row.end_lap_count !== null &&
+    row.end_lap_count !== undefined
+      ? esc(row.end_lap_count)
       : (
           row.is_live
             ? '<span class="good">LIVE</span>'
@@ -1951,17 +2049,11 @@ function renderStints() {
 </td>
 
 <td>
-  ${esc(
-    row.total_laps ??
-    "—"
-  )}
+  ${esc(row.total_laps ?? "—")}
 </td>
 
 <td>
-  ${esc(
-    row.valid_laps ??
-    "—"
-  )}
+  ${esc(row.valid_laps ?? "—")}
 </td>
 
 <td>
@@ -1985,10 +2077,7 @@ function renderStints() {
 </td>
 
 <td>
-  ${esc(
-    row.best_lap_number ??
-    "—"
-  )}
+  ${esc(row.best_lap_number ?? "—")}
 </td>
 
 <td class="bad">
@@ -2002,16 +2091,11 @@ function renderStints() {
 </td>
 
 <td>
-  ${esc(
-    row.worst_lap_number ??
-    "—"
-  )}
+  ${esc(row.worst_lap_number ?? "—")}
 </td>
 
 <td>
-  ${time(
-    row.consistency
-  )}
+  ${time(row.consistency)}
 </td>
 
 </tr>
@@ -2061,10 +2145,7 @@ function renderDrivers() {
 </td>
 
 <td>
-  ${esc(
-    row.driver_name ||
-    "—"
-  )}
+  ${esc(row.driver_name || "—")}
 </td>
 
 <td>
@@ -2078,36 +2159,23 @@ function renderDrivers() {
 </td>
 
 <td>
-  ${esc(
-    row.short_stint_count ??
-    0
-  )}
+  ${esc(row.short_stint_count ?? 0)}
 </td>
 
 <td>
-  ${esc(
-    row.valid_laps ??
-    "—"
-  )}
+  ${esc(row.valid_laps ?? "—")}
 </td>
 
 <td>
-  ${esc(
-    row.total_laps ??
-    "—"
-  )}
+  ${esc(row.total_laps ?? "—")}
 </td>
 
 <td>
-  ${time(
-    row.avg_lap_time
-  )}
+  ${time(row.avg_lap_time)}
 </td>
 
 <td class="good">
-  ${time(
-    row.best_lap_time
-  )}
+  ${time(row.best_lap_time)}
 </td>
 
 <td>
@@ -2187,29 +2255,19 @@ function renderTeams() {
 </td>
 
 <td>
-  ${esc(
-    row.valid_laps ??
-    "—"
-  )}
+  ${esc(row.valid_laps ?? "—")}
 </td>
 
 <td>
-  ${esc(
-    row.total_laps ??
-    "—"
-  )}
+  ${esc(row.total_laps ?? "—")}
 </td>
 
 <td>
-  ${time(
-    row.avg_lap_time
-  )}
+  ${time(row.avg_lap_time)}
 </td>
 
 <td class="good">
-  ${time(
-    row.best_lap_time
-  )}
+  ${time(row.best_lap_time)}
 </td>
 
 <td>
@@ -2223,9 +2281,7 @@ function renderTeams() {
 </td>
 
 <td>
-  ${time(
-    row.driver_spread
-  )}
+  ${time(row.driver_spread)}
 </td>
 
 </tr>
@@ -2275,10 +2331,7 @@ function renderPits() {
 </td>
 
 <td>
-  ${esc(
-    row.driver_name ||
-    "—"
-  )}
+  ${esc(row.driver_name || "—")}
 </td>
 
 <td>
@@ -2292,31 +2345,19 @@ function renderPits() {
 </td>
 
 <td>
-  ${esc(
-    row.pit_lap ??
-    "—"
-  )}
+  ${esc(row.pit_lap ?? "—")}
 </td>
 
 <td>
-  ${esc(
-    row.pit_hour ??
-    "—"
-  )}
+  ${esc(row.pit_hour ?? "—")}
 </td>
 
 <td>
-  ${esc(
-    row.on_track ??
-    "—"
-  )}
+  ${esc(row.on_track ?? "—")}
 </td>
 
 <td>
-  ${esc(
-    row.pit_time ??
-    "—"
-  )}
+  ${esc(row.pit_time ?? "—")}
 </td>
 
 <td>
@@ -2377,10 +2418,7 @@ function renderEvents() {
 </td>
 
 <td>
-  ${esc(
-    row.type ||
-    "—"
-  )}
+  ${esc(row.type || "—")}
 </td>
 
 <td class="team">
@@ -2395,31 +2433,19 @@ function renderEvents() {
 </td>
 
 <td>
-  ${esc(
-    row.driver_name ||
-    "—"
-  )}
+  ${esc(row.driver_name || "—")}
 </td>
 
 <td>
-  ${esc(
-    row.lap_number ??
-    "—"
-  )}
+  ${esc(row.lap_number ?? "—")}
 </td>
 
 <td>
-  ${esc(
-    row.reason ||
-    "—"
-  )}
+  ${esc(row.reason || "—")}
 </td>
 
 <td>
-  ${esc(
-    row.status ||
-    "—"
-  )}
+  ${esc(row.status || "—")}
 </td>
 
 <td>
@@ -2501,7 +2527,7 @@ function renderActiveView() {
 
 
 // ============================================================
-// LOAD LIVE META + OVERVIEW
+// LOAD LIVE
 // ============================================================
 
 async function loadLiveOverview() {
@@ -2509,8 +2535,7 @@ async function loadLiveOverview() {
     await api(
       "/api/live",
       {
-        raceId:
-          null
+        raceId: null
       }
     );
 
@@ -2549,20 +2574,10 @@ async function loadLiveOverview() {
     );
 
 
-  if (
-    S.overview.length
-  ) {
-    setStatus(
-      true,
-      status
-    );
-
-  } else {
-    setStatus(
-      false,
-      status
-    );
-  }
+  setStatus(
+    S.overview.length > 0,
+    status
+  );
 
 
   updateRaceContext();
@@ -2589,9 +2604,7 @@ async function loadStints(
     !raceHasData()
   ) {
     S.stints = [];
-    S.loaded.stints =
-      true;
-
+    S.loaded.stints = true;
     return;
   }
 
@@ -2603,8 +2616,7 @@ async function loadStints(
 
 
   S.stints =
-    data.rows ||
-    [];
+    data.rows || [];
 
   S.loaded.stints =
     true;
@@ -2627,9 +2639,7 @@ async function loadDrivers(
     !raceHasData()
   ) {
     S.drivers = [];
-    S.loaded.drivers =
-      true;
-
+    S.loaded.drivers = true;
     return;
   }
 
@@ -2641,8 +2651,7 @@ async function loadDrivers(
 
 
   S.drivers =
-    data.rows ||
-    [];
+    data.rows || [];
 
   S.loaded.drivers =
     true;
@@ -2665,9 +2674,7 @@ async function loadTeams(
     !raceHasData()
   ) {
     S.teams = [];
-    S.loaded.teams =
-      true;
-
+    S.loaded.teams = true;
     return;
   }
 
@@ -2679,8 +2686,7 @@ async function loadTeams(
 
 
   S.teams =
-    data.rows ||
-    [];
+    data.rows || [];
 
   S.loaded.teams =
     true;
@@ -2703,9 +2709,7 @@ async function loadPits(
     !raceHasData()
   ) {
     S.pits = [];
-    S.loaded.pits =
-      true;
-
+    S.loaded.pits = true;
     return;
   }
 
@@ -2717,8 +2721,7 @@ async function loadPits(
 
 
   S.pits =
-    data.rows ||
-    [];
+    data.rows || [];
 
   S.loaded.pits =
     true;
@@ -2741,9 +2744,7 @@ async function loadEvents(
     !raceHasData()
   ) {
     S.events = [];
-    S.loaded.events =
-      true;
-
+    S.loaded.events = true;
     return;
   }
 
@@ -2755,8 +2756,7 @@ async function loadEvents(
 
 
   S.events =
-    data.rows ||
-    [];
+    data.rows || [];
 
   S.loaded.events =
     true;
@@ -2764,7 +2764,7 @@ async function loadEvents(
 
 
 // ============================================================
-// HISTORICAL OVERVIEW
+// HISTORY OVERVIEW
 // ============================================================
 
 function buildHistoricalOverview() {
@@ -2844,9 +2844,6 @@ function buildHistoricalOverview() {
 
 // ============================================================
 // FULL RACE LOAD
-//
-// THIS IS THE IMPORTANT CHANGE.
-// Every dataset is loaded immediately.
 // ============================================================
 
 async function loadFullRace(
@@ -2868,10 +2865,6 @@ async function loadFullRace(
     if (
       isLiveRace()
     ) {
-      /*
-       * FIRST:
-       * obtain the real current race_id from /api/live.
-       */
       await loadLiveOverview();
 
 
@@ -2885,20 +2878,11 @@ async function loadFullRace(
         S.events = [];
 
 
-        S.loaded.stints =
-          true;
-
-        S.loaded.drivers =
-          true;
-
-        S.loaded.teams =
-          true;
-
-        S.loaded.pits =
-          true;
-
-        S.loaded.events =
-          true;
+        S.loaded.stints = true;
+        S.loaded.drivers = true;
+        S.loaded.teams = true;
+        S.loaded.pits = true;
+        S.loaded.events = true;
 
 
         rebuildFilters();
@@ -2908,12 +2892,6 @@ async function loadFullRace(
       }
 
 
-      /*
-       * SECOND:
-       * use that SAME race_id for every race dataset.
-       *
-       * No lazy tab loading.
-       */
       const results =
         await Promise.allSettled([
           loadStints(force),
@@ -2939,10 +2917,6 @@ async function loadFullRace(
 
 
     } else {
-      /*
-       * Historical race:
-       * load every analytical dataset as well.
-       */
       const results =
         await Promise.allSettled([
           loadStints(force),
@@ -3001,7 +2975,7 @@ async function loadFullRace(
 
 
 // ============================================================
-// INDIVIDUAL VIEW LOAD FALLBACK
+// VIEW FALLBACK LOAD
 // ============================================================
 
 async function loadCurrentView(
@@ -3105,10 +3079,6 @@ async function switchView(view) {
     );
 
 
-  /*
-   * Normally everything is already loaded.
-   * This remains as a safety fallback.
-   */
   if (
     view !== "reports"
   ) {
@@ -3346,9 +3316,6 @@ async function manualRefresh() {
 
 
   try {
-    /*
-     * Do NOT clear the screen before the new data arrives.
-     */
     Object
       .keys(
         S.loaded
@@ -3404,13 +3371,6 @@ function startAutoRefresh() {
   }
 
 
-  /*
-   * We do NOT hammer all heavy analytical endpoints
-   * every 1.5 seconds.
-   *
-   * Overview can refresh frequently.
-   * Full datasets refresh every 15 seconds.
-   */
   let fullCounter =
     0;
 
@@ -3597,30 +3557,21 @@ function openManualExclusion(
   apexId = "",
   lap = ""
 ) {
-  if (
-    $("manualExclusionApexId")
-  ) {
-    $("manualExclusionApexId")
-      .value =
-        apexId;
+  if ($("manualExclusionApexId")) {
+    $("manualExclusionApexId").value =
+      apexId;
   }
 
 
-  if (
-    $("manualExclusionLap")
-  ) {
-    $("manualExclusionLap")
-      .value =
-        lap;
+  if ($("manualExclusionLap")) {
+    $("manualExclusionLap").value =
+      lap;
   }
 
 
-  if (
-    $("manualExclusionReason")
-  ) {
-    $("manualExclusionReason")
-      .value =
-        "";
+  if ($("manualExclusionReason")) {
+    $("manualExclusionReason").value =
+      "";
   }
 
 
@@ -4121,7 +4072,7 @@ function initDetailPanel() {
 
 
 // ============================================================
-// DOWNLOAD HELPERS
+// LOCAL CSV HELPERS
 // ============================================================
 
 function downloadText(
@@ -4133,8 +4084,7 @@ function downloadText(
     new Blob(
       [content],
       {
-        type:
-          mime
+        type: mime
       }
     );
 
@@ -4173,7 +4123,7 @@ function downloadText(
       URL.revokeObjectURL(
         url
       ),
-    0
+    1000
   );
 }
 
@@ -4320,12 +4270,6 @@ function reportBaseName() {
       /[\\/:*?"<>|]/g,
       "-"
     );
-}
-
-
-function downloadFromEndpoint(path) {
-  window.location.href =
-    apiUrl(path);
 }
 
 
@@ -4567,6 +4511,30 @@ function renderReports() {
 }
 
 
+function setReportButtonBusy(
+  button,
+  busy,
+  idleText
+) {
+  if (!button) {
+    return;
+  }
+
+  button.disabled =
+    busy;
+
+  button.dataset.idleText =
+    idleText ||
+    button.dataset.idleText ||
+    button.textContent;
+
+  button.textContent =
+    busy
+      ? "GENERATING..."
+      : button.dataset.idleText;
+}
+
+
 function initReports() {
   $("downloadRaceCsv")
     ?.addEventListener(
@@ -4605,22 +4573,66 @@ function initReports() {
 
 
   /*
-   * REQUIRED APEX-STYLE RAW LAP CSV
+   * REQUIRED RAW APEX LAP CSV.
+   *
+   * IMPORTANT:
+   * This now uses fetch + Blob instead of window.location.href.
    */
   $("organiserReport1Csv")
     ?.addEventListener(
       "click",
-      () => {
-        downloadFromEndpoint(
-          "/api/reports/lap-time-records.csv"
+      async event => {
+        const button =
+          event.currentTarget;
+
+
+        setReportButtonBusy(
+          button,
+          true,
+          "CSV"
         );
+
+
+        try {
+          const result =
+            await downloadFileFromEndpoint(
+              "/api/reports/lap-time-records.csv",
+              `${reportBaseName()} - Lap time records.csv`
+            );
+
+
+          console.log(
+            "CSV downloaded:",
+            result
+          );
+
+
+        } catch (error) {
+          console.error(
+            "CSV DOWNLOAD ERROR",
+            error
+          );
+
+
+          alert(
+            `CSV download failed:\n\n${error.message}`
+          );
+
+
+        } finally {
+          setReportButtonBusy(
+            button,
+            false,
+            "CSV"
+          );
+
+
+          renderReports();
+        }
       }
     );
 
 
-  /*
-   * REQUIRED APEX-STYLE PIT / STINT REPORT
-   */
   $("organiserReport2Pdf")
     ?.addEventListener(
       "click",
@@ -4889,12 +4901,6 @@ async function init() {
     );
 
 
-    /*
-     * IMPORTANT:
-     *
-     * Race list and collector state are secondary.
-     * Current race data loads immediately.
-     */
     loadRaceList()
       .catch(
         console.warn
@@ -4907,18 +4913,6 @@ async function init() {
       );
 
 
-    /*
-     * THIS NOW LOADS:
-     *
-     * Overview
-     * Stints
-     * Drivers
-     * Teams
-     * Pits
-     * Events
-     *
-     * before the user opens any tab.
-     */
     await loadFullRace(
       true
     );
