@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v8-complete-stint-chain";
+  "2026-08-30-race-datasets-v9-raw-lap-stint-stats";
 
 const PAGE_SIZE = 1000;
 
@@ -13,6 +13,7 @@ function json(data, status = 200) {
     JSON.stringify(data),
     {
       status,
+
       headers: {
         "content-type":
           "application/json; charset=utf-8",
@@ -1539,7 +1540,38 @@ function filterCurrentField(
 
 
 // ============================================================
-// STINT HELPERS
+// SESSION STATE
+// ============================================================
+
+function sessionCurrentlyLive(
+  snapshot
+) {
+  const lastPacket =
+    Date.parse(
+      snapshot
+        ?.last_packet_at ||
+      ""
+    );
+
+
+  if (
+    !Number.isFinite(
+      lastPacket
+    )
+  ) {
+    return false;
+  }
+
+
+  return (
+    Date.now() -
+    lastPacket
+  ) < 180000;
+}
+
+
+// ============================================================
+// ANALYTICAL STINT NORMALIZATION
 // ============================================================
 
 function normalizeAnalyticalStint(
@@ -1588,63 +1620,27 @@ function normalizeAnalyticalStint(
       number(
         row.total_laps
       ) ??
-      0,
-
-    valid_laps:
-      number(
-        row.valid_laps
-      ) ??
-      0,
-
-    avg_lap_time:
-      number(
-        row.avg_lap_time ??
-        row.avg_lap
-      ),
-
-    best_lap_time:
-      number(
-        row.best_lap_time ??
-        row.best_lap
-      ),
-
-    best_lap_number:
-      number(
-        row.best_lap_number
-      ),
-
-    worst_lap_time:
-      number(
-        row.worst_lap_time ??
-        row.worst_lap
-      ),
-
-    worst_lap_number:
-      number(
-        row.worst_lap_number
-      ),
-
-    consistency:
-      number(
-        row.consistency
-      )
+      0
   };
 }
 
 
 // ============================================================
-// BUILD COMPLETE STINT CHAIN
+// BUILD COMPLETE STINT STRUCTURE
 //
 // IMPORTANT:
 //
-// PIT STOPS DEFINE THE STRUCTURE.
+// PIT ROWS ARE THE SOURCE OF TRUTH FOR STINT BOUNDARIES.
 //
-// Example:
-// 0 -> 35 -> 93 -> 104 -> ... -> 639 -> 650
+// pit lap = the final lap of the stint that just ended.
 //
-// completed_stint_stats ONLY enriches these boundaries.
+// Therefore:
 //
-// A missing analytical row must NEVER remove a real stint.
+// pit 35 => stint #1 = race laps 1...35
+// pit 93 => stint #2 = race laps 36...93
+//
+// Analytical tables are used for DRIVER FALLBACK ONLY.
+// Statistics are recalculated later from raw lap records.
 // ============================================================
 
 function buildCompleteStintChainForTeam({
@@ -1665,25 +1661,49 @@ function buildCompleteStintChainForTeam({
 
 
   const sortedPits =
-    [...pits]
+    pits
       .filter(
         row =>
           String(
             row.apex_id
           ) === id
       )
+      .slice()
       .sort(
-        (a, b) =>
-          Number(
-            a.pit_number
-          ) -
-          Number(
-            b.pit_number
-          )
+        (a, b) => {
+          const pa =
+            Number(
+              a.pit_number
+            );
+
+          const pb =
+            Number(
+              b.pit_number
+            );
+
+
+          if (
+            Number.isFinite(pa) &&
+            Number.isFinite(pb) &&
+            pa !== pb
+          ) {
+            return pa - pb;
+          }
+
+
+          return (
+            Number(
+              a.pit_lap
+            ) -
+            Number(
+              b.pit_lap
+            )
+          );
+        }
       );
 
 
-  const analytical =
+  const completedRows =
     completed
       .filter(
         row =>
@@ -1723,7 +1743,7 @@ function buildCompleteStintChainForTeam({
 
   for (
     const row
-    of analytical
+    of completedRows
   ) {
     analyticalByStart.set(
       Number(
@@ -1734,43 +1754,42 @@ function buildCompleteStintChainForTeam({
   }
 
 
-  const liveByStart =
-    new Map();
-
-
   for (
     const row
     of liveRows
   ) {
-    liveByStart.set(
+    const start =
       Number(
         row.start_lap_count
-      ),
-      row
-    );
+      );
+
+
+    if (
+      !analyticalByStart.has(
+        start
+      )
+    ) {
+      analyticalByStart.set(
+        start,
+        row
+      );
+    }
   }
 
 
   const result = [];
-
 
   let previousBoundary =
     0;
 
 
   /*
-   * Each pit row marks the END of a stint.
+   * Every real pit creates one completed stint.
    */
   for (
-    let index = 0;
-    index <
-      sortedPits.length;
-    index++
+    const pit
+    of sortedPits
   ) {
-    const pit =
-      sortedPits[index];
-
-
     const endBoundary =
       Number(
         pit.pit_lap
@@ -1788,22 +1807,16 @@ function buildCompleteStintChainForTeam({
     }
 
 
-    const stats =
+    const analytical =
       analyticalByStart.get(
-        previousBoundary
-      ) ||
-      liveByStart.get(
         previousBoundary
       ) ||
       null;
 
 
     const totalLaps =
-      Math.max(
-        0,
-        endBoundary -
-        previousBoundary
-      );
+      endBoundary -
+      previousBoundary;
 
 
     result.push({
@@ -1819,18 +1832,16 @@ function buildCompleteStintChainForTeam({
           teamMap,
           teamName,
           pit.team_name,
-          stats?.team_name
+          analytical?.team_name
         ),
 
       /*
-       * Driver recorded against this pit is the driver
-       * whose stint ended here.
-       *
-       * Prefer analytical driver if available.
+       * Apex PIT row driver is the driver whose stint
+       * finishes on this pit lap.
        */
       driver_name:
-        stats?.driver_name ||
         pit.driver_name ||
+        analytical?.driver_name ||
         null,
 
       stint_number:
@@ -1843,39 +1854,30 @@ function buildCompleteStintChainForTeam({
         endBoundary,
 
       current_lap_count:
-        null,
+        endBoundary,
 
       total_laps:
-        stats?.total_laps > 0
-          ? stats.total_laps
-          : totalLaps,
+        totalLaps,
 
       valid_laps:
-        stats?.valid_laps ??
         0,
 
       avg_lap_time:
-        stats?.avg_lap_time ??
         null,
 
       best_lap_time:
-        stats?.best_lap_time ??
         null,
 
       best_lap_number:
-        stats?.best_lap_number ??
         null,
 
       worst_lap_time:
-        stats?.worst_lap_time ??
         null,
 
       worst_lap_number:
-        stats?.worst_lap_number ??
         null,
 
       consistency:
-        stats?.consistency ??
         null,
 
       pit_hour:
@@ -1894,14 +1896,18 @@ function buildCompleteStintChainForTeam({
         pit.total_time ||
         null,
 
+      /*
+       * This boundary comes from a PIT record,
+       * therefore its END lap is the pit-in lap.
+       */
+      ended_by_pit:
+        true,
+
       is_live:
         false,
 
       status:
-        "COMPLETED",
-
-      statistics_available:
-        !!stats
+        "COMPLETED"
     });
 
 
@@ -1911,10 +1917,11 @@ function buildCompleteStintChainForTeam({
 
 
   /*
-   * FINAL STINT:
+   * If there are race laps AFTER the final pit,
+   * create one final stint.
    *
-   * Only exists if the car has completed laps AFTER the
-   * last recorded pit boundary.
+   * There is no pit-in lap to exclude unless another pit
+   * later appears.
    */
   const raceLap =
     Number(
@@ -1929,18 +1936,11 @@ function buildCompleteStintChainForTeam({
     raceLap >
       previousBoundary
   ) {
-    const stats =
+    const analytical =
       analyticalByStart.get(
         previousBoundary
       ) ||
-      liveByStart.get(
-        previousBoundary
-      ) ||
       null;
-
-
-    const liveStatus =
-      sessionIsLive === true;
 
 
     result.push({
@@ -1956,11 +1956,11 @@ function buildCompleteStintChainForTeam({
           teamMap,
           teamName,
           entry?.team_name,
-          stats?.team_name
+          analytical?.team_name
         ),
 
       driver_name:
-        stats?.driver_name ||
+        analytical?.driver_name ||
         entry?.current_driver ||
         null,
 
@@ -1970,14 +1970,8 @@ function buildCompleteStintChainForTeam({
       start_lap_count:
         previousBoundary,
 
-      /*
-       * IMPORTANT:
-       *
-       * Once the session is finished, the final race lap
-       * becomes the real END boundary.
-       */
       end_lap_count:
-        liveStatus
+        sessionIsLive
           ? null
           : raceLap,
 
@@ -1985,40 +1979,28 @@ function buildCompleteStintChainForTeam({
         raceLap,
 
       total_laps:
-        stats?.total_laps > 0
-          ? stats.total_laps
-          : Math.max(
-              0,
-              raceLap -
-              previousBoundary
-            ),
+        raceLap -
+        previousBoundary,
 
       valid_laps:
-        stats?.valid_laps ??
         0,
 
       avg_lap_time:
-        stats?.avg_lap_time ??
         null,
 
       best_lap_time:
-        stats?.best_lap_time ??
         null,
 
       best_lap_number:
-        stats?.best_lap_number ??
         null,
 
       worst_lap_time:
-        stats?.worst_lap_time ??
         null,
 
       worst_lap_number:
-        stats?.worst_lap_number ??
         null,
 
       consistency:
-        stats?.consistency ??
         null,
 
       pit_hour:
@@ -2033,67 +2015,877 @@ function buildCompleteStintChainForTeam({
       total_time:
         null,
 
+      ended_by_pit:
+        false,
+
       is_live:
-        liveStatus,
+        sessionIsLive,
 
       status:
-        liveStatus
+        sessionIsLive
           ? "LIVE"
-          : "COMPLETED",
-
-      statistics_available:
-        !!stats
+          : "COMPLETED"
     });
   }
 
 
   /*
-   * EDGE CASE:
-   *
-   * No pit data at all.
-   * We still preserve analytical rows if they exist.
+   * Very early session / no pit records yet.
    */
   if (
     result.length === 0 &&
-    analytical.length > 0
+    Number.isFinite(
+      raceLap
+    ) &&
+    raceLap > 0
   ) {
-    const sorted =
-      [...analytical]
-        .sort(
-          (a, b) =>
-            Number(
-              a.start_lap_count
-            ) -
-            Number(
-              b.start_lap_count
-            )
-        );
+    result.push({
+      race_id:
+        rid,
 
+      apex_id:
+        id,
 
-    for (
-      const row
-      of sorted
-    ) {
-      result.push({
-        ...row,
+      team_name:
+        resolveTeam(
+          id,
+          teamMap,
+          teamName,
+          entry?.team_name
+        ),
 
-        stint_number:
-          result.length + 1,
+      driver_name:
+        entry?.current_driver ||
+        completedRows[0]
+          ?.driver_name ||
+        liveRows[0]
+          ?.driver_name ||
+        null,
 
-        is_live:
-          false,
+      stint_number:
+        1,
 
-        status:
-          "COMPLETED",
+      start_lap_count:
+        0,
 
-        statistics_available:
-          true
-      });
-    }
+      end_lap_count:
+        sessionIsLive
+          ? null
+          : raceLap,
+
+      current_lap_count:
+        raceLap,
+
+      total_laps:
+        raceLap,
+
+      valid_laps:
+        0,
+
+      avg_lap_time:
+        null,
+
+      best_lap_time:
+        null,
+
+      best_lap_number:
+        null,
+
+      worst_lap_time:
+        null,
+
+      worst_lap_number:
+        null,
+
+      consistency:
+        null,
+
+      pit_hour:
+        null,
+
+      on_track:
+        null,
+
+      pit_time:
+        null,
+
+      total_time:
+        null,
+
+      ended_by_pit:
+        false,
+
+      is_live:
+        sessionIsLive,
+
+      status:
+        sessionIsLive
+          ? "LIVE"
+          : "COMPLETED"
+    });
   }
 
 
   return result;
+}
+
+
+// ============================================================
+// MANUAL EXCLUSION LOOKUP
+// ============================================================
+
+function buildExclusionSet(
+  exclusions
+) {
+  const result =
+    new Set();
+
+
+  for (
+    const row
+    of exclusions
+  ) {
+    const apexId =
+      String(
+        row.apex_id ??
+        ""
+      );
+
+
+    const lap =
+      Number(
+        row.lap_number
+      );
+
+
+    if (
+      !apexId ||
+      !Number.isFinite(
+        lap
+      )
+    ) {
+      continue;
+    }
+
+
+    result.add(
+      `${apexId}:${Math.trunc(lap)}`
+    );
+  }
+
+
+  return result;
+}
+
+
+// ============================================================
+// STINT STAT ACCUMULATOR
+// ============================================================
+
+function createStatAccumulator() {
+  return {
+    count: 0,
+
+    sum: 0,
+
+    sumSquares: 0,
+
+    bestTime:
+      null,
+
+    bestLap:
+      null,
+
+    worstTime:
+      null,
+
+    worstLap:
+      null
+  };
+}
+
+
+function addLapToAccumulator(
+  accumulator,
+  lap,
+  lapTime
+) {
+  accumulator.count +=
+    1;
+
+
+  accumulator.sum +=
+    lapTime;
+
+
+  accumulator.sumSquares +=
+    lapTime *
+    lapTime;
+
+
+  if (
+    accumulator.bestTime ===
+      null ||
+    lapTime <
+      accumulator.bestTime
+  ) {
+    accumulator.bestTime =
+      lapTime;
+
+    accumulator.bestLap =
+      lap;
+  }
+
+
+  if (
+    accumulator.worstTime ===
+      null ||
+    lapTime >
+      accumulator.worstTime
+  ) {
+    accumulator.worstTime =
+      lapTime;
+
+    accumulator.worstLap =
+      lap;
+  }
+}
+
+
+function finishAccumulator(
+  accumulator
+) {
+  if (
+    accumulator.count <= 0
+  ) {
+    return {
+      valid_laps:
+        0,
+
+      avg_lap_time:
+        null,
+
+      best_lap_time:
+        null,
+
+      best_lap_number:
+        null,
+
+      worst_lap_time:
+        null,
+
+      worst_lap_number:
+        null,
+
+      consistency:
+        null
+    };
+  }
+
+
+  const average =
+    accumulator.sum /
+    accumulator.count;
+
+
+  const variance =
+    Math.max(
+      0,
+
+      (
+        accumulator.sumSquares /
+        accumulator.count
+      ) -
+      (
+        average *
+        average
+      )
+    );
+
+
+  const consistency =
+    Math.sqrt(
+      variance
+    );
+
+
+  return {
+    valid_laps:
+      accumulator.count,
+
+    avg_lap_time:
+      Number(
+        average.toFixed(3)
+      ),
+
+    best_lap_time:
+      Number(
+        accumulator.bestTime
+          .toFixed(3)
+      ),
+
+    best_lap_number:
+      accumulator.bestLap,
+
+    worst_lap_time:
+      Number(
+        accumulator.worstTime
+          .toFixed(3)
+      ),
+
+    worst_lap_number:
+      accumulator.worstLap,
+
+    consistency:
+      Number(
+        consistency.toFixed(3)
+      )
+  };
+}
+
+
+// ============================================================
+// VALID LAP RULE
+//
+// STINT BOUNDARIES:
+//
+// start=35, end=93 means the stint contains:
+//   36 ... 93
+//
+// INVALID BY STRUCTURE:
+//
+// - after a pit:
+//     start + 1
+//   is the PIT-OUT / transition lap.
+//
+// - if the stint ends in a pit:
+//     end
+//   is the PIT-IN / transition lap.
+//
+// FIRST STINT:
+//
+// start = 0
+//
+// There is NO previous pit, therefore lap 1 is NOT
+// automatically removed.
+//
+// NO OTHER LAP IS AUTOMATICALLY REMOVED.
+//
+// A slow lap, safety-car lap, 3:19 lap, etc. remains valid
+// unless it is one of the structural pit laps above or has
+// been explicitly manually excluded.
+// ============================================================
+
+function isValidStintLap(
+  stint,
+  lap,
+  exclusionSet
+) {
+  const start =
+    Number(
+      stint.start_lap_count
+    ) ||
+    0;
+
+
+  const end =
+    stint.end_lap_count !==
+      null &&
+    stint.end_lap_count !==
+      undefined
+      ? Number(
+          stint.end_lap_count
+        )
+      : Number(
+          stint.current_lap_count
+        );
+
+
+  if (
+    !Number.isFinite(
+      lap
+    ) ||
+    !Number.isFinite(
+      end
+    )
+  ) {
+    return false;
+  }
+
+
+  /*
+   * Actual stint interval:
+   *
+   *   start < lap <= end
+   */
+  if (
+    lap <= start ||
+    lap > end
+  ) {
+    return false;
+  }
+
+
+  /*
+   * PIT OUT.
+   *
+   * Only exists when the stint starts after an actual pit.
+   *
+   * First stint starts at 0 and lap 1 remains eligible.
+   */
+  if (
+    start > 0 &&
+    lap ===
+      start + 1
+  ) {
+    return false;
+  }
+
+
+  /*
+   * PIT IN.
+   */
+  if (
+    stint.ended_by_pit ===
+      true &&
+    lap === end
+  ) {
+    return false;
+  }
+
+
+  /*
+   * Explicit manual exclusion.
+   */
+  if (
+    exclusionSet.has(
+      `${stint.apex_id}:${lap}`
+    )
+  ) {
+    return false;
+  }
+
+
+  return true;
+}
+
+
+// ============================================================
+// FIND STINT FOR A LAP
+// ============================================================
+
+function findStintForLap(
+  teamStints,
+  lap,
+  startIndex = 0
+) {
+  let index =
+    Math.max(
+      0,
+      startIndex
+    );
+
+
+  while (
+    index <
+    teamStints.length
+  ) {
+    const stint =
+      teamStints[index];
+
+
+    const start =
+      Number(
+        stint.start_lap_count
+      ) ||
+      0;
+
+
+    const end =
+      stint.end_lap_count !==
+        null &&
+      stint.end_lap_count !==
+        undefined
+        ? Number(
+            stint.end_lap_count
+          )
+        : Number(
+            stint.current_lap_count
+          );
+
+
+    if (
+      !Number.isFinite(
+        end
+      )
+    ) {
+      index +=
+        1;
+
+      continue;
+    }
+
+
+    if (
+      lap <= start
+    ) {
+      return {
+        stint:
+          null,
+
+        index
+      };
+    }
+
+
+    if (
+      lap <= end
+    ) {
+      return {
+        stint,
+
+        index
+      };
+    }
+
+
+    index +=
+      1;
+  }
+
+
+  return {
+    stint:
+      null,
+
+    index:
+      teamStints.length
+  };
+}
+
+
+// ============================================================
+// RAW LAP STATISTICS FOR ALL STINTS
+//
+// IMPORTANT:
+//
+// We do not load ~48k laps into one giant JS array.
+//
+// Supabase is paged.
+// Each page is processed and discarded.
+//
+// The only persistent data in memory is:
+// - 1471 small stint rows
+// - one small accumulator for each stint
+// ============================================================
+
+async function applyRawLapStatistics(
+  env,
+  rid,
+  stints,
+  fieldIds,
+  exclusions
+) {
+  if (
+    !stints.length ||
+    !fieldIds.size
+  ) {
+    return stints;
+  }
+
+
+  const exclusionSet =
+    buildExclusionSet(
+      exclusions
+    );
+
+
+  const stintsByTeam =
+    new Map();
+
+
+  const accumulators =
+    new Map();
+
+
+  for (
+    const stint
+    of stints
+  ) {
+    const id =
+      String(
+        stint.apex_id
+      );
+
+
+    if (
+      !stintsByTeam.has(id)
+    ) {
+      stintsByTeam.set(
+        id,
+        []
+      );
+    }
+
+
+    stintsByTeam
+      .get(id)
+      .push(stint);
+
+
+    accumulators.set(
+      stint,
+      createStatAccumulator()
+    );
+  }
+
+
+  for (
+    const teamStints
+    of stintsByTeam.values()
+  ) {
+    teamStints.sort(
+      (a, b) =>
+        Number(
+          a.start_lap_count
+        ) -
+        Number(
+          b.start_lap_count
+        )
+    );
+  }
+
+
+  const numericIds =
+    [
+      ...fieldIds
+    ]
+      .map(
+        value =>
+          String(value)
+            .trim()
+      )
+      .filter(
+        value =>
+          /^\d+$/.test(
+            value
+          )
+      );
+
+
+  if (
+    numericIds.length === 0
+  ) {
+    return stints;
+  }
+
+
+  const idFilter =
+    `in.(${numericIds.join(",")})`;
+
+
+  /*
+   * Because rows are sorted by:
+   *
+   * apex_id, lap_number
+   *
+   * we can retain one stint cursor per team and move only
+   * forwards.
+   */
+  const teamCursor =
+    new Map();
+
+
+  let from =
+    0;
+
+
+  while (true) {
+    const page =
+      await sbGet(
+        env,
+        "apex_lap_events",
+        {
+          select:
+            "apex_id,lap_number,lap_time",
+
+          race_id:
+            `eq.${rid}`,
+
+          apex_id:
+            idFilter,
+
+          order:
+            "apex_id.asc,lap_number.asc"
+        },
+        {
+          from,
+
+          to:
+            from +
+            PAGE_SIZE -
+            1
+        }
+      );
+
+
+    if (
+      !Array.isArray(page)
+    ) {
+      throw new Error(
+        "Unexpected apex_lap_events response"
+      );
+    }
+
+
+    for (
+      const row
+      of page
+    ) {
+      const id =
+        String(
+          row.apex_id
+        );
+
+
+      const lap =
+        Number(
+          row.lap_number
+        );
+
+
+      const lapTime =
+        Number(
+          row.lap_time
+        );
+
+
+      if (
+        !Number.isFinite(lap) ||
+        !Number.isFinite(lapTime) ||
+        lapTime <= 0
+      ) {
+        continue;
+      }
+
+
+      const teamStints =
+        stintsByTeam.get(id);
+
+
+      if (
+        !teamStints ||
+        teamStints.length === 0
+      ) {
+        continue;
+      }
+
+
+      const previousCursor =
+        teamCursor.get(id) ||
+        0;
+
+
+      const found =
+        findStintForLap(
+          teamStints,
+          lap,
+          previousCursor
+        );
+
+
+      teamCursor.set(
+        id,
+        found.index
+      );
+
+
+      if (
+        !found.stint
+      ) {
+        continue;
+      }
+
+
+      if (
+        !isValidStintLap(
+          found.stint,
+          lap,
+          exclusionSet
+        )
+      ) {
+        continue;
+      }
+
+
+      addLapToAccumulator(
+        accumulators.get(
+          found.stint
+        ),
+        lap,
+        lapTime
+      );
+    }
+
+
+    if (
+      page.length <
+      PAGE_SIZE
+    ) {
+      break;
+    }
+
+
+    from +=
+      PAGE_SIZE;
+  }
+
+
+  /*
+   * Apply calculated values to the real stint objects.
+   */
+  for (
+    const stint
+    of stints
+  ) {
+    const calculated =
+      finishAccumulator(
+        accumulators.get(
+          stint
+        )
+      );
+
+
+    stint.valid_laps =
+      calculated.valid_laps;
+
+
+    stint.avg_lap_time =
+      calculated.avg_lap_time;
+
+
+    stint.best_lap_time =
+      calculated.best_lap_time;
+
+
+    stint.best_lap_number =
+      calculated.best_lap_number;
+
+
+    stint.worst_lap_time =
+      calculated.worst_lap_time;
+
+
+    stint.worst_lap_number =
+      calculated.worst_lap_number;
+
+
+    stint.consistency =
+      calculated.consistency;
+  }
+
+
+  return stints;
 }
 
 
@@ -2134,6 +2926,7 @@ async function stintsPayload(
     liveRaw,
     pitsRaw,
     entriesRaw,
+    exclusionsRaw,
     teamMap
   ] =
     await Promise.all([
@@ -2153,6 +2946,11 @@ async function stintsPayload(
       ),
 
       loadEntries(
+        env,
+        rid
+      ),
+
+      loadExclusions(
         env,
         rid
       ),
@@ -2192,6 +2990,13 @@ async function stintsPayload(
     );
 
 
+  const exclusions =
+    filterCurrentField(
+      exclusionsRaw,
+      fieldIds
+    );
+
+
   const entryMap =
     new Map(
       entries.map(
@@ -2205,29 +3010,10 @@ async function stintsPayload(
     );
 
 
-  /*
-   * Determine whether the session is ACTUALLY still live.
-   *
-   * A stale row in live_stint_stats is NOT enough to call
-   * anything LIVE.
-   */
-  const lastPacket =
-    Date.parse(
-      realSnapshot
-        ?.last_packet_at ||
-      ""
-    );
-
-
   const sessionIsLive =
-    Number.isFinite(
-      lastPacket
-    ) &&
-    (
-      Date.now() -
-      lastPacket
-    ) <
-      180000;
+    sessionCurrentlyLive(
+      realSnapshot
+    );
 
 
   const rows = [];
@@ -2256,26 +3042,48 @@ async function stintsPayload(
       );
 
 
-    const teamRows =
-      buildCompleteStintChainForTeam({
+    rows.push(
+      ...buildCompleteStintChainForTeam({
         rid,
+
         apexId:
           id,
 
         teamName,
+
         entry,
+
         pits,
+
         completed,
+
         live,
+
         teamMap,
+
         sessionIsLive
-      });
-
-
-    rows.push(
-      ...teamRows
+      })
     );
   }
+
+
+  /*
+   * Recalculate ALL analytical values from the RAW lap source.
+   *
+   * This fixes:
+   *
+   * - missing stats after stint #13;
+   * - wrong stats inherited from stale completed_stint_stats;
+   * - the first-stint exclusion problem;
+   * - best/worst lap selection using a different valid-lap set.
+   */
+  await applyRawLapStatistics(
+    env,
+    rid,
+    rows,
+    fieldIds,
+    exclusions
+  );
 
 
   rows.sort(
@@ -2413,17 +3221,21 @@ function driversFromStints(stints) {
 
 
     let validStints = 0;
+
     let shortStints = 0;
 
     let validLaps = 0;
+
     let totalLaps = 0;
 
     let weightedAverage = 0;
+
     let weightedCount = 0;
 
     let best = null;
 
     let consistencyTotal = 0;
+
     let consistencyCount = 0;
 
 
@@ -2448,17 +3260,20 @@ function driversFromStints(stints) {
       if (
         valid >= 3
       ) {
-        validStints += 1;
+        validStints +=
+          1;
 
       } else if (
         valid > 0
       ) {
-        shortStints += 1;
+        shortStints +=
+          1;
       }
 
 
       validLaps +=
         valid;
+
 
       totalLaps +=
         total;
@@ -2476,7 +3291,9 @@ function driversFromStints(stints) {
         valid > 0
       ) {
         weightedAverage +=
-          avg * valid;
+          avg *
+          valid;
+
 
         weightedCount +=
           valid;
@@ -2519,6 +3336,7 @@ function driversFromStints(stints) {
         consistencyTotal +=
           consistency *
           valid;
+
 
         consistencyCount +=
           valid;
@@ -2629,15 +3447,19 @@ function teamsFromDrivers(
 
 
     let validLaps = 0;
+
     let totalLaps = 0;
+
     let stintCount = 0;
 
     let weightedAverage = 0;
+
     let weightedCount = 0;
 
     let best = null;
 
     let consistencySum = 0;
+
     let consistencyCount = 0;
 
     const driverAverages = [];
@@ -2691,7 +3513,9 @@ function teamsFromDrivers(
           valid > 0
         ) {
           weightedAverage +=
-            avg * valid;
+            avg *
+            valid;
+
 
           weightedCount +=
             valid;
@@ -2733,6 +3557,7 @@ function teamsFromDrivers(
       ) {
         consistencySum +=
           consistency;
+
 
         consistencyCount +=
           1;
@@ -2812,6 +3637,7 @@ function teamsFromDrivers(
         Number(
           a.position
         );
+
 
       const pb =
         Number(
@@ -2991,7 +3817,7 @@ async function livePayload(
       );
 
 
-    const p =
+    const pitNumber =
       Number(
         pit.pit_number
       );
@@ -3004,21 +3830,25 @@ async function livePayload(
 
 
     if (
-      Number.isFinite(p)
+      Number.isFinite(
+        pitNumber
+      )
     ) {
       pitCounts.set(
         id,
         Math.max(
           pitCounts.get(id) ||
           0,
-          p
+          pitNumber
         )
       );
     }
 
 
     if (
-      Number.isFinite(lap)
+      Number.isFinite(
+        lap
+      )
     ) {
       lastPitLap.set(
         id,
@@ -3058,21 +3888,19 @@ async function livePayload(
           0;
 
 
-        const start =
+        /*
+         * IMPORTANT:
+         *
+         * Pit data is authoritative for current stint start.
+         *
+         * live_stint_stats may be stale after the race.
+         */
+        const realStart =
+          lastPitLap.get(id) ||
           Number(
             live.start_lap_count
-          );
-
-
-        const realStart =
-          Number.isFinite(start)
-            ? start
-            : (
-                lastPitLap.get(
-                  id
-                ) ||
-                0
-              );
+          ) ||
+          0;
 
 
         const position =
@@ -3107,13 +3935,13 @@ async function livePayload(
             ),
 
           driver_name:
-            live.driver_name ||
             entry.current_driver ||
+            live.driver_name ||
             null,
 
           current_driver:
-            live.driver_name ||
             entry.current_driver ||
+            live.driver_name ||
             null,
 
           race_lap:
@@ -3132,9 +3960,6 @@ async function livePayload(
             realStart,
 
           stint_laps:
-            Number(
-              live.total_laps
-            ) ||
             Math.max(
               0,
               raceLap -
@@ -3142,9 +3967,6 @@ async function livePayload(
             ),
 
           total_stint_laps:
-            Number(
-              live.total_laps
-            ) ||
             Math.max(
               0,
               raceLap -
@@ -3212,6 +4034,7 @@ async function livePayload(
           a.position
         );
 
+
       const pb =
         Number(
           b.position
@@ -3264,23 +4087,10 @@ async function livePayload(
   );
 
 
-  const lastPacket =
-    Date.parse(
-      snapshot
-        ?.last_packet_at ||
-      ""
-    );
-
-
   const isLive =
-    Number.isFinite(
-      lastPacket
-    ) &&
-    (
-      Date.now() -
-      lastPacket
-    ) <
-      180000;
+    sessionCurrentlyLive(
+      snapshot
+    );
 
 
   return {
@@ -3402,7 +4212,9 @@ async function racesPayload(env) {
 
 
     if (
-      !Number.isFinite(id)
+      !Number.isFinite(
+        id
+      )
     ) {
       continue;
     }
@@ -3501,7 +4313,7 @@ async function racesPayload(env) {
 
 
 // ============================================================
-// CSV HELPERS
+// CSV
 // ============================================================
 
 function csvEscape(value) {
@@ -3542,39 +4354,8 @@ function safeFilename(value) {
 }
 
 
-function postgrestInNumbers(values) {
-  const clean =
-    [
-      ...new Set(
-        values
-          .map(
-            value =>
-              String(value)
-                .trim()
-          )
-          .filter(
-            value =>
-              /^\d+$/.test(
-                value
-              )
-          )
-      )
-    ];
-
-
-  if (!clean.length) {
-    return null;
-  }
-
-
-  return (
-    `in.(${clean.join(",")})`
-  );
-}
-
-
 // ============================================================
-// STREAMING LAP CSV
+// STREAMING RAW LAP CSV
 // ============================================================
 
 async function createLapRecordsCsvResponse(
@@ -3623,6 +4404,7 @@ async function createLapRecordsCsvResponse(
               String(a)
             ]
         );
+
 
       const pb =
         Number(
@@ -3691,17 +4473,22 @@ async function createLapRecordsCsvResponse(
             "Apex Timing - drive your success https://www.apex-timing.com/\r\n"
           );
 
+
           write("\r\n");
+
 
           write(
             "Karting Events Bulgaria - Karting Track\r\n"
           );
 
+
           write("\r\n");
+
 
           write(
             `Race ${rid} - Lap time records\r\n`
           );
+
 
           write("\r\n");
 
@@ -3728,7 +4515,8 @@ async function createLapRecordsCsvResponse(
             );
 
 
-            let from = 0;
+            let from =
+              0;
 
 
             while (true) {
@@ -3751,6 +4539,7 @@ async function createLapRecordsCsvResponse(
                   },
                   {
                     from,
+
                     to:
                       from +
                       PAGE_SIZE -
@@ -3864,7 +4653,7 @@ async function createLapRecordsCsvResponse(
 
 
 // ============================================================
-// PIT REPORT
+// PIT REPORT HTML
 // ============================================================
 
 function escapeHtml(value) {
@@ -3969,6 +4758,7 @@ ${escapeHtml(team)}
 <th>Best lap</th>
 <th>Worst</th>
 <th>Worst lap</th>
+<th>Consistency</th>
 <th>Status</th>
 </tr>
 </thead>
@@ -3990,6 +4780,7 @@ ${rows
 <td>${escapeHtml(row.best_lap_number ?? "")}</td>
 <td>${escapeHtml(formatLapTime(row.worst_lap_time))}</td>
 <td>${escapeHtml(row.worst_lap_number ?? "")}</td>
+<td>${escapeHtml(row.consistency ?? "")}</td>
 <td>${escapeHtml(row.status)}</td>
 </tr>
 `
@@ -4017,7 +4808,7 @@ ${rows
 <meta charset="utf-8">
 
 <title>
-Race ${rid} - Pit stops
+Race ${rid} - Stints & pit stops
 </title>
 
 <style>
@@ -4370,6 +5161,7 @@ export class ApexCollector {
     ) {
       await this.connect();
 
+
       return json(
         await this.snapshot()
       );
@@ -4396,6 +5188,7 @@ export class ApexCollector {
 
       this.ws =
         null;
+
 
       this.connecting =
         false;
@@ -4517,6 +5310,7 @@ export class ApexCollector {
           this.ws =
             null;
 
+
           this.connecting =
             false;
 
@@ -4543,8 +5337,10 @@ export class ApexCollector {
       this.ws =
         null;
 
+
       this.connecting =
         false;
+
 
       throw error;
     }
@@ -4884,6 +5680,7 @@ export class ApexCollector {
         );
       }
 
+
       return;
     }
 
@@ -4906,6 +5703,7 @@ export class ApexCollector {
           }
         );
       }
+
 
       return;
     }
@@ -4935,6 +5733,7 @@ export class ApexCollector {
         );
       }
 
+
       return;
     }
 
@@ -4962,6 +5761,7 @@ export class ApexCollector {
           )
         );
       }
+
 
       return;
     }
@@ -4993,6 +5793,7 @@ export class ApexCollector {
         );
       }
 
+
       return;
     }
 
@@ -5018,6 +5819,7 @@ export class ApexCollector {
           }
         );
       }
+
 
       return;
     }
@@ -5217,9 +6019,7 @@ export class ApexCollector {
         }
       );
 
-    } catch (
-      error
-    ) {
+    } catch (error) {
       console.warn(
         "RAW PACKET SAVE:",
         error
@@ -5428,7 +6228,7 @@ export default {
 
 
       // ========================================================
-      // SHARED SNAPSHOT
+      // SHARED RACE DATA ROUTES
       // ========================================================
 
       if (
@@ -5663,6 +6463,7 @@ export default {
                 Number(
                   a.position
                 );
+
 
               const pb =
                 Number(
@@ -5929,7 +6730,7 @@ export default {
 
 
         // ======================================================
-        // STREAMING RAW LAP CSV
+        // RAW LAP CSV
         // ======================================================
 
         if (
