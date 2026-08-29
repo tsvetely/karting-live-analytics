@@ -1,4 +1,4 @@
-const BOOTSTRAP_VERSION = "2026-08-29-full-field-v4";
+const BOOTSTRAP_VERSION = "2026-08-29-current-apex-field-v5";
 const PAGE_SIZE = 1000;
 
 
@@ -82,10 +82,8 @@ function sbHeaders(env, extra = {}) {
 
   return {
     apikey: env.SUPABASE_KEY,
-    authorization:
-      `Bearer ${env.SUPABASE_KEY}`,
-    "content-type":
-      "application/json",
+    authorization: `Bearer ${env.SUPABASE_KEY}`,
+    "content-type": "application/json",
     ...extra
   };
 }
@@ -161,7 +159,6 @@ async function sbGetAll(
   pageSize = PAGE_SIZE
 ) {
   const result = [];
-
   let from = 0;
 
   while (true) {
@@ -1603,11 +1600,11 @@ function buildStintsForApex({
 
     /*
      * First stint:
-     * lap 1 stays valid.
+     * lap 1 remains valid.
      *
      * Later stints:
-     * first lap after previous pit boundary
-     * is marked Pit In / Out.
+     * the first lap after the previous pit boundary
+     * is the pit transition lap.
      */
     if (
       previousBoundary > 0 &&
@@ -1784,13 +1781,6 @@ function buildStintsForApex({
     );
 
 
-  /*
-   * Current/open stint.
-   *
-   * This still exists after the race ends until
-   * Apex provides another final pit/closure boundary.
-   * That is intentional — we do not delete data.
-   */
   if (
     maxLap >
       previousBoundary &&
@@ -1980,6 +1970,44 @@ async function computedStintsPayload(
     entries;
 
 
+  /*
+   * CRITICAL:
+   * when no explicit team/apex filter exists,
+   * stints must also be limited to the current Apex field.
+   */
+  if (
+    !filters.apexId &&
+    !filters.team
+  ) {
+    const snapshot =
+      await collectorSnapshot(
+        env
+      )
+        .catch(
+          () => null
+        );
+
+
+    const fieldIds =
+      currentFieldIdsFromSnapshot(
+        snapshot
+      );
+
+
+    if (fieldIds.size) {
+      selectedEntries =
+        entries.filter(
+          row =>
+            fieldIds.has(
+              String(
+                row.apex_id
+              )
+            )
+        );
+    }
+  }
+
+
   if (
     filters.apexId
   ) {
@@ -2005,7 +2033,7 @@ async function computedStintsPayload(
 
 
     selectedEntries =
-      entries.filter(
+      selectedEntries.filter(
         row => {
           const id =
             String(
@@ -2251,21 +2279,18 @@ async function computedStintsPayload(
 
   return result.sort(
     (a, b) => {
-      const ta =
+
+      const teamCompare =
         String(
           a.team_name ||
           ""
-        );
-
-      const tb =
-        String(
-          b.team_name ||
-          ""
-        );
-
-
-      const teamCompare =
-        ta.localeCompare(tb);
+        )
+          .localeCompare(
+            String(
+              b.team_name ||
+              ""
+            )
+          );
 
 
       if (
@@ -2533,6 +2558,20 @@ export class ApexCollector {
     this.pitCounts =
       new Map();
 
+    /*
+     * CRITICAL FIX:
+     * exact set of Apex IDs present in the LAST FULL GRID.
+     *
+     * This is the current race field.
+     *
+     * It survives race finish and Worker requests.
+     */
+    this.fieldApexIds =
+      new Set();
+
+    this.lastGridAt =
+      null;
+
     this.detailRunning =
       new Set();
 
@@ -2555,6 +2594,12 @@ export class ApexCollector {
         this.lastPacketAt =
           await state.storage.get(
             "lastPacketAt"
+          ) || null;
+
+
+        this.lastGridAt =
+          await state.storage.get(
+            "lastGridAt"
           ) || null;
 
 
@@ -2597,6 +2642,38 @@ export class ApexCollector {
                 ]
               )
           );
+
+
+        this.fieldApexIds =
+          new Set(
+            (
+              await state.storage.get(
+                "fieldApexIds"
+              )
+            ) || []
+          );
+
+
+        /*
+         * Compatibility with the previous collector state.
+         *
+         * Before fieldApexIds existed, positions came from the
+         * same full Apex grid. We may use those IDs as a safe
+         * one-time fallback until the next full grid arrives.
+         *
+         * We DO NOT use all apex_entries.
+         */
+        if (
+          this.fieldApexIds.size ===
+            0 &&
+          this.positions.size >
+            0
+        ) {
+          this.fieldApexIds =
+            new Set(
+              this.positions.keys()
+            );
+        }
 
 
         const storedVersion =
@@ -2736,6 +2813,17 @@ export class ApexCollector {
       last_packet_at:
         this.lastPacketAt,
 
+      last_grid_at:
+        this.lastGridAt,
+
+      field_count:
+        this.fieldApexIds.size,
+
+      fieldApexIds:
+        [
+          ...this.fieldApexIds
+        ],
+
       positions:
         Object.fromEntries(
           this.positions
@@ -2761,6 +2849,14 @@ export class ApexCollector {
 
       lastPacketAt:
         this.lastPacketAt,
+
+      lastGridAt:
+        this.lastGridAt,
+
+      fieldApexIds:
+        [
+          ...this.fieldApexIds
+        ],
 
       positions:
         Object.fromEntries(
@@ -3110,6 +3206,18 @@ export class ApexCollector {
       String(
         apexId
       );
+
+
+    /*
+     * Never fetch detail for an old competitor which is not
+     * part of the current Apex grid.
+     */
+    if (
+      this.fieldApexIds.size &&
+      !this.fieldApexIds.has(id)
+    ) {
+      return;
+    }
 
 
     if (
@@ -3623,11 +3731,52 @@ export class ApexCollector {
         }
 
 
+        /*
+         * CRITICAL FIX:
+         *
+         * A full grid REPLACES the previous field.
+         * It is not merged with historical competitors.
+         */
         if (
-          grid.positions.size
+          grid.rows.size
         ) {
+          this.fieldApexIds =
+            new Set(
+              grid.rows.keys()
+            );
+
+
+          this.lastGridAt =
+            new Date()
+              .toISOString();
+
+
+          /*
+           * Positions belong to exactly the same grid.
+           * Replace them too.
+           */
           this.positions =
-            grid.positions;
+            new Map(
+              grid.positions
+            );
+
+
+          /*
+           * Remove stale pit counts belonging to IDs that are
+           * no longer part of the current field.
+           */
+          this.pitCounts =
+            new Map(
+              [
+                ...this.pitCounts.entries()
+              ]
+                .filter(
+                  ([id]) =>
+                    this.fieldApexIds.has(
+                      String(id)
+                    )
+                )
+            );
         }
 
 
@@ -3669,6 +3818,22 @@ export class ApexCollector {
 
 
       if (!row) {
+        continue;
+      }
+
+
+      /*
+       * Once we know the current full field, ignore row updates
+       * which refer to stale competitors from an older session.
+       */
+      if (
+        this.fieldApexIds.size &&
+        !this.fieldApexIds.has(
+          String(
+            row.apexId
+          )
+        )
+      ) {
         continue;
       }
 
@@ -3788,16 +3953,67 @@ async function startCollector(env) {
 
 
 // ============================================================
+// CURRENT FIELD
+// ============================================================
+
+function currentFieldIdsFromSnapshot(
+  snapshot
+) {
+  const ids =
+    new Set(
+      (
+        snapshot?.fieldApexIds ||
+        []
+      )
+        .map(
+          value =>
+            String(value)
+        )
+        .filter(Boolean)
+    );
+
+
+  /*
+   * Compatibility fallback only.
+   *
+   * positions are also replaced on every full Apex grid,
+   * so they represent the same race field.
+   */
+  if (
+    ids.size ===
+      0 &&
+    snapshot?.positions
+  ) {
+    for (
+      const id
+      of Object.keys(
+        snapshot.positions
+      )
+    ) {
+      ids.add(
+        String(id)
+      );
+    }
+  }
+
+
+  return ids;
+}
+
+
+// ============================================================
 // LIVE PAYLOAD
 //
-// IMPORTANT FIX:
+// RULE:
+//   Current race = EXACT IDs from latest Apex grid.
 //
-// We NEVER filter individual entries by updated_at.
+// NEVER:
+//   all apex_entries
+//   updated_at cohort
+//   alphabetical selection
 //
-// If race_id contains 72 teams, all 72 remain available.
-//
-// Packet age affects only session_status.
-// It does NOT remove race data.
+// The grid survives the finish, therefore finished race data
+// remains visible exactly while Apex still exposes that grid.
 // ============================================================
 
 async function livePayload(
@@ -3844,19 +4060,7 @@ async function livePayload(
         env
       )
         .catch(
-          () => ({
-            connected:
-              false,
-
-            last_packet_at:
-              null,
-
-            positions:
-              {},
-
-            pitCounts:
-              {}
-          })
+          () => null
         ),
 
 
@@ -3867,13 +4071,24 @@ async function livePayload(
     ]);
 
 
+  const fieldIds =
+    currentFieldIdsFromSnapshot(
+      snapshot
+    );
+
+
   /*
-   * NO DATA really means no data.
+   * IMPORTANT:
    *
-   * This is the ONLY situation in which
-   * current[] becomes empty because of availability.
+   * We do NOT fall back to all 540 database rows.
+   *
+   * Until we have a real Apex grid we would rather show
+   * "waiting for Apex grid" than display false historical data.
    */
-  if (!entries.length) {
+  if (
+    fieldIds.size ===
+    0
+  ) {
     return {
       race_id:
         Number(rid),
@@ -3892,7 +4107,22 @@ async function livePayload(
         false,
 
       session_status:
-        "NO DATA",
+        "WAITING FOR APEX GRID",
+
+      collector_connected:
+        snapshot?.connected ===
+        true,
+
+      last_packet_at:
+        snapshot?.last_packet_at ||
+        null,
+
+      last_grid_at:
+        snapshot?.last_grid_at ||
+        null,
+
+      team_count:
+        0,
 
       current:
         [],
@@ -3904,86 +4134,42 @@ async function livePayload(
 
 
   /*
-   * Session freshness is metadata only.
+   * MAIN FIX:
    *
-   * It must NEVER be used to filter entries.
-   */
-  const latestEntryUpdate =
-    entries.reduce(
-      (
-        maximum,
-        row
-      ) =>
-        Math.max(
-          maximum,
-
-          Date.parse(
-            row.updated_at ||
-            ""
-          ) || 0
-        ),
-      0
-    );
-
-
-  const lastPacketTimestamp =
-    Date.parse(
-      snapshot.last_packet_at ||
-      ""
-    ) || 0;
-
-
-  const newestSignal =
-    Math.max(
-      latestEntryUpdate,
-      lastPacketTimestamp
-    );
-
-
-  const packetAgeMs =
-    newestSignal
-      ? Date.now() -
-        newestSignal
-      : Number.POSITIVE_INFINITY;
-
-
-  const sessionLive =
-    packetAgeMs <=
-    180000;
-
-
-  const sessionStatus =
-    sessionLive
-      ? "LIVE"
-      : "FINISHED";
-
-
-  /*
-   * THIS IS THE MAIN FIX.
+   * EXACTLY the competitors present in the last Apex grid.
    *
-   * Previously:
-   *
-   * const activeEntries = entries.filter(...)
-   *
-   * That destroyed the field after some teams stopped
-   * receiving updates.
-   *
-   * Now every stored Apex entry for this race is kept.
+   * If Apex grid has 72 teams => we can never return 540.
    */
   const activeEntries =
-    entries;
+    entries.filter(
+      entry =>
+        fieldIds.has(
+          String(
+            entry.apex_id
+          )
+        )
+    );
 
 
   const liveMap =
     new Map(
-      persistedLive.map(
-        row => [
-          String(
-            row.apex_id
-          ),
-          row
-        ]
-      )
+      persistedLive
+        .filter(
+          row =>
+            fieldIds.has(
+              String(
+                row.apex_id
+              )
+            )
+        )
+        .map(
+          row => [
+            String(
+              row.apex_id
+            ),
+            row
+          ]
+        )
     );
 
 
@@ -4002,6 +4188,17 @@ async function livePayload(
       String(
         pit.apex_id
       );
+
+
+    /*
+     * Old race/session pits must not affect current overview.
+     */
+    if (
+      !fieldIds.has(id)
+    ) {
+      continue;
+    }
+
 
     const number =
       Number(
@@ -4051,10 +4248,19 @@ async function livePayload(
       value
     ]
     of Object.entries(
-      snapshot.pitCounts ||
+      snapshot?.pitCounts ||
       {}
     )
   ) {
+    if (
+      !fieldIds.has(
+        String(id)
+      )
+    ) {
+      continue;
+    }
+
+
     const count =
       Number(value);
 
@@ -4064,10 +4270,11 @@ async function livePayload(
       count >= 0
     ) {
       pitCount.set(
-        id,
+        String(id),
         Math.max(
-          pitCount.get(id) ||
-          0,
+          pitCount.get(
+            String(id)
+          ) || 0,
 
           Math.trunc(count)
         )
@@ -4118,6 +4325,14 @@ async function livePayload(
           null;
 
 
+        const apexPosition =
+          Number(
+            snapshot?.positions?.[
+              id
+            ]
+          );
+
+
         return {
           race_id:
             Number(rid),
@@ -4125,17 +4340,15 @@ async function livePayload(
           apex_id:
             entry.apex_id,
 
-          /*
-           * DO NOT invent position.
-           *
-           * We use the last position received from Apex.
-           */
           position:
-            Number(
-              snapshot.positions?.[
-                id
-              ]
-            ) || null,
+            (
+              Number.isFinite(
+                apexPosition
+              ) &&
+              apexPosition > 0
+            )
+              ? apexPosition
+              : null,
 
           team_name:
             resolveTeam(
@@ -4233,12 +4446,10 @@ async function livePayload(
 
 
   /*
-   * Position from Apex first.
+   * Apex race position only.
    *
-   * If a position happens to be unavailable,
-   * fall back to race lap.
-   *
-   * NEVER alphabetical order.
+   * Missing position falls behind positioned entries and
+   * falls back to race lap — NEVER alphabetically.
    */
   current.sort(
     (a, b) => {
@@ -4315,6 +4526,32 @@ async function livePayload(
   );
 
 
+  /*
+   * Session status is separate from data availability.
+   *
+   * Old row timestamps can NEVER delete competitors.
+   */
+  const lastSignal =
+    Math.max(
+      Date.parse(
+        snapshot?.last_packet_at ||
+        ""
+      ) || 0,
+
+      Date.parse(
+        snapshot?.last_grid_at ||
+        ""
+      ) || 0
+    );
+
+
+  const sessionLive =
+    !!lastSignal &&
+    Date.now() -
+      lastSignal <=
+      180000;
+
+
   return {
     race_id:
       Number(rid),
@@ -4327,53 +4564,45 @@ async function livePayload(
         .toISOString(),
 
     /*
-     * IMPORTANT:
+     * active means:
+     * current Apex race data exists.
      *
-     * app.js currently treats active:false as:
-     * "throw all current data away".
-     *
-     * Therefore active means:
-     * "we have the current race data",
-     * NOT "packets arrived in the last 3 minutes".
+     * Finished race remains available.
      */
     active:
-      true,
+      current.length > 0,
 
     data_available:
-      true,
+      current.length > 0,
 
-    /*
-     * Real session state is separate.
-     */
     session_status:
-      sessionStatus,
+      sessionLive
+        ? "LIVE"
+        : "FINISHED",
 
     is_live:
       sessionLive,
 
     collector_connected:
-      snapshot.connected ===
+      snapshot?.connected ===
       true,
 
     last_packet_at:
-      snapshot.last_packet_at ||
+      snapshot?.last_packet_at ||
       null,
 
-    latest_entry_update:
-      latestEntryUpdate
-        ? new Date(
-            latestEntryUpdate
-          ).toISOString()
-        : null,
+    last_grid_at:
+      snapshot?.last_grid_at ||
+      null,
+
+    apex_field_count:
+      fieldIds.size,
 
     team_count:
       current.length,
 
     current,
 
-    /*
-     * Keep ALL entries available to the frontend/debugging.
-     */
     entries:
       activeEntries
   };
@@ -4394,11 +4623,6 @@ async function overviewPayload(
       rid
     );
 
-
-  /*
-   * Do not invent positions.
-   * livePayload already sorts by Apex position.
-   */
   return live.current;
 }
 
@@ -5009,31 +5233,56 @@ async function eventsPayload(
     );
 
 
-  return rows.map(
-    row => ({
-      ...row,
+  const snapshot =
+    await collectorSnapshot(
+      env
+    )
+      .catch(
+        () => null
+      );
 
-      type:
-        "MANUAL EXCLUSION",
 
-      reason:
-        row.reason ||
-        "Excluded from analytics",
+  const fieldIds =
+    currentFieldIdsFromSnapshot(
+      snapshot
+    );
 
-      status:
-        "ACTIVE",
 
-      time:
-        row.created_at ||
-        row.updated_at ||
-        null
-    })
-  );
+  return rows
+    .filter(
+      row =>
+        !fieldIds.size ||
+        fieldIds.has(
+          String(
+            row.apex_id
+          )
+        )
+    )
+    .map(
+      row => ({
+        ...row,
+
+        type:
+          "MANUAL EXCLUSION",
+
+        reason:
+          row.reason ||
+          "Excluded from analytics",
+
+        status:
+          "ACTIVE",
+
+        time:
+          row.created_at ||
+          row.updated_at ||
+          null
+      })
+    );
 }
 
 
 // ============================================================
-// CSV
+// CSV HELPERS
 // ============================================================
 
 function csvEscape(value) {
@@ -5139,7 +5388,8 @@ async function buildApexLapTimesCsv(
     laps,
     entries,
     teamMap,
-    meta
+    meta,
+    snapshot
   ] =
     await Promise.all([
       loadLaps(
@@ -5160,13 +5410,37 @@ async function buildApexLapTimesCsv(
       raceMeta(
         env,
         rid
+      ),
+
+      collectorSnapshot(
+        env
       )
+        .catch(
+          () => null
+        )
     ]);
+
+
+  const fieldIds =
+    currentFieldIdsFromSnapshot(
+      snapshot
+    );
+
+
+  const currentEntries =
+    entries.filter(
+      row =>
+        fieldIds.has(
+          String(
+            row.apex_id
+          )
+        )
+    );
 
 
   const entryMap =
     new Map(
-      entries.map(
+      currentEntries.map(
         row => [
           String(
             row.apex_id
@@ -5189,6 +5463,16 @@ async function buildApexLapTimesCsv(
       String(
         row.apex_id
       );
+
+
+    /*
+     * Mandatory report must also contain THIS race only.
+     */
+    if (
+      !fieldIds.has(id)
+    ) {
+      continue;
+    }
 
 
     if (
@@ -5247,11 +5531,36 @@ async function buildApexLapTimesCsv(
 
 
   teamRows.sort(
-    (a, b) =>
-      a.teamName
+    (a, b) => {
+
+      const pa =
+        Number(
+          snapshot?.positions?.[
+            a.id
+          ]
+        );
+
+      const pb =
+        Number(
+          snapshot?.positions?.[
+            b.id
+          ]
+        );
+
+
+      if (
+        Number.isFinite(pa) &&
+        Number.isFinite(pb)
+      ) {
+        return pa - pb;
+      }
+
+
+      return a.teamName
         .localeCompare(
           b.teamName
-        )
+        );
+    }
   );
 
 
@@ -5549,19 +5858,6 @@ async function pitReportPayload(
       [
         ...groups.values()
       ]
-        .sort(
-          (a, b) =>
-            String(
-              a.team_name ||
-              ""
-            )
-              .localeCompare(
-                String(
-                  b.team_name ||
-                  ""
-                )
-              )
-        )
   };
 }
 
@@ -6050,15 +6346,42 @@ export default {
           null;
 
 
+        const snapshot =
+          await collectorSnapshot(
+            env
+          )
+            .catch(
+              () => null
+            );
+
+
+        const fieldIds =
+          currentFieldIdsFromSnapshot(
+            snapshot
+          );
+
+
+        const rows =
+          await loadLaps(
+            env,
+            rid,
+            apexId
+          );
+
+
         return json({
           race_id:
             rid,
 
           rows:
-            await loadLaps(
-              env,
-              rid,
-              apexId
+            rows.filter(
+              row =>
+                !fieldIds.size ||
+                fieldIds.has(
+                  String(
+                    row.apex_id
+                  )
+                )
             )
         });
       }
@@ -6079,10 +6402,28 @@ export default {
           null;
 
 
-        const teamMap =
-          await stableTeamNameMap(
-            env,
-            rid
+        const [
+          teamMap,
+          snapshot
+        ] =
+          await Promise.all([
+            stableTeamNameMap(
+              env,
+              rid
+            ),
+
+            collectorSnapshot(
+              env
+            )
+              .catch(
+                () => null
+              )
+          ]);
+
+
+        const fieldIds =
+          currentFieldIdsFromSnapshot(
+            snapshot
           );
 
 
@@ -6099,19 +6440,29 @@ export default {
             rid,
 
           rows:
-            rows.map(
-              row => ({
-                ...row,
-
-                team_name:
-                  resolveTeam(
-                    row.apex_id,
-                    teamMap,
-                    row.driver_name,
-                    row.team_name
+            rows
+              .filter(
+                row =>
+                  !fieldIds.size ||
+                  fieldIds.has(
+                    String(
+                      row.apex_id
+                    )
                   )
-              })
-            )
+              )
+              .map(
+                row => ({
+                  ...row,
+
+                  team_name:
+                    resolveTeam(
+                      row.apex_id,
+                      teamMap,
+                      row.driver_name,
+                      row.team_name
+                    )
+                })
+              )
         });
       }
 
@@ -6244,6 +6595,41 @@ export default {
               {
                 error:
                   "apex_id and positive lap_number are required"
+              },
+              400
+            );
+          }
+
+
+          /*
+           * Do not allow a stale historical competitor to be
+           * modified through Current race.
+           */
+          const snapshot =
+            await collectorSnapshot(
+              env
+            )
+              .catch(
+                () => null
+              );
+
+
+          const fieldIds =
+            currentFieldIdsFromSnapshot(
+              snapshot
+            );
+
+
+          if (
+            fieldIds.size &&
+            !fieldIds.has(
+              apexId
+            )
+          ) {
+            return json(
+              {
+                error:
+                  "The selected Apex ID is not part of the current race field."
               },
               400
             );
