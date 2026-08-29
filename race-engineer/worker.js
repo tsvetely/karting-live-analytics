@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v9-raw-lap-stint-stats";
+  "2026-08-30-race-datasets-v10-global-streaming-csv";
 
 const PAGE_SIZE = 1000;
 
@@ -1627,20 +1627,6 @@ function normalizeAnalyticalStint(
 
 // ============================================================
 // BUILD COMPLETE STINT STRUCTURE
-//
-// IMPORTANT:
-//
-// PIT ROWS ARE THE SOURCE OF TRUTH FOR STINT BOUNDARIES.
-//
-// pit lap = the final lap of the stint that just ended.
-//
-// Therefore:
-//
-// pit 35 => stint #1 = race laps 1...35
-// pit 93 => stint #2 = race laps 36...93
-//
-// Analytical tables are used for DRIVER FALLBACK ONLY.
-// Statistics are recalculated later from raw lap records.
 // ============================================================
 
 function buildCompleteStintChainForTeam({
@@ -1783,9 +1769,6 @@ function buildCompleteStintChainForTeam({
     0;
 
 
-  /*
-   * Every real pit creates one completed stint.
-   */
   for (
     const pit
     of sortedPits
@@ -1814,11 +1797,6 @@ function buildCompleteStintChainForTeam({
       null;
 
 
-    const totalLaps =
-      endBoundary -
-      previousBoundary;
-
-
     result.push({
       race_id:
         rid,
@@ -1835,10 +1813,6 @@ function buildCompleteStintChainForTeam({
           analytical?.team_name
         ),
 
-      /*
-       * Apex PIT row driver is the driver whose stint
-       * finishes on this pit lap.
-       */
       driver_name:
         pit.driver_name ||
         analytical?.driver_name ||
@@ -1857,7 +1831,8 @@ function buildCompleteStintChainForTeam({
         endBoundary,
 
       total_laps:
-        totalLaps,
+        endBoundary -
+        previousBoundary,
 
       valid_laps:
         0,
@@ -1896,10 +1871,6 @@ function buildCompleteStintChainForTeam({
         pit.total_time ||
         null,
 
-      /*
-       * This boundary comes from a PIT record,
-       * therefore its END lap is the pit-in lap.
-       */
       ended_by_pit:
         true,
 
@@ -1916,13 +1887,6 @@ function buildCompleteStintChainForTeam({
   }
 
 
-  /*
-   * If there are race laps AFTER the final pit,
-   * create one final stint.
-   *
-   * There is no pit-in lap to exclude unless another pit
-   * later appears.
-   */
   const raceLap =
     Number(
       entry?.lap_count
@@ -2029,9 +1993,6 @@ function buildCompleteStintChainForTeam({
   }
 
 
-  /*
-   * Very early session / no pit records yet.
-   */
   if (
     result.length === 0 &&
     Number.isFinite(
@@ -2345,35 +2306,7 @@ function finishAccumulator(
 
 
 // ============================================================
-// VALID LAP RULE
-//
-// STINT BOUNDARIES:
-//
-// start=35, end=93 means the stint contains:
-//   36 ... 93
-//
-// INVALID BY STRUCTURE:
-//
-// - after a pit:
-//     start + 1
-//   is the PIT-OUT / transition lap.
-//
-// - if the stint ends in a pit:
-//     end
-//   is the PIT-IN / transition lap.
-//
-// FIRST STINT:
-//
-// start = 0
-//
-// There is NO previous pit, therefore lap 1 is NOT
-// automatically removed.
-//
-// NO OTHER LAP IS AUTOMATICALLY REMOVED.
-//
-// A slow lap, safety-car lap, 3:19 lap, etc. remains valid
-// unless it is one of the structural pit laps above or has
-// been explicitly manually excluded.
+// VALID STINT LAP
 // ============================================================
 
 function isValidStintLap(
@@ -2413,11 +2346,6 @@ function isValidStintLap(
   }
 
 
-  /*
-   * Actual stint interval:
-   *
-   *   start < lap <= end
-   */
   if (
     lap <= start ||
     lap > end
@@ -2426,13 +2354,7 @@ function isValidStintLap(
   }
 
 
-  /*
-   * PIT OUT.
-   *
-   * Only exists when the stint starts after an actual pit.
-   *
-   * First stint starts at 0 and lap 1 remains eligible.
-   */
+  // Pit-out / transition lap.
   if (
     start > 0 &&
     lap ===
@@ -2442,9 +2364,7 @@ function isValidStintLap(
   }
 
 
-  /*
-   * PIT IN.
-   */
+  // Pit-in / transition lap.
   if (
     stint.ended_by_pit ===
       true &&
@@ -2454,9 +2374,6 @@ function isValidStintLap(
   }
 
 
-  /*
-   * Explicit manual exclusion.
-   */
   if (
     exclusionSet.has(
       `${stint.apex_id}:${lap}`
@@ -2471,7 +2388,7 @@ function isValidStintLap(
 
 
 // ============================================================
-// FIND STINT FOR A LAP
+// FIND STINT FOR LAP
 // ============================================================
 
 function findStintForLap(
@@ -2565,18 +2482,7 @@ function findStintForLap(
 
 
 // ============================================================
-// RAW LAP STATISTICS FOR ALL STINTS
-//
-// IMPORTANT:
-//
-// We do not load ~48k laps into one giant JS array.
-//
-// Supabase is paged.
-// Each page is processed and discarded.
-//
-// The only persistent data in memory is:
-// - 1471 small stint rows
-// - one small accumulator for each stint
+// RAW LAP STATISTICS
 // ============================================================
 
 async function applyRawLapStatistics(
@@ -2684,20 +2590,11 @@ async function applyRawLapStatistics(
     `in.(${numericIds.join(",")})`;
 
 
-  /*
-   * Because rows are sorted by:
-   *
-   * apex_id, lap_number
-   *
-   * we can retain one stint cursor per team and move only
-   * forwards.
-   */
   const teamCursor =
     new Map();
 
 
-  let from =
-    0;
+  let from = 0;
 
 
   while (true) {
@@ -2841,9 +2738,6 @@ async function applyRawLapStatistics(
   }
 
 
-  /*
-   * Apply calculated values to the real stint objects.
-   */
   for (
     const stint
     of stints
@@ -3067,16 +2961,6 @@ async function stintsPayload(
   }
 
 
-  /*
-   * Recalculate ALL analytical values from the RAW lap source.
-   *
-   * This fixes:
-   *
-   * - missing stats after stint #13;
-   * - wrong stats inherited from stale completed_stint_stats;
-   * - the first-stint exclusion problem;
-   * - best/worst lap selection using a different valid-lap set.
-   */
   await applyRawLapStatistics(
     env,
     rid,
@@ -3888,13 +3772,6 @@ async function livePayload(
           0;
 
 
-        /*
-         * IMPORTANT:
-         *
-         * Pit data is authoritative for current stint start.
-         *
-         * live_stint_stats may be stale after the race.
-         */
         const realStart =
           lastPitLap.get(id) ||
           Number(
@@ -4313,7 +4190,7 @@ async function racesPayload(env) {
 
 
 // ============================================================
-// CSV
+// CSV HELPERS
 // ============================================================
 
 function csvEscape(value) {
@@ -4326,7 +4203,8 @@ function csvEscape(value) {
   if (
     text.includes(",") ||
     text.includes('"') ||
-    text.includes("\n")
+    text.includes("\n") ||
+    text.includes("\r")
   ) {
     return (
       `"${text.replace(
@@ -4355,95 +4233,255 @@ function safeFilename(value) {
 
 
 // ============================================================
-// STREAMING RAW LAP CSV
+// CSV TEAM MAP
+//
+// IMPORTANT:
+// For CSV we deliberately DO NOT call stableTeamNameMap().
+//
+// That function loads several complete datasets.
+// The raw-lap export only needs the team name, so apex_entries
+// is enough and avoids unnecessary Worker load.
 // ============================================================
 
-async function createLapRecordsCsvResponse(
+async function loadCsvTeamMap(
   env,
-  rid,
-  snapshot
+  rid
 ) {
-  const fieldIds =
-    currentFieldIds(
-      snapshot
-    );
-
-
-  if (
-    fieldIds.size === 0
-  ) {
-    return json(
-      {
-        error:
-          "No current Apex field is available for CSV export."
-      },
-      409
-    );
-  }
-
-
-  const teamMap =
-    await stableTeamNameMap(
+  const entries =
+    await loadEntries(
       env,
       rid
     );
 
 
-  const orderedIds =
+  const map =
+    new Map();
+
+
+  for (
+    const row
+    of entries
+  ) {
+    const id =
+      String(
+        row.apex_id ??
+        ""
+      );
+
+
+    if (!id) {
+      continue;
+    }
+
+
+    const team =
+      stripHtml(
+        row.team_name
+      );
+
+
+    if (
+      team &&
+      !badTeamName(
+        team,
+        row.current_driver
+      ) &&
+      !map.has(id)
+    ) {
+      map.set(
+        id,
+        team
+      );
+    }
+  }
+
+
+  return {
+    entries,
+    map
+  };
+}
+
+
+// ============================================================
+// GLOBAL STREAMING RAW LAP CSV
+//
+// THIS IS THE IMPORTANT CHANGE.
+//
+// OLD:
+//
+// 72 teams
+//   -> query team 1 pages
+//   -> query team 2 pages
+//   -> query team 3 pages
+//   -> ...
+//
+// NEW:
+//
+// ONE globally paginated dataset:
+//
+// race_id = current race
+// order = apex_id, lap_number
+//
+// Every page is written immediately to the response stream.
+// No giant 40-50k lap array is held in memory.
+// ============================================================
+
+async function createLapRecordsCsvResponse(
+  env,
+  rid
+) {
+  /*
+   * Do all operations that can fail BEFORE returning
+   * the streaming Response.
+   *
+   * That way a setup failure returns a normal 500 JSON
+   * instead of starting a broken CSV stream.
+   */
+  const {
+    entries,
+    map: teamMap
+  } =
+    await loadCsvTeamMap(
+      env,
+      rid
+    );
+
+
+  if (
+    !entries.length
+  ) {
+    return json(
+      {
+        error:
+          `No Apex entries found for race ${rid}.`
+      },
+      404
+    );
+  }
+
+
+  const raceApexIds =
     [
-      ...fieldIds
+      ...new Set(
+        entries
+          .map(
+            row =>
+              String(
+                row.apex_id ??
+                ""
+              )
+                .trim()
+          )
+          .filter(Boolean)
+      )
     ];
 
 
-  orderedIds.sort(
-    (a, b) => {
-      const pa =
-        Number(
-          snapshot
-            ?.positions?.[
-              String(a)
-            ]
-        );
+  if (
+    raceApexIds.length === 0
+  ) {
+    return json(
+      {
+        error:
+          `No Apex IDs found for race ${rid}.`
+      },
+      404
+    );
+  }
 
 
-      const pb =
-        Number(
-          snapshot
-            ?.positions?.[
-              String(b)
-            ]
-        );
-
-
-      if (
-        Number.isFinite(pa) &&
-        Number.isFinite(pb) &&
-        pa !== pb
-      ) {
-        return pa - pb;
-      }
-
-
-      if (
-        Number.isFinite(pa)
-      ) {
-        return -1;
-      }
-
-
-      if (
-        Number.isFinite(pb)
-      ) {
-        return 1;
-      }
-
-
-      return (
-        Number(a) -
-        Number(b)
+  /*
+   * All current Apex IDs are numeric in this feed.
+   *
+   * Filter them before putting them into PostgREST IN().
+   */
+  const numericIds =
+    raceApexIds
+      .filter(
+        value =>
+          /^\d+$/.test(
+            value
+          )
       );
-    }
-  );
+
+
+  if (
+    numericIds.length === 0
+  ) {
+    return json(
+      {
+        error:
+          `No valid Apex IDs found for race ${rid}.`
+      },
+      500
+    );
+  }
+
+
+  const idFilter =
+    `in.(${numericIds.join(",")})`;
+
+
+  /*
+   * Optional preflight.
+   *
+   * This confirms that the Supabase query itself works
+   * BEFORE the browser receives HTTP 200 CSV headers.
+   */
+  const firstPage =
+    await sbGet(
+      env,
+      "apex_lap_events",
+      {
+        select:
+          "apex_id,lap_number,lap_time",
+
+        race_id:
+          `eq.${rid}`,
+
+        apex_id:
+          idFilter,
+
+        order:
+          "apex_id.asc,lap_number.asc"
+      },
+      {
+        from:
+          0,
+
+        to:
+          PAGE_SIZE - 1
+      }
+    );
+
+
+  if (
+    !Array.isArray(
+      firstPage
+    )
+  ) {
+    return json(
+      {
+        error:
+          "Unexpected response while preparing Lap Time Records CSV."
+      },
+      500
+    );
+  }
+
+
+  if (
+    firstPage.length === 0
+  ) {
+    return json(
+      {
+        error:
+          `No lap records found for race ${rid}.`
+      },
+      404
+    );
+  }
 
 
   const encoder =
@@ -4464,8 +4502,116 @@ async function createLapRecordsCsvResponse(
         }
 
 
-        try {
+        function writeTeamHeader(
+          apexId
+        ) {
+          const teamName =
+            teamMap.get(
+              String(
+                apexId
+              )
+            ) ||
+            `APEX ${apexId}`;
 
+
+          write("\r\n");
+
+
+          write(
+            `${csvEscape(apexId)} - ${csvEscape(teamName)}\r\n`
+          );
+
+
+          write(
+            "Lap,Time\r\n"
+          );
+        }
+
+
+        let activeApexId =
+          null;
+
+
+        function processPage(
+          page
+        ) {
+          for (
+            const row
+            of page
+          ) {
+            const apexId =
+              String(
+                row.apex_id ??
+                ""
+              );
+
+
+            const lap =
+              Number(
+                row.lap_number
+              );
+
+
+            const lapTime =
+              Number(
+                row.lap_time
+              );
+
+
+            if (
+              !apexId ||
+              !Number.isFinite(
+                lap
+              ) ||
+              !Number.isFinite(
+                lapTime
+              ) ||
+              lapTime <= 0
+            ) {
+              continue;
+            }
+
+
+            /*
+             * Because the database result is globally sorted
+             * by apex_id,lap_number, every time apex_id changes
+             * we start a new Apex-style team block.
+             */
+            if (
+              apexId !==
+              activeApexId
+            ) {
+              activeApexId =
+                apexId;
+
+
+              writeTeamHeader(
+                apexId
+              );
+            }
+
+
+            /*
+             * RAW VALUE.
+             *
+             * No pit lap removal.
+             * No pit-out removal.
+             * No safety-car removal.
+             * No manual analytical exclusion.
+             *
+             * This report is deliberately the RAW source.
+             */
+            write(
+              `${Math.trunc(lap)},${lapTime.toFixed(3)}\r\n`
+            );
+          }
+        }
+
+
+        try {
+          /*
+           * UTF-8 BOM for Excel / Numbers compatibility.
+           */
           write("\uFEFF");
 
 
@@ -4490,127 +4636,91 @@ async function createLapRecordsCsvResponse(
           );
 
 
-          write("\r\n");
+          /*
+           * Page 1 was already fetched as the preflight.
+           */
+          processPage(
+            firstPage
+          );
 
 
-          for (
-            const apexId
-            of orderedIds
+          let from =
+            firstPage.length;
+
+
+          /*
+           * If page 1 is shorter than PAGE_SIZE,
+           * the entire export is already complete.
+           */
+          while (
+            firstPage.length ===
+              PAGE_SIZE
           ) {
-            const teamName =
-              resolveTeam(
-                apexId,
-                teamMap
-              ) ||
-              `APEX ${apexId}`;
+            const page =
+              await sbGet(
+                env,
+                "apex_lap_events",
+                {
+                  select:
+                    "apex_id,lap_number,lap_time",
 
+                  race_id:
+                    `eq.${rid}`,
 
-            write(
-              `${csvEscape(apexId)} - ${csvEscape(teamName)}\r\n`
-            );
+                  apex_id:
+                    idFilter,
 
+                  order:
+                    "apex_id.asc,lap_number.asc"
+                },
+                {
+                  from,
 
-            write(
-              "Lap,Time\r\n"
-            );
-
-
-            let from =
-              0;
-
-
-            while (true) {
-              const page =
-                await sbGet(
-                  env,
-                  "apex_lap_events",
-                  {
-                    select:
-                      "lap_number,lap_time",
-
-                    race_id:
-                      `eq.${rid}`,
-
-                    apex_id:
-                      `eq.${apexId}`,
-
-                    order:
-                      "lap_number.asc"
-                  },
-                  {
-                    from,
-
-                    to:
-                      from +
-                      PAGE_SIZE -
-                      1
-                  }
-                );
-
-
-              if (
-                !Array.isArray(page)
-              ) {
-                throw new Error(
-                  `Unexpected lap response for APEX ${apexId}`
-                );
-              }
-
-
-              for (
-                const row
-                of page
-              ) {
-                const lap =
-                  Number(
-                    row.lap_number
-                  );
-
-
-                const lapTime =
-                  Number(
-                    row.lap_time
-                  );
-
-
-                if (
-                  !Number.isFinite(lap) ||
-                  !Number.isFinite(lapTime) ||
-                  lapTime <= 0
-                ) {
-                  continue;
+                  to:
+                    from +
+                    PAGE_SIZE -
+                    1
                 }
+              );
 
 
-                write(
-                  `${lap},${lapTime.toFixed(3)}\r\n`
-                );
-              }
-
-
-              if (
-                page.length <
-                PAGE_SIZE
-              ) {
-                break;
-              }
-
-
-              from +=
-                PAGE_SIZE;
+            if (
+              !Array.isArray(
+                page
+              )
+            ) {
+              throw new Error(
+                "Unexpected apex_lap_events page."
+              );
             }
 
 
-            write("\r\n");
+            processPage(
+              page
+            );
+
+
+            if (
+              page.length <
+              PAGE_SIZE
+            ) {
+              break;
+            }
+
+
+            from +=
+              page.length;
           }
+
+
+          write("\r\n");
 
 
           controller.close();
 
-
         } catch (error) {
           console.error(
-            "CSV STREAM ERROR",
+            "LAP CSV STREAM ERROR",
             error
           );
 
@@ -4642,7 +4752,13 @@ async function createLapRecordsCsvResponse(
           `attachment; filename="${filename}"`,
 
         "cache-control":
-          "no-store",
+          "no-store, no-cache, must-revalidate",
+
+        pragma:
+          "no-cache",
+
+        expires:
+          "0",
 
         "x-content-type-options":
           "nosniff"
@@ -6104,6 +6220,31 @@ export default {
 
 
       // ========================================================
+      // CSV EXPORT
+      //
+      // IMPORTANT:
+      // This route is handled EARLY.
+      //
+      // It does NOT:
+      // - call stintsPayload()
+      // - call collectorSnapshot()
+      // - call stableTeamNameMap()
+      // - fall through to ASSETS
+      //
+      // ========================================================
+
+      if (
+        url.pathname ===
+        "/api/reports/lap-time-records.csv"
+      ) {
+        return await createLapRecordsCsvResponse(
+          env,
+          rid
+        );
+      }
+
+
+      // ========================================================
       // COLLECTOR
       // ========================================================
 
@@ -6228,7 +6369,7 @@ export default {
 
 
       // ========================================================
-      // SHARED RACE DATA ROUTES
+      // SHARED DATA ROUTES
       // ========================================================
 
       if (
@@ -6242,8 +6383,6 @@ export default {
           "/api/pits" ||
         url.pathname ===
           "/api/events" ||
-        url.pathname ===
-          "/api/reports/lap-time-records.csv" ||
         url.pathname ===
           "/api/reports/pit-stops.html"
       ) {
@@ -6730,22 +6869,6 @@ export default {
 
 
         // ======================================================
-        // RAW LAP CSV
-        // ======================================================
-
-        if (
-          url.pathname ===
-          "/api/reports/lap-time-records.csv"
-        ) {
-          return createLapRecordsCsvResponse(
-            env,
-            rid,
-            snapshot
-          );
-        }
-
-
-        // ======================================================
         // PIT / STINT REPORT
         // ======================================================
 
@@ -6770,6 +6893,32 @@ export default {
             "text/html"
           );
         }
+      }
+
+
+      // ========================================================
+      // UNKNOWN API ROUTE
+      //
+      // DO NOT silently serve index.html for /api/...
+      // This is important because otherwise app.js receives
+      // HTML and reports it as a "CSV download failed" message.
+      // ========================================================
+
+      if (
+        url.pathname.startsWith(
+          "/api/"
+        )
+      ) {
+        return json(
+          {
+            error:
+              `API route not found: ${url.pathname}`,
+
+            version:
+              VERSION
+          },
+          404
+        );
       }
 
 
