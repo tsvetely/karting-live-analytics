@@ -9,7 +9,9 @@
     content="width=device-width,initial-scale=1"
   />
 
-  <title>Race Engineer</title>
+  <title>
+    Race Engineer
+  </title>
 
   <link
     rel="stylesheet"
@@ -21,10 +23,6 @@
 <body>
 
 
-<!-- ======================================================== -->
-<!-- HEADER                                                   -->
-<!-- ======================================================== -->
-
 <header class="header">
 
   <div class="brand">
@@ -34,16 +32,17 @@
     </div>
 
     <div>
-      <h1>Race Engineer</h1>
-      <span>Live Race Analytics</span>
+      <h1>
+        Race Engineer
+      </h1>
+
+      <span>
+        Live Race Analytics
+      </span>
     </div>
 
   </div>
 
-
-  <!-- ====================================================== -->
-  <!-- RACE / SESSION SELECTOR                                -->
-  <!-- ====================================================== -->
 
   <div class="raceContext">
 
@@ -53,72 +52,13 @@
         RACE / SESSION
       </span>
 
+      <select id="raceSelector">
 
-      <div
-        class="dropdown"
-        id="raceDropdown"
-        data-value="live"
-      >
+        <option value="live">
+          ● Current race
+        </option>
 
-        <button
-          type="button"
-          class="dropdownTrigger"
-          id="raceDropdownTrigger"
-        >
-
-          <span class="dropdownTriggerContent">
-
-            <span
-              class="dropdownStatusDot live"
-              id="raceDropdownStatusDot"
-            ></span>
-
-            <span id="raceDropdownLabel">
-              Current race
-            </span>
-
-          </span>
-
-
-          <span class="dropdownChevron">
-            ▾
-          </span>
-
-        </button>
-
-
-        <div
-          class="dropdownMenu"
-          id="raceDropdownMenu"
-        >
-
-          <div class="dropdownGroupLabel">
-            LIVE
-          </div>
-
-
-          <button
-            type="button"
-            class="dropdownOption selected"
-            data-value="live"
-            data-mode="live"
-          >
-
-            <span class="dropdownStatusDot live"></span>
-
-            <span>
-              Current race
-            </span>
-
-            <span class="dropdownCheck">
-              ✓
-            </span>
-
-          </button>
-
-        </div>
-
-      </div>
+      </select>
 
     </div>
 
@@ -132,10 +72,6 @@
 
   </div>
 
-
-  <!-- ====================================================== -->
-  <!-- RACE SUMMARY                                           -->
-  <!-- ====================================================== -->
 
   <div class="raceSummary">
 
@@ -180,10 +116,6 @@
   </div>
 
 
-  <!-- ====================================================== -->
-  <!-- CONNECTION STATUS                                      -->
-  <!-- ====================================================== -->
-
   <div class="statusbar">
 
     <span
@@ -204,10 +136,6 @@
 </header>
 
 
-
-<!-- ======================================================== -->
-<!-- NAVIGATION                                               -->
-<!-- ======================================================== -->
 
 <nav class="tabs">
 
@@ -273,130 +201,31 @@
 <main>
 
 
-  <!-- ====================================================== -->
-  <!-- FILTERS                                                -->
-  <!-- ====================================================== -->
-
   <section class="controls">
 
+    <select id="teamFilter">
 
-    <!-- TEAM FILTER -->
+      <option value="">
+        All teams
+      </option>
 
-    <div
-      class="dropdown filterDropdown"
-      id="teamDropdown"
-      data-value=""
-    >
-
-      <button
-        type="button"
-        class="dropdownTrigger"
-        id="teamDropdownTrigger"
-      >
-
-        <span id="teamDropdownLabel">
-          All teams
-        </span>
-
-        <span class="dropdownChevron">
-          ▾
-        </span>
-
-      </button>
+    </select>
 
 
-      <div
-        class="dropdownMenu"
-        id="teamDropdownMenu"
-      >
+    <select id="driverFilter">
 
-        <button
-          type="button"
-          class="dropdownOption selected"
-          data-value=""
-        >
+      <option value="">
+        All drivers
+      </option>
 
-          <span></span>
+    </select>
 
-          <span>
-            All teams
-          </span>
-
-          <span class="dropdownCheck">
-            ✓
-          </span>
-
-        </button>
-
-      </div>
-
-    </div>
-
-
-
-    <!-- DRIVER FILTER -->
-
-    <div
-      class="dropdown filterDropdown"
-      id="driverDropdown"
-      data-value=""
-    >
-
-      <button
-        type="button"
-        class="dropdownTrigger"
-        id="driverDropdownTrigger"
-      >
-
-        <span id="driverDropdownLabel">
-          All drivers
-        </span>
-
-        <span class="dropdownChevron">
-          ▾
-        </span>
-
-      </button>
-
-
-      <div
-        class="dropdownMenu"
-        id="driverDropdownMenu"
-      >
-
-        <button
-          type="button"
-          class="dropdownOption selected"
-          data-value=""
-        >
-
-          <span></span>
-
-          <span>
-            All drivers
-          </span>
-
-          <span class="dropdownCheck">
-            ✓
-          </span>
-
-        </button>
-
-      </div>
-
-    </div>
-
-
-
-    <!-- SEARCH -->
 
     <input
       id="search"
-      placeholder="Search team / driver / kart"
+      placeholder="Search position / team / driver / kart / lap"
     />
 
-
-    <!-- RESET -->
 
     <button
       id="resetFilters"
@@ -405,8 +234,6 @@
       Reset
     </button>
 
-
-    <!-- AUTO REFRESH -->
 
     <label
       id="autoRefreshControl"
@@ -424,8 +251,6 @@
     </label>
 
 
-    <!-- REFRESH -->
-
     <button id="refresh">
       Refresh
     </button>
@@ -433,10 +258,6 @@
   </section>
 
 
-
-  <!-- ====================================================== -->
-  <!-- OVERVIEW                                               -->
-  <!-- ====================================================== -->
 
   <section
     id="overview"
@@ -452,7 +273,7 @@
         </h2>
 
         <p id="overviewSubtitle">
-          Current driver and stint performance.
+          Live race order, current driver, current stint and live performance.
         </p>
 
       </div>
@@ -482,7 +303,9 @@
       <table>
 
         <thead>
+
           <tr>
+
             <th>Pos</th>
             <th>Team</th>
             <th>Driver</th>
@@ -498,7 +321,9 @@
             <th>Worst lap</th>
             <th>Consistency</th>
             <th>Updated</th>
+
           </tr>
+
         </thead>
 
 
@@ -511,10 +336,6 @@
   </section>
 
 
-
-  <!-- ====================================================== -->
-  <!-- STINTS                                                 -->
-  <!-- ====================================================== -->
 
   <section
     id="stints"
@@ -530,7 +351,7 @@
         </h2>
 
         <p>
-          All completed and current stints for the selected race.
+          Completed and current stints for every team, in race order.
         </p>
 
       </div>
@@ -546,18 +367,21 @@
 
           <tr>
 
+            <th>Pos</th>
             <th>Team</th>
             <th>Driver</th>
             <th>Stint</th>
-            <th>Start</th>
-            <th>End</th>
-            <th>Laps</th>
+            <th>Start lap</th>
+            <th>End lap</th>
+            <th>Total laps</th>
+            <th>Valid laps</th>
             <th>Average</th>
             <th>Best</th>
             <th>Best lap</th>
             <th>Worst</th>
             <th>Worst lap</th>
             <th>Consistency</th>
+            <th>Status</th>
 
           </tr>
 
@@ -574,10 +398,6 @@
 
 
 
-  <!-- ====================================================== -->
-  <!-- DRIVERS                                                -->
-  <!-- ====================================================== -->
-
   <section
     id="drivers"
     class="view"
@@ -592,7 +412,7 @@
         </h2>
 
         <p>
-          Driver performance for the selected race.
+          Driver performance aggregated from the selected race only.
         </p>
 
       </div>
@@ -608,8 +428,10 @@
 
           <tr>
 
+            <th>Pos</th>
             <th>Team</th>
             <th>Driver</th>
+            <th>Stints</th>
             <th>Valid stints</th>
             <th>Short stints</th>
             <th>Valid laps</th>
@@ -633,10 +455,6 @@
 
 
 
-  <!-- ====================================================== -->
-  <!-- TEAMS                                                  -->
-  <!-- ====================================================== -->
-
   <section
     id="teams"
     class="view"
@@ -651,7 +469,7 @@
         </h2>
 
         <p>
-          Team performance and driver comparison for the selected race.
+          Team performance and driver comparison, ordered by race position when live.
         </p>
 
       </div>
@@ -667,6 +485,7 @@
 
           <tr>
 
+            <th>Pos</th>
             <th>Team</th>
             <th>Drivers</th>
             <th>Stints</th>
@@ -692,10 +511,6 @@
 
 
 
-  <!-- ====================================================== -->
-  <!-- PITS                                                   -->
-  <!-- ====================================================== -->
-
   <section
     id="pits"
     class="view"
@@ -710,7 +525,7 @@
         </h2>
 
         <p>
-          Pit history and driver changes for the selected race.
+          Pit history for the selected race only; live mode is limited to the current session and current pit count.
         </p>
 
       </div>
@@ -726,6 +541,7 @@
 
           <tr>
 
+            <th>Pos</th>
             <th>Team</th>
             <th>Pit #</th>
             <th>Driver</th>
@@ -750,10 +566,6 @@
 
 
 
-  <!-- ====================================================== -->
-  <!-- EVENTS                                                 -->
-  <!-- ====================================================== -->
-
   <section
     id="events"
     class="view"
@@ -768,7 +580,7 @@
         </h2>
 
         <p>
-          Safety car, disruptions, direction changes and excluded laps.
+          Manual exclusions now affect the current analytics; automatic race-event detection can be added on top of this clean session data.
         </p>
 
       </div>
@@ -793,7 +605,7 @@
           <tr>
 
             <th>Time</th>
-            <th>Team</th>
+            <th>Team / Apex</th>
             <th>Lap</th>
             <th>Type</th>
             <th>Reason</th>
@@ -815,10 +627,6 @@
 
 
 
-  <!-- ====================================================== -->
-  <!-- REPORTS                                                -->
-  <!-- ====================================================== -->
-
   <section
     id="reports"
     class="view"
@@ -833,7 +641,7 @@
         </h2>
 
         <p>
-          CSV and PDF reports for the selected race.
+          Real CSV and PDF files generated from the selected race.
         </p>
 
       </div>
@@ -851,7 +659,7 @@
         </h3>
 
         <p>
-          Complete statistics and analysis for the selected race.
+          Teams, drivers, stints, pits and exclusions.
         </p>
 
         <div class="reportActions">
@@ -876,7 +684,7 @@
         </h3>
 
         <p>
-          Generated from the selected race data.
+          Stints and pit stops.
         </p>
 
         <div class="reportActions">
@@ -901,7 +709,7 @@
         </h3>
 
         <p>
-          Generated from the selected race data.
+          Teams and drivers.
         </p>
 
         <div class="reportActions">
@@ -927,10 +735,6 @@
 </main>
 
 
-
-<!-- ======================================================== -->
-<!-- DETAIL DRAWER                                            -->
-<!-- ======================================================== -->
 
 <aside
   id="detailDrawer"
@@ -972,6 +776,11 @@
 
 </aside>
 
+
+
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js"></script>
 
 <script src="/app.js"></script>
 
