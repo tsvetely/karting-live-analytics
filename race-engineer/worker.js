@@ -1,9 +1,9 @@
-const BOOTSTRAP_VERSION = "2026-08-29-full-stint-v3";
+const BOOTSTRAP_VERSION = "2026-08-29-full-field-v4";
 const PAGE_SIZE = 1000;
 
 
 // ============================================================
-// RESPONSES
+// RESPONSE HELPERS
 // ============================================================
 
 function json(data, status = 200) {
@@ -12,11 +12,8 @@ function json(data, status = 200) {
     {
       status,
       headers: {
-        "content-type":
-          "application/json; charset=utf-8",
-
-        "cache-control":
-          "no-store"
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store"
       }
     }
   );
@@ -29,17 +26,12 @@ function textResponse(
   filename = null
 ) {
   const headers = {
-    "content-type":
-      `${contentType}; charset=utf-8`,
-
-    "cache-control":
-      "no-store"
+    "content-type": `${contentType}; charset=utf-8`,
+    "cache-control": "no-store"
   };
 
   if (filename) {
-    headers[
-      "content-disposition"
-    ] =
+    headers["content-disposition"] =
       `attachment; filename="${filename}"`;
   }
 
@@ -54,22 +46,16 @@ function textResponse(
 
 
 // ============================================================
-// RACE
+// RACE ID
 // ============================================================
 
-function raceId(
-  env,
-  url = null
-) {
+function raceId(env, url = null) {
   const raw =
-    url?.searchParams.get(
-      "race_id"
-    ) ||
+    url?.searchParams.get("race_id") ||
     env.DEFAULT_RACE_ID ||
     "1";
 
-  const value =
-    Number(raw);
+  const value = Number(raw);
 
   return (
     Number.isFinite(value) &&
@@ -84,10 +70,7 @@ function raceId(
 // SUPABASE
 // ============================================================
 
-function sbHeaders(
-  env,
-  extra = {}
-) {
+function sbHeaders(env, extra = {}) {
   if (
     !env.SUPABASE_URL ||
     !env.SUPABASE_KEY
@@ -98,15 +81,11 @@ function sbHeaders(
   }
 
   return {
-    apikey:
-      env.SUPABASE_KEY,
-
+    apikey: env.SUPABASE_KEY,
     authorization:
       `Bearer ${env.SUPABASE_KEY}`,
-
     "content-type":
       "application/json",
-
     ...extra
   };
 }
@@ -153,18 +132,14 @@ async function sbGet(
     headers.Range =
       `${range.from}-${range.to}`;
 
-    headers[
-      "Range-Unit"
-    ] =
+    headers["Range-Unit"] =
       "items";
   }
 
   const response =
     await fetch(
       url,
-      {
-        headers
-      }
+      { headers }
     );
 
   if (!response.ok) {
@@ -204,9 +179,7 @@ async function sbGetAll(
         }
       );
 
-    result.push(
-      ...page
-    );
+    result.push(...page);
 
     if (
       page.length <
@@ -215,8 +188,7 @@ async function sbGetAll(
       break;
     }
 
-    from +=
-      pageSize;
+    from += pageSize;
   }
 
   return result;
@@ -272,9 +244,7 @@ async function sbWrite(
         body:
           body === undefined
             ? undefined
-            : JSON.stringify(
-                body
-              )
+            : JSON.stringify(body)
       }
     );
 
@@ -385,9 +355,7 @@ function stripHtml(value) {
 }
 
 
-function parseProtocolLine(
-  line
-) {
+function parseProtocolLine(line) {
   const parts =
     String(
       line || ""
@@ -467,22 +435,14 @@ function parseLapTime(value) {
     }
 
     const minutes =
-      Number(
-        parts[0]
-      );
+      Number(parts[0]);
 
     const seconds =
-      Number(
-        parts[1]
-      );
+      Number(parts[1]);
 
     return (
-      Number.isFinite(
-        minutes
-      ) &&
-      Number.isFinite(
-        seconds
-      )
+      Number.isFinite(minutes) &&
+      Number.isFinite(seconds)
     )
       ? minutes * 60 +
         seconds
@@ -503,9 +463,7 @@ function formatLapTime(value) {
     Number(value);
 
   if (
-    !Number.isFinite(
-      seconds
-    ) ||
+    !Number.isFinite(seconds) ||
     seconds <= 0
   ) {
     return "";
@@ -516,8 +474,7 @@ function formatLapTime(value) {
   ) {
     const minutes =
       Math.floor(
-        seconds /
-        60
+        seconds / 60
       );
 
     const rest =
@@ -531,10 +488,7 @@ function formatLapTime(value) {
           "0"
         );
 
-    return (
-      `${minutes}:` +
-      rest
-    );
+    return `${minutes}:${rest}`;
   }
 
   return seconds.toFixed(3);
@@ -542,9 +496,7 @@ function formatLapTime(value) {
 
 
 function cleanDriver(value) {
-  return stripHtml(
-    value
-  )
+  return stripHtml(value)
     .replace(
       /\s*\[[^\]]+\]\s*$/,
       ""
@@ -586,7 +538,7 @@ function badTeamName(
 
 
 // ============================================================
-// GRID PARSING
+// GRID
 // ============================================================
 
 function parseGridData(html) {
@@ -614,9 +566,7 @@ function parseGridData(html) {
   while (
     (
       headerMatch =
-        headerCell.exec(
-          source
-        )
+        headerCell.exec(source)
     ) !== null
   ) {
     const id =
@@ -652,9 +602,7 @@ function parseGridData(html) {
   while (
     (
       rowMatch =
-        rowRegex.exec(
-          source
-        )
+        rowRegex.exec(source)
     ) !== null
   ) {
     const apexId =
@@ -744,7 +692,7 @@ function parseGridData(html) {
 
 
 // ============================================================
-// APEX DETAIL PARSING
+// APEX DETAIL
 // ============================================================
 
 function msToTime(ms) {
@@ -752,23 +700,19 @@ function msToTime(ms) {
     Number(ms);
 
   if (
-    !Number.isFinite(
-      value
-    )
+    !Number.isFinite(value)
   ) {
     return null;
   }
 
   const total =
     Math.floor(
-      value /
-      1000
+      value / 1000
     );
 
   const hours =
     Math.floor(
-      total /
-      3600
+      total / 3600
     );
 
   const minutes =
@@ -776,13 +720,11 @@ function msToTime(ms) {
       (
         total %
         3600
-      ) /
-      60
+      ) / 60
     );
 
   const seconds =
-    total %
-    60;
+    total % 60;
 
   return (
     `${String(hours).padStart(2, "0")}:` +
@@ -797,17 +739,14 @@ function msToPitTime(ms) {
     Number(ms);
 
   if (
-    !Number.isFinite(
-      value
-    )
+    !Number.isFinite(value)
   ) {
     return null;
   }
 
   const minutes =
     Math.floor(
-      value /
-      60000
+      value / 60000
     );
 
   const seconds =
@@ -815,14 +754,12 @@ function msToPitTime(ms) {
       (
         value %
         60000
-      ) /
-      1000
+      ) / 1000
     );
 
   const millis =
     Math.floor(
-      value %
-      1000
+      value % 1000
     );
 
   return (
@@ -854,9 +791,7 @@ function parseDrivers(raw) {
     ) !== null
   ) {
     result.set(
-      Number(
-        match[1]
-      ),
+      Number(match[1]),
       match[2]
     );
   }
@@ -899,9 +834,7 @@ function parseLapRows(
       );
 
     if (
-      !Number.isFinite(
-        milliseconds
-      ) ||
+      !Number.isFinite(milliseconds) ||
       milliseconds <= 0
     ) {
       continue;
@@ -983,12 +916,8 @@ function parsePitRows(
       );
 
     if (
-      !Number.isFinite(
-        pitNumber
-      ) ||
-      !Number.isFinite(
-        pitLap
-      )
+      !Number.isFinite(pitNumber) ||
+      !Number.isFinite(pitLap)
     ) {
       continue;
     }
@@ -1081,32 +1010,15 @@ function calculateStats(rows) {
 
   if (!laps.length) {
     return {
-      validLaps:
-        0,
-
-      sum:
-        0,
-
-      squares:
-        0,
-
-      avg:
-        null,
-
-      best:
-        null,
-
-      bestLap:
-        null,
-
-      worst:
-        null,
-
-      worstLap:
-        null,
-
-      consistency:
-        null
+      validLaps: 0,
+      sum: 0,
+      squares: 0,
+      avg: null,
+      best: null,
+      bestLap: null,
+      worst: null,
+      worstLap: null,
+      consistency: null
     };
   }
 
@@ -1130,8 +1042,7 @@ function calculateStats(rows) {
     sum += value;
 
     squares +=
-      value *
-      value;
+      value * value;
 
 
     if (
@@ -1200,8 +1111,7 @@ function calculateStats(rows) {
           0,
           squares /
             laps.length -
-            avg *
-            avg
+            avg * avg
         )
       )
   };
@@ -1209,7 +1119,7 @@ function calculateStats(rows) {
 
 
 // ============================================================
-// TEAM NAME REPAIR
+// TEAM NAMES
 // ============================================================
 
 async function stableTeamNameMap(
@@ -1392,7 +1302,7 @@ function resolveTeam(
 
 
 // ============================================================
-// DATABASE DATA LOADERS
+// DATABASE LOADERS
 // ============================================================
 
 async function loadEntries(
@@ -1515,7 +1425,7 @@ async function loadManualExclusions(
 
 
 // ============================================================
-// LAP DEDUPLICATION
+// LAP DEDUPE
 // ============================================================
 
 function dedupeLapRows(rows) {
@@ -1574,24 +1484,7 @@ function dedupeLapRows(rows) {
 
 
 // ============================================================
-// COMPUTED STINTS
-//
-// IMPORTANT:
-//
-// Stint boundaries:
-//   actual laps = startBoundary + 1 ... endBoundary
-//
-// Example:
-//   stint #1  start=0  end=30  => laps 1...30
-//   stint #2  start=30 end=87  => laps 31...87
-//
-// Pit boundary rule copied from the desktop Race Review logic:
-//
-// - stint #1 does NOT lose lap 1;
-// - for every later stint the FIRST real lap is Pit In / Out;
-// - manual exclusions are also removed;
-// - NO arbitrary >90s threshold;
-// - NO "slow lap = invalid" rule.
+// STINTS
 // ============================================================
 
 function buildStintsForApex({
@@ -1709,12 +1602,12 @@ function buildStintsForApex({
 
 
     /*
-     * PIT IN / OUT
+     * First stint:
+     * lap 1 stays valid.
      *
-     * DO NOT exclude lap 1 of stint #1.
-     *
-     * For stint #2 onward the first real lap after
-     * previousBoundary is the pit boundary lap.
+     * Later stints:
+     * first lap after previous pit boundary
+     * is marked Pit In / Out.
      */
     if (
       previousBoundary > 0 &&
@@ -1729,9 +1622,6 @@ function buildStintsForApex({
     }
 
 
-    /*
-     * MANUAL EXCLUSIONS
-     */
     for (
       const row
       of raw
@@ -1765,7 +1655,7 @@ function buildStintsForApex({
       );
 
 
-    const statistics =
+    const stats =
       calculateStats(
         counted
       );
@@ -1776,9 +1666,7 @@ function buildStintsForApex({
         Number(rid),
 
       apex_id:
-        String(
-          apexId
-        ),
+        String(apexId),
 
       team_name:
         teamName,
@@ -1796,45 +1684,38 @@ function buildStintsForApex({
       end_lap_count:
         endBoundary,
 
-      /*
-       * TOTAL LAPS = all real laps belonging to stint,
-       * including the Pit In / Out lap.
-       */
       total_laps:
         raw.length,
 
-      /*
-       * VALID LAPS = statistical lap set.
-       */
       valid_laps:
-        statistics.validLaps,
+        stats.validLaps,
 
       avg_lap:
-        statistics.avg,
+        stats.avg,
 
       avg_lap_time:
-        statistics.avg,
+        stats.avg,
 
       best_lap:
-        statistics.best,
+        stats.best,
 
       best_lap_time:
-        statistics.best,
+        stats.best,
 
       best_lap_number:
-        statistics.bestLap,
+        stats.bestLap,
 
       worst_lap:
-        statistics.worst,
+        stats.worst,
 
       worst_lap_time:
-        statistics.worst,
+        stats.worst,
 
       worst_lap_number:
-        statistics.worstLap,
+        stats.worstLap,
 
       consistency:
-        statistics.consistency,
+        stats.consistency,
 
       pit_hour:
         stop.pit_hour ??
@@ -1885,9 +1766,6 @@ function buildStintsForApex({
   }
 
 
-  /*
-   * LIVE / FINAL OPEN STINT
-   */
   const maxLap =
     Math.max(
       Number(
@@ -1906,6 +1784,13 @@ function buildStintsForApex({
     );
 
 
+  /*
+   * Current/open stint.
+   *
+   * This still exists after the race ends until
+   * Apex provides another final pit/closure boundary.
+   * That is intentional — we do not delete data.
+   */
   if (
     maxLap >
       previousBoundary &&
@@ -1975,7 +1860,7 @@ function buildStintsForApex({
       );
 
 
-    const statistics =
+    const stats =
       calculateStats(
         counted
       );
@@ -1986,9 +1871,7 @@ function buildStintsForApex({
         Number(rid),
 
       apex_id:
-        String(
-          apexId
-        ),
+        String(apexId),
 
       team_name:
         teamName,
@@ -2012,34 +1895,34 @@ function buildStintsForApex({
         raw.length,
 
       valid_laps:
-        statistics.validLaps,
+        stats.validLaps,
 
       avg_lap:
-        statistics.avg,
+        stats.avg,
 
       avg_lap_time:
-        statistics.avg,
+        stats.avg,
 
       best_lap:
-        statistics.best,
+        stats.best,
 
       best_lap_time:
-        statistics.best,
+        stats.best,
 
       best_lap_number:
-        statistics.bestLap,
+        stats.bestLap,
 
       worst_lap:
-        statistics.worst,
+        stats.worst,
 
       worst_lap_time:
-        statistics.worst,
+        stats.worst,
 
       worst_lap_number:
-        statistics.worstLap,
+        stats.worstLap,
 
       consistency:
-        statistics.consistency,
+        stats.consistency,
 
       excluded_laps:
         [
@@ -2071,7 +1954,7 @@ function buildStintsForApex({
 
 
 // ============================================================
-// COMPUTE STINTS FROM FULL DB LAP DATA
+// COMPUTED STINT PAYLOAD
 // ============================================================
 
 async function computedStintsPayload(
@@ -2097,12 +1980,6 @@ async function computedStintsPayload(
     entries;
 
 
-  /*
-   * PERFORMANCE:
-   *
-   * app.js can send apex_id or team.
-   * When one team is selected we fetch only that team's laps.
-   */
   if (
     filters.apexId
   ) {
@@ -2186,15 +2063,6 @@ async function computedStintsPayload(
       : null;
 
 
-  /*
-   * CRITICAL FIX
-   *
-   * These are FULL database queries.
-   *
-   * They are paginated, so Supabase's normal
-   * 1000-row response limit can no longer silently
-   * truncate a 12h race.
-   */
   const [
     allPits,
     allLaps,
@@ -2221,6 +2089,9 @@ async function computedStintsPayload(
     ]);
 
 
+  const idSet =
+    new Set(ids);
+
   const pitsById =
     new Map();
 
@@ -2241,7 +2112,7 @@ async function computedStintsPayload(
       );
 
     if (
-      !ids.includes(id)
+      !idSet.has(id)
     ) {
       continue;
     }
@@ -2271,7 +2142,7 @@ async function computedStintsPayload(
       );
 
     if (
-      !ids.includes(id)
+      !idSet.has(id)
     ) {
       continue;
     }
@@ -2301,7 +2172,7 @@ async function computedStintsPayload(
       );
 
     if (
-      !ids.includes(id)
+      !idSet.has(id)
     ) {
       continue;
     }
@@ -2380,17 +2251,21 @@ async function computedStintsPayload(
 
   return result.sort(
     (a, b) => {
-      const teamCompare =
+      const ta =
         String(
           a.team_name ||
           ""
-        )
-          .localeCompare(
-            String(
-              b.team_name ||
-              ""
-            )
-          );
+        );
+
+      const tb =
+        String(
+          b.team_name ||
+          ""
+        );
+
+
+      const teamCompare =
+        ta.localeCompare(tb);
 
 
       if (
@@ -2414,7 +2289,7 @@ async function computedStintsPayload(
 
 
 // ============================================================
-// PERSIST COMPUTED STINTS
+// PERSIST STATS
 // ============================================================
 
 async function persistComputedStintsForApex(
@@ -2724,12 +2599,6 @@ export class ApexCollector {
           );
 
 
-        /*
-         * FORCE ONE NEW FULL BOOTSTRAP
-         *
-         * This invalidates the old "already bootstrapped"
-         * state from the broken version.
-         */
         const storedVersion =
           await state.storage.get(
             "bootstrapVersion"
@@ -3244,9 +3113,7 @@ export class ApexCollector {
 
 
     if (
-      this.detailRunning.has(
-        id
-      )
+      this.detailRunning.has(id)
     ) {
       return;
     }
@@ -3377,15 +3244,6 @@ export class ApexCollector {
       }
 
 
-      /*
-       * THE IMPORTANT FIX
-       *
-       * We DO NOT calculate the stint from `laps`
-       * returned by this one Apex request.
-       *
-       * We rebuild from ALL apex_lap_events
-       * already stored for this kart.
-       */
       await persistComputedStintsForApex(
         this.env,
         this.rid,
@@ -3524,12 +3382,6 @@ export class ApexCollector {
     column = null
   ) {
 
-    /*
-     * DRIVER MUST BE FIRST.
-     *
-     * Apex can send `drteam` in a column
-     * configured as type `dr`.
-     */
     if (
       cls ===
         "drteam" ||
@@ -3554,9 +3406,6 @@ export class ApexCollector {
     }
 
 
-    /*
-     * ONLY actual `dr` packet may modify team_name.
-     */
     if (
       cls ===
       "dr"
@@ -3569,9 +3418,7 @@ export class ApexCollector {
 
       if (
         team &&
-        !badTeamName(
-          team
-        )
+        !badTeamName(team)
       ) {
         await this.upsertEntry({
           apex_id:
@@ -3604,12 +3451,8 @@ export class ApexCollector {
         position > 0
       ) {
         this.positions.set(
-          String(
-            apexId
-          ),
-          Math.trunc(
-            position
-          )
+          String(apexId),
+          Math.trunc(position)
         );
       }
 
@@ -3635,12 +3478,8 @@ export class ApexCollector {
         pitCount >= 0
       ) {
         this.pitCounts.set(
-          String(
-            apexId
-          ),
-          Math.trunc(
-            pitCount
-          )
+          String(apexId),
+          Math.trunc(pitCount)
         );
       }
 
@@ -3668,8 +3507,7 @@ export class ApexCollector {
 
 
       if (
-        lapTime !==
-        null
+        lapTime !== null
       ) {
         await this.upsertEntry({
           apex_id:
@@ -3698,8 +3536,7 @@ export class ApexCollector {
 
 
       if (
-        bestLap !==
-        null
+        bestLap !== null
       ) {
         await this.upsertEntry({
           apex_id:
@@ -3806,9 +3643,7 @@ export class ApexCollector {
               type,
               value
             ]
-            of Object.entries(
-              fields
-            )
+            of Object.entries(fields)
           ) {
             await this.applyField(
               apexId,
@@ -3822,7 +3657,6 @@ export class ApexCollector {
 
 
         await this.persist();
-
 
         continue;
       }
@@ -3858,8 +3692,7 @@ export class ApexCollector {
 
 
   async handlePacket(payload) {
-    this.packetCount +=
-      1;
+    this.packetCount += 1;
 
 
     this.lastPacketAt =
@@ -3896,7 +3729,7 @@ export class ApexCollector {
 
 
 // ============================================================
-// COLLECTOR ACCESS
+// COLLECTOR
 // ============================================================
 
 function collectorStub(env) {
@@ -3955,7 +3788,16 @@ async function startCollector(env) {
 
 
 // ============================================================
-// LIVE
+// LIVE PAYLOAD
+//
+// IMPORTANT FIX:
+//
+// We NEVER filter individual entries by updated_at.
+//
+// If race_id contains 72 teams, all 72 remain available.
+//
+// Packet age affects only session_status.
+// It does NOT remove race data.
 // ============================================================
 
 async function livePayload(
@@ -4003,6 +3845,12 @@ async function livePayload(
       )
         .catch(
           () => ({
+            connected:
+              false,
+
+            last_packet_at:
+              null,
+
             positions:
               {},
 
@@ -4019,31 +3867,13 @@ async function livePayload(
     ]);
 
 
-  const newest =
-    entries.reduce(
-      (
-        maximum,
-        row
-      ) =>
-        Math.max(
-          maximum,
-
-          Date.parse(
-            row.updated_at ||
-            ""
-          ) || 0
-        ),
-
-      0
-    );
-
-
-  if (
-    !newest ||
-    Date.now() -
-      newest >
-      180000
-  ) {
+  /*
+   * NO DATA really means no data.
+   *
+   * This is the ONLY situation in which
+   * current[] becomes empty because of availability.
+   */
+  if (!entries.length) {
     return {
       race_id:
         Number(rid),
@@ -4058,6 +3888,12 @@ async function livePayload(
       active:
         false,
 
+      data_available:
+        false,
+
+      session_status:
+        "NO DATA",
+
       current:
         [],
 
@@ -4067,19 +3903,75 @@ async function livePayload(
   }
 
 
-  const activeEntries =
-    entries.filter(
-      row =>
-        newest -
-          (
-            Date.parse(
-              row.updated_at ||
-              ""
-            ) ||
-            0
-          ) <=
-        180000
+  /*
+   * Session freshness is metadata only.
+   *
+   * It must NEVER be used to filter entries.
+   */
+  const latestEntryUpdate =
+    entries.reduce(
+      (
+        maximum,
+        row
+      ) =>
+        Math.max(
+          maximum,
+
+          Date.parse(
+            row.updated_at ||
+            ""
+          ) || 0
+        ),
+      0
     );
+
+
+  const lastPacketTimestamp =
+    Date.parse(
+      snapshot.last_packet_at ||
+      ""
+    ) || 0;
+
+
+  const newestSignal =
+    Math.max(
+      latestEntryUpdate,
+      lastPacketTimestamp
+    );
+
+
+  const packetAgeMs =
+    newestSignal
+      ? Date.now() -
+        newestSignal
+      : Number.POSITIVE_INFINITY;
+
+
+  const sessionLive =
+    packetAgeMs <=
+    180000;
+
+
+  const sessionStatus =
+    sessionLive
+      ? "LIVE"
+      : "FINISHED";
+
+
+  /*
+   * THIS IS THE MAIN FIX.
+   *
+   * Previously:
+   *
+   * const activeEntries = entries.filter(...)
+   *
+   * That destroyed the field after some teams stopped
+   * receiving updates.
+   *
+   * Now every stored Apex entry for this race is kept.
+   */
+  const activeEntries =
+    entries;
 
 
   const liveMap =
@@ -4123,9 +4015,7 @@ async function livePayload(
 
 
     if (
-      Number.isFinite(
-        number
-      )
+      Number.isFinite(number)
     ) {
       pitCount.set(
         id,
@@ -4140,9 +4030,7 @@ async function livePayload(
 
 
     if (
-      Number.isFinite(
-        lap
-      )
+      Number.isFinite(lap)
     ) {
       lastPit.set(
         id,
@@ -4172,9 +4060,7 @@ async function livePayload(
 
 
     if (
-      Number.isFinite(
-        count
-      ) &&
+      Number.isFinite(count) &&
       count >= 0
     ) {
       pitCount.set(
@@ -4183,9 +4069,7 @@ async function livePayload(
           pitCount.get(id) ||
           0,
 
-          Math.trunc(
-            count
-          )
+          Math.trunc(count)
         )
       );
     }
@@ -4241,6 +4125,11 @@ async function livePayload(
           apex_id:
             entry.apex_id,
 
+          /*
+           * DO NOT invent position.
+           *
+           * We use the last position received from Apex.
+           */
           position:
             Number(
               snapshot.positions?.[
@@ -4343,30 +4232,61 @@ async function livePayload(
     );
 
 
+  /*
+   * Position from Apex first.
+   *
+   * If a position happens to be unavailable,
+   * fall back to race lap.
+   *
+   * NEVER alphabetical order.
+   */
   current.sort(
     (a, b) => {
 
       const pa =
         Number(
           a.position
-        ) ||
-        999999;
+        );
 
 
       const pb =
         Number(
           b.position
-        ) ||
-        999999;
+        );
+
+
+      const hasPa =
+        Number.isFinite(pa) &&
+        pa > 0;
+
+
+      const hasPb =
+        Number.isFinite(pb) &&
+        pb > 0;
 
 
       if (
+        hasPa &&
+        hasPb &&
         pa !== pb
       ) {
-        return (
-          pa -
-          pb
-        );
+        return pa - pb;
+      }
+
+
+      if (
+        hasPa &&
+        !hasPb
+      ) {
+        return -1;
+      }
+
+
+      if (
+        !hasPa &&
+        hasPb
+      ) {
+        return 1;
       }
 
 
@@ -4406,14 +4326,80 @@ async function livePayload(
       new Date()
         .toISOString(),
 
+    /*
+     * IMPORTANT:
+     *
+     * app.js currently treats active:false as:
+     * "throw all current data away".
+     *
+     * Therefore active means:
+     * "we have the current race data",
+     * NOT "packets arrived in the last 3 minutes".
+     */
     active:
       true,
 
+    data_available:
+      true,
+
+    /*
+     * Real session state is separate.
+     */
+    session_status:
+      sessionStatus,
+
+    is_live:
+      sessionLive,
+
+    collector_connected:
+      snapshot.connected ===
+      true,
+
+    last_packet_at:
+      snapshot.last_packet_at ||
+      null,
+
+    latest_entry_update:
+      latestEntryUpdate
+        ? new Date(
+            latestEntryUpdate
+          ).toISOString()
+        : null,
+
+    team_count:
+      current.length,
+
     current,
 
+    /*
+     * Keep ALL entries available to the frontend/debugging.
+     */
     entries:
       activeEntries
   };
+}
+
+
+// ============================================================
+// OVERVIEW
+// ============================================================
+
+async function overviewPayload(
+  env,
+  rid
+) {
+  const live =
+    await livePayload(
+      env,
+      rid
+    );
+
+
+  /*
+   * Do not invent positions.
+   * livePayload already sorts by Apex position.
+   */
+  return live.current;
 }
 
 
@@ -4447,36 +4433,6 @@ async function stintsPayload(
       apexId,
       team
     }
-  );
-}
-
-
-// ============================================================
-// OVERVIEW
-// ============================================================
-
-async function overviewPayload(
-  env,
-  rid
-) {
-  const live =
-    await livePayload(
-      env,
-      rid
-    );
-
-
-  return live.current.map(
-    (
-      row,
-      index
-    ) => ({
-      ...row,
-
-      position:
-        row.position ||
-        index + 1
-    })
   );
 }
 
@@ -4609,53 +4565,39 @@ async function driversPayload(
       }
 
 
-      validLaps +=
-        valid;
-
-
-      totalLaps +=
-        total;
+      validLaps += valid;
+      totalLaps += total;
 
 
       if (
-        Number.isFinite(
-          avg
-        ) &&
+        Number.isFinite(avg) &&
         valid > 0
       ) {
         weighted +=
-          avg *
-          valid;
+          avg * valid;
 
-        weight +=
-          valid;
+        weight += valid;
       }
 
 
       if (
-        Number.isFinite(
-          bestLap
-        ) &&
+        Number.isFinite(bestLap) &&
         bestLap > 0 &&
         (
           best === null ||
           bestLap < best
         )
       ) {
-        best =
-          bestLap;
+        best = bestLap;
       }
 
 
       if (
-        Number.isFinite(
-          consistency
-        ) &&
+        Number.isFinite(consistency) &&
         valid > 0
       ) {
         consistencySum +=
-          consistency *
-          valid;
+          consistency * valid;
 
         consistencyWeight +=
           valid;
@@ -4783,7 +4725,6 @@ async function teamsPayload(
                 row.valid_laps ||
                 0
               ),
-
             0
           );
 
@@ -4799,7 +4740,6 @@ async function teamsPayload(
                 row.total_laps ||
                 0
               ),
-
             0
           );
 
@@ -4815,7 +4755,6 @@ async function teamsPayload(
                 row.stint_count ||
                 0
               ),
-
             0
           );
 
@@ -4837,7 +4776,6 @@ async function teamsPayload(
                 row.valid_laps ||
                 0
               ),
-
             0
           );
 
@@ -4852,9 +4790,7 @@ async function teamsPayload(
             )
             .filter(
               value =>
-                Number.isFinite(
-                  value
-                ) &&
+                Number.isFinite(value) &&
                 value > 0
             );
 
@@ -4869,9 +4805,7 @@ async function teamsPayload(
             )
             .filter(
               value =>
-                Number.isFinite(
-                  value
-                ) &&
+                Number.isFinite(value) &&
                 value > 0
             );
 
@@ -4932,7 +4866,6 @@ async function teamsPayload(
                     b
                   ) =>
                     a + b,
-
                   0
                 ) /
                 consistencies.length
@@ -4958,94 +4891,97 @@ async function teamsPayload(
 // ============================================================
 
 async function racesPayload(env) {
-  const rows =
-    await sbGetAll(
-      env,
-      "races",
-      {
-        select:
-          "*",
+  try {
+    const rows =
+      await sbGetAll(
+        env,
+        "races",
+        {
+          select:
+            "*",
 
-        order:
-          "id.desc"
+          order:
+            "id.desc"
+        }
+      );
+
+
+    return rows.map(
+      row => {
+
+        const id =
+          row.id ??
+          row.race_id;
+
+
+        const rawDate =
+          row.started_at ??
+          row.start_time ??
+          row.created_at ??
+          row.race_date ??
+          row.date ??
+          null;
+
+
+        let date = "";
+
+
+        if (rawDate) {
+          const parsedDate =
+            new Date(rawDate);
+
+
+          if (
+            !Number.isNaN(
+              parsedDate.getTime()
+            )
+          ) {
+            date =
+              parsedDate
+                .toLocaleDateString(
+                  "en-GB",
+                  {
+                    day:
+                      "2-digit",
+
+                    month:
+                      "2-digit",
+
+                    year:
+                      "numeric",
+
+                    timeZone:
+                      "Europe/Sofia"
+                  }
+                );
+          }
+        }
+
+
+        return {
+          ...row,
+
+          id,
+
+          race_id:
+            id,
+
+          label:
+            row.name ??
+            row.session_name ??
+            row.title ??
+            (
+              date
+                ? `Race ${id} — ${date}`
+                : `Race ${id}`
+            )
+        };
       }
     );
 
-
-  return rows.map(
-    row => {
-
-      const id =
-        row.id ??
-        row.race_id;
-
-
-      const rawDate =
-        row.started_at ??
-        row.start_time ??
-        row.created_at ??
-        row.race_date ??
-        row.date ??
-        null;
-
-
-      let date = "";
-
-
-      if (rawDate) {
-        const parsedDate =
-          new Date(
-            rawDate
-          );
-
-
-        if (
-          !Number.isNaN(
-            parsedDate.getTime()
-          )
-        ) {
-          date =
-            parsedDate
-              .toLocaleDateString(
-                "en-GB",
-                {
-                  day:
-                    "2-digit",
-
-                  month:
-                    "2-digit",
-
-                  year:
-                    "numeric",
-
-                  timeZone:
-                    "Europe/Sofia"
-                }
-              );
-        }
-      }
-
-
-      return {
-        ...row,
-
-        id,
-
-        race_id:
-          id,
-
-        label:
-          row.name ??
-          row.session_name ??
-          row.title ??
-          (
-            date
-              ? `Race ${id} — ${date}`
-              : `Race ${id}`
-          )
-      };
-    }
-  );
+  } catch {
+    return [];
+  }
 }
 
 
@@ -5097,7 +5033,7 @@ async function eventsPayload(
 
 
 // ============================================================
-// EXPORT HELPERS
+// CSV
 // ============================================================
 
 function csvEscape(value) {
@@ -5150,14 +5086,12 @@ async function raceMeta(
 
     return rows[0] ||
       {
-        id:
-          rid
+        id: rid
       };
 
   } catch {
     return {
-      id:
-        rid
+      id: rid
     };
   }
 }
@@ -5194,15 +5128,7 @@ function safeFilename(value) {
 
 
 // ============================================================
-// APEX-STYLE LAP TIME RECORDS CSV
-//
-// Actual format:
-//
-// 44 - LVF
-// Laps,1,2,3,4,5,6,7,8,9,10
-// ,-,54.659,53.475...
-// 10,52.642,...
-// 20,...
+// LAP TIME RECORDS CSV
 // ============================================================
 
 async function buildApexLapTimesCsv(
@@ -5311,7 +5237,6 @@ async function buildApexLapTimesCsv(
           return {
             id,
             teamName,
-
             rows:
               dedupeLapRows(
                 rows
@@ -5404,8 +5329,7 @@ async function buildApexLapTimesCsv(
         start === 1
           ? ""
           : String(
-              start -
-              1
+              start - 1
             );
 
 
@@ -5417,13 +5341,10 @@ async function buildApexLapTimesCsv(
         lap < start + 10;
         lap += 1
       ) {
-
         if (
           lap > maxLap
         ) {
-          values.push(
-            ""
-          );
+          values.push("");
 
         } else if (
           lapMap.has(lap)
@@ -5436,9 +5357,7 @@ async function buildApexLapTimesCsv(
           );
 
         } else {
-          values.push(
-            "-"
-          );
+          values.push("-");
         }
       }
 
@@ -5476,7 +5395,7 @@ async function buildApexLapTimesCsv(
 
 
 // ============================================================
-// PIT STOP REPORT DATA
+// PIT REPORT
 // ============================================================
 
 async function pitReportPayload(
@@ -5598,7 +5517,7 @@ async function pitReportPayload(
 
         out:
           stint.is_live
-            ? "(Live)"
+            ? "(Current)"
             : (
                 stint.out_time ||
                 ""
@@ -5648,7 +5567,7 @@ async function pitReportPayload(
 
 
 // ============================================================
-// PRINTABLE PIT REPORT
+// HTML
 // ============================================================
 
 function escapeHtml(value) {
@@ -5717,7 +5636,6 @@ function buildPitReportHtml(
   </h2>
 
   <table>
-
     <thead>
       <tr>
         <th>#</th>
@@ -5738,7 +5656,6 @@ function buildPitReportHtml(
     <tbody>
       ${rows}
     </tbody>
-
   </table>
 
 </section>`;
@@ -5767,15 +5684,9 @@ ${escapeHtml(report.title)} - Pit stops
 }
 
 body {
-  font-family:
-    Arial,
-    Helvetica,
-    sans-serif;
-
+  font-family: Arial, Helvetica, sans-serif;
   color: #111;
-
   margin: 0;
-
   font-size: 9px;
 }
 
@@ -5829,16 +5740,13 @@ tr:nth-child(even) td {
   position: fixed;
   right: 12px;
   top: 12px;
-
   padding: 8px 12px;
 }
 
 @media print {
-
   .print {
     display: none;
   }
-
 }
 
 </style>
@@ -5854,7 +5762,6 @@ tr:nth-child(even) td {
   Print / Save PDF
 </button>
 
-
 <div class="head">
 
   <h1>
@@ -5866,7 +5773,6 @@ tr:nth-child(even) td {
   </p>
 
 </div>
-
 
 ${
   teamSections ||
@@ -5924,8 +5830,7 @@ export default {
 
 
         return json({
-          ok:
-            true,
+          ok: true,
 
           service:
             "race-engineer",
@@ -6212,8 +6117,7 @@ export default {
 
 
       // --------------------------------------------------------
-      // REQUIRED EXPORT #1
-      // LAP TIME RECORDS CSV
+      // LAP TIME RECORDS
       // --------------------------------------------------------
 
       if (
@@ -6239,8 +6143,7 @@ export default {
 
 
       // --------------------------------------------------------
-      // REQUIRED EXPORT #2
-      // PIT STOPS DATA
+      // PIT REPORT DATA
       // --------------------------------------------------------
 
       if (
@@ -6258,7 +6161,7 @@ export default {
 
 
       // --------------------------------------------------------
-      // PIT STOPS PRINTABLE REPORT
+      // PIT REPORT HTML
       // --------------------------------------------------------
 
       if (
@@ -6284,7 +6187,7 @@ export default {
 
 
       // --------------------------------------------------------
-      // EVENTS / MANUAL EXCLUSIONS
+      // EVENTS
       // --------------------------------------------------------
 
       if (
@@ -6334,9 +6237,7 @@ export default {
 
           if (
             !apexId ||
-            !Number.isFinite(
-              lap
-            ) ||
+            !Number.isFinite(lap) ||
             lap <= 0
           ) {
             return json(
@@ -6360,9 +6261,7 @@ export default {
                 apexId,
 
               lap_number:
-                Math.trunc(
-                  lap
-                ),
+                Math.trunc(lap),
 
               reason:
                 body.reason ||
@@ -6371,9 +6270,6 @@ export default {
           );
 
 
-          /*
-           * Immediately rebuild this kart after exclusion.
-           */
           await persistComputedStintsForApex(
             env,
             rid,
@@ -6385,8 +6281,7 @@ export default {
 
 
           return json({
-            ok:
-              true
+            ok: true
           });
         }
 
@@ -6411,9 +6306,7 @@ export default {
 
           if (
             !apexId ||
-            !Number.isFinite(
-              lap
-            )
+            !Number.isFinite(lap)
           ) {
             return json(
               {
@@ -6452,15 +6345,14 @@ export default {
 
 
           return json({
-            ok:
-              true
+            ok: true
           });
         }
       }
 
 
       // --------------------------------------------------------
-      // STATIC ASSETS
+      // ASSETS
       // --------------------------------------------------------
 
       return env
@@ -6484,7 +6376,6 @@ export default {
             error?.message ||
             String(error)
         },
-
         500
       );
     }
