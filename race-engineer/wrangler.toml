@@ -8,3 +8,16 @@ binding = "ASSETS"
 
 [vars]
 DEFAULT_RACE_ID = "1"
+APEX_WS_URL = "wss://live-data.apex-timing.com:8913/"
+APEX_DETAIL_PORT = "8910"
+
+[[durable_objects.bindings]]
+name = "APEX_COLLECTOR"
+class_name = "ApexCollector"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ApexCollector"]
+
+[triggers]
+crons = ["*/1 * * * *"]
