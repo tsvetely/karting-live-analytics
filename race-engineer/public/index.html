@@ -6,7 +6,12 @@
 
   <meta
     name="viewport"
-    content="width=device-width,initial-scale=1"
+    content="width=device-width, initial-scale=1"
+  >
+
+  <meta
+    name="theme-color"
+    content="#090d12"
   >
 
   <title>Race Engineer</title>
@@ -17,143 +22,1736 @@
   >
 </head>
 
+
 <body>
 
-<header class="header">
+  <!-- =======================================================
+       APP
+       ======================================================= -->
 
-  <div class="brand">
-
-    <div class="mark">
-      RE
-    </div>
-
-    <div class="brandText">
-      <h1>Race Engineer</h1>
-      <span>Live Race Analytics</span>
-    </div>
-
-  </div>
+  <div class="app">
 
 
-  <div class="headerRace">
+    <!-- =====================================================
+         HEADER
+         ===================================================== -->
 
-    <div class="fieldLabel">
-      RACE / SESSION
-    </div>
+    <header class="topbar">
 
-    <div
-      id="raceDropdown"
-      class="dropdown raceDropdown"
-      data-value="live"
-      data-label="Current race"
-    >
+      <div class="brandBlock">
 
-      <div
-        id="raceDropdownTrigger"
-        class="dropdownTrigger raceDropdownTrigger"
-        tabindex="0"
-      >
+        <div class="brandMark">
+          RE
+        </div>
 
-        <span
-          id="raceDropdownStatusDot"
-          class="dropdownStatusDot live"
-        ></span>
+        <div class="brandText">
 
-        <input
-          id="raceDropdownSearch"
-          class="dropdownSearchInput"
-          type="text"
-          value="Current race"
-          autocomplete="off"
-          spellcheck="false"
-          aria-label="Search race or session"
-        >
+          <div class="brandTitle">
+            RACE ENGINEER
+          </div>
 
-        <span
-          id="raceDropdownLabel"
-          class="dropdownStoredLabel"
-        >
-          Current race
-        </span>
+          <div class="brandSubtitle">
+            Endurance Analytics
+          </div>
 
-        <span class="dropdownCaret">
-          ▾
-        </span>
+        </div>
 
       </div>
 
 
-      <div
-        id="raceDropdownMenu"
-        class="dropdownMenu"
-      >
+      <div class="headerCenter">
 
-        <div class="dropdownGroupLabel">
+        <!-- ===============================================
+             RACE / SESSION SELECTOR
+             =============================================== -->
+
+        <div
+          id="raceDropdown"
+          class="dropdown raceDropdown"
+          data-value="live"
+        >
+
+          <button
+            id="raceDropdownTrigger"
+            class="dropdownTrigger"
+            type="button"
+          >
+
+            <span
+              id="raceDropdownStatusDot"
+              class="dropdownStatusDot live"
+            ></span>
+
+            <span class="dropdownTriggerContent">
+
+              <span class="dropdownTriggerCaption">
+                RACE / SESSION
+              </span>
+
+              <span
+                id="raceDropdownLabel"
+                class="dropdownTriggerLabel"
+              >
+                Current race
+              </span>
+
+            </span>
+
+            <span class="dropdownChevron">
+              ▾
+            </span>
+
+          </button>
+
+
+          <div
+            id="raceDropdownMenu"
+            class="dropdownMenu raceDropdownMenu"
+          >
+
+            <div class="dropdownGroupLabel">
+              LIVE
+            </div>
+
+            <button
+              type="button"
+              class="dropdownOption selected"
+              data-value="live"
+            >
+
+              <span class="dropdownStatusDot live"></span>
+
+              <span>
+                Current race
+              </span>
+
+              <span class="dropdownCheck">
+                ✓
+              </span>
+
+            </button>
+
+          </div>
+
+        </div>
+
+
+        <div
+          id="raceModeBadge"
+          class="raceModeBadge live"
+        >
           LIVE
         </div>
 
-        <button
-          type="button"
-          class="dropdownOption selected"
-          data-value="live"
+
+        <div
+          id="raceMeta"
+          class="raceMeta"
         >
-          <span class="dropdownStatusDot live"></span>
-          <span>Current race</span>
-          <span class="dropdownCheck">✓</span>
+          Waiting for timing
+        </div>
+
+      </div>
+
+
+      <div class="headerRight">
+
+        <div
+          id="dataAge"
+          class="dataAge"
+        >
+          Waiting for data
+        </div>
+
+
+        <div class="connectionStatus">
+
+          <span
+            id="liveDot"
+            class="dot bad"
+          ></span>
+
+          <span id="status">
+            CONNECTING
+          </span>
+
+        </div>
+
+
+        <button
+          id="refreshButton"
+          class="iconButton"
+          type="button"
+          title="Refresh"
+        >
+          ↻
         </button>
 
       </div>
 
-    </div>
+    </header>
 
 
-    <span
-      id="raceModeBadge"
-      class="raceModeBadge live"
-    >
-      LIVE
-    </span>
+    <!-- =====================================================
+         NAVIGATION
+         ===================================================== -->
 
-  </div>
+    <nav class="nav">
 
+      <button
+        type="button"
+        class="active"
+        data-view="overview"
+      >
+        OVERVIEW
+      </button>
 
-  <div class="headerMetrics">
+      <button
+        type="button"
+        data-view="stints"
+      >
+        STINTS
 
-    <div class="headerMetric">
-      <span class="headerMetricLabel">
-        SESSION
-      </span>
+        <span
+          id="stintsCount"
+          class="navCount"
+        ></span>
+      </button>
 
-      <strong id="sessionName">
-        Apex Timing
-      </strong>
-    </div>
+      <button
+        type="button"
+        data-view="drivers"
+      >
+        DRIVERS
 
+        <span
+          id="driversCount"
+          class="navCount"
+        ></span>
+      </button>
 
-    <div class="headerMetric">
-      <span class="headerMetricLabel">
-        STATUS
-      </span>
-
-      <strong id="sessionStatus">
-        —
-      </strong>
-    </div>
-
-
-    <div class="headerMetric">
-      <span class="headerMetricLabel">
+      <button
+        type="button"
+        data-view="teams"
+      >
         TEAMS
-      </span>
 
-      <strong id="headerTeamCount">
-        0
-      </strong>
+        <span
+          id="teamsCount"
+          class="navCount"
+        ></span>
+      </button>
+
+      <button
+        type="button"
+        data-view="pits"
+      >
+        PITS
+
+        <span
+          id="pitsCount"
+          class="navCount"
+        ></span>
+      </button>
+
+      <button
+        type="button"
+        data-view="events"
+      >
+        EVENTS
+
+        <span
+          id="eventsCount"
+          class="navCount"
+        ></span>
+      </button>
+
+      <button
+        type="button"
+        data-view="reports"
+      >
+        REPORTS
+      </button>
+
+
+      <div class="navSpacer"></div>
+
+
+      <div
+        id="autoRefreshControl"
+        class="autoRefreshControl"
+      >
+
+        <label class="switchLabel">
+
+          <input
+            id="autoRefresh"
+            type="checkbox"
+            checked
+          >
+
+          <span class="switch"></span>
+
+          <span>
+            AUTO
+          </span>
+
+        </label>
+
+      </div>
+
+    </nav>
+
+
+    <!-- =====================================================
+         FILTER BAR
+         ===================================================== -->
+
+    <section class="filterBar">
+
+      <!-- TEAM -->
+
+      <div
+        id="teamDropdown"
+        class="dropdown filterDropdown"
+        data-value=""
+      >
+
+        <button
+          id="teamDropdownTrigger"
+          class="dropdownTrigger"
+          type="button"
+        >
+
+          <span class="dropdownTriggerContent">
+
+            <span class="dropdownTriggerCaption">
+              TEAM
+            </span>
+
+            <span
+              id="teamDropdownLabel"
+              class="dropdownTriggerLabel"
+            >
+              All teams
+            </span>
+
+          </span>
+
+          <span class="dropdownChevron">
+            ▾
+          </span>
+
+        </button>
+
+
+        <div
+          id="teamDropdownMenu"
+          class="dropdownMenu"
+        >
+
+          <button
+            type="button"
+            class="dropdownOption selected"
+            data-value=""
+          >
+
+            <span></span>
+
+            <span>
+              All teams
+            </span>
+
+            <span class="dropdownCheck">
+              ✓
+            </span>
+
+          </button>
+
+        </div>
+
+      </div>
+
+
+      <!-- DRIVER -->
+
+      <div
+        id="driverDropdown"
+        class="dropdown filterDropdown"
+        data-value=""
+      >
+
+        <button
+          id="driverDropdownTrigger"
+          class="dropdownTrigger"
+          type="button"
+        >
+
+          <span class="dropdownTriggerContent">
+
+            <span class="dropdownTriggerCaption">
+              DRIVER
+            </span>
+
+            <span
+              id="driverDropdownLabel"
+              class="dropdownTriggerLabel"
+            >
+              All drivers
+            </span>
+
+          </span>
+
+          <span class="dropdownChevron">
+            ▾
+          </span>
+
+        </button>
+
+
+        <div
+          id="driverDropdownMenu"
+          class="dropdownMenu"
+        >
+
+          <button
+            type="button"
+            class="dropdownOption selected"
+            data-value=""
+          >
+
+            <span></span>
+
+            <span>
+              All drivers
+            </span>
+
+            <span class="dropdownCheck">
+              ✓
+            </span>
+
+          </button>
+
+        </div>
+
+      </div>
+
+
+      <!-- SEARCH -->
+
+      <div class="searchBox">
+
+        <span class="searchIcon">
+          ⌕
+        </span>
+
+        <input
+          id="search"
+          type="search"
+          placeholder="Search team, driver, kart, lap..."
+          autocomplete="off"
+        >
+
+        <button
+          id="searchClear"
+          class="searchClear"
+          type="button"
+          title="Clear search"
+        >
+          ×
+        </button>
+
+      </div>
+
+
+      <button
+        id="resetFilters"
+        class="secondaryButton"
+        type="button"
+      >
+        RESET
+      </button>
+
+
+      <div class="filterBarSpacer"></div>
+
+
+      <div
+        id="filterSummary"
+        class="filterSummary"
+      >
+        No filters
+      </div>
+
+
+      <div
+        id="filteredCount"
+        class="filteredCount"
+      ></div>
+
+    </section>
+
+
+    <!-- =====================================================
+         MAIN
+         ===================================================== -->
+
+    <main class="main">
+
+
+      <!-- ===================================================
+           OVERVIEW
+           =================================================== -->
+
+      <section
+        id="view-overview"
+        class="view active"
+      >
+
+        <div class="viewHeader">
+
+          <div>
+
+            <div class="viewTitleRow">
+
+              <h1 id="overviewTitle">
+                Current race overview
+              </h1>
+
+              <span
+                id="liveBadge"
+                class="liveBadge live"
+              >
+                LIVE
+              </span>
+
+            </div>
+
+            <p id="overviewSubtitle">
+              Current driver and stint performance updated from live timing.
+            </p>
+
+          </div>
+
+        </div>
+
+
+        <!-- SUMMARY -->
+
+        <div class="summaryGrid">
+
+          <div class="summaryCard">
+
+            <div class="summaryLabel">
+              TEAMS
+            </div>
+
+            <div
+              id="summaryTeams"
+              class="summaryValue"
+            >
+              —
+            </div>
+
+          </div>
+
+
+          <div class="summaryCard">
+
+            <div class="summaryLabel">
+              RACE LAP
+            </div>
+
+            <div
+              id="summaryRaceLap"
+              class="summaryValue"
+            >
+              —
+            </div>
+
+          </div>
+
+
+          <div class="summaryCard">
+
+            <div class="summaryLabel">
+              PIT STOPS
+            </div>
+
+            <div
+              id="summaryPits"
+              class="summaryValue"
+            >
+              —
+            </div>
+
+          </div>
+
+
+          <div class="summaryCard">
+
+            <div class="summaryLabel">
+              BEST LAP
+            </div>
+
+            <div
+              id="summaryBestLap"
+              class="summaryValue"
+            >
+              —
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <div class="tableCard">
+
+          <div class="tableHeader">
+
+            <div>
+              LIVE FIELD
+            </div>
+
+            <div class="tableHeaderRight">
+
+              <span id="teamCount">
+                0
+              </span>
+
+              <span>
+                teams
+              </span>
+
+            </div>
+
+          </div>
+
+
+          <div class="tableWrap">
+
+            <table>
+
+              <thead>
+
+                <tr>
+
+                  <th>POS</th>
+
+                  <th>TEAM</th>
+
+                  <th>DRIVER</th>
+
+                  <th>RACE LAP</th>
+
+                  <th>PITS</th>
+
+                  <th>STINT</th>
+
+                  <th>STINT LAPS</th>
+
+                  <th>VALID</th>
+
+                  <th>LAST</th>
+
+                  <th>AVG</th>
+
+                  <th>BEST</th>
+
+                  <th>BEST LAP</th>
+
+                  <th>WORST</th>
+
+                  <th>WORST LAP</th>
+
+                  <th>CONSISTENCY</th>
+
+                  <th>UPDATED</th>
+
+                </tr>
+
+              </thead>
+
+
+              <tbody id="overviewBody">
+
+                <tr class="empty">
+
+                  <td colspan="16">
+                    Loading race data...
+                  </td>
+
+                </tr>
+
+              </tbody>
+
+            </table>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      <!-- ===================================================
+           STINTS
+           =================================================== -->
+
+      <section
+        id="view-stints"
+        class="view"
+      >
+
+        <div class="viewHeader">
+
+          <div>
+
+            <h1>
+              Stints
+            </h1>
+
+            <p>
+              Every completed and active driver stint with one consistent valid-lap set for average, best, worst and consistency.
+            </p>
+
+          </div>
+
+        </div>
+
+
+        <div class="tableCard">
+
+          <div class="tableHeader">
+
+            <div>
+              STINT ANALYSIS
+            </div>
+
+          </div>
+
+
+          <div class="tableWrap">
+
+            <table>
+
+              <thead>
+
+                <tr>
+
+                  <th>TEAM</th>
+
+                  <th>DRIVER</th>
+
+                  <th>STINT</th>
+
+                  <th>START LAP</th>
+
+                  <th>END LAP</th>
+
+                  <th>TOTAL LAPS</th>
+
+                  <th>VALID LAPS</th>
+
+                  <th>AVERAGE</th>
+
+                  <th>BEST</th>
+
+                  <th>BEST LAP</th>
+
+                  <th>WORST</th>
+
+                  <th>WORST LAP</th>
+
+                  <th>CONSISTENCY</th>
+
+                </tr>
+
+              </thead>
+
+
+              <tbody id="stintsBody">
+
+                <tr class="empty">
+
+                  <td colspan="13">
+                    Open the Stints view to load data.
+                  </td>
+
+                </tr>
+
+              </tbody>
+
+            </table>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      <!-- ===================================================
+           DRIVERS
+           =================================================== -->
+
+      <section
+        id="view-drivers"
+        class="view"
+      >
+
+        <div class="viewHeader">
+
+          <div>
+
+            <h1>
+              Drivers
+            </h1>
+
+            <p>
+              Driver pace, lap volume and consistency across the selected race.
+            </p>
+
+          </div>
+
+        </div>
+
+
+        <div class="tableCard">
+
+          <div class="tableHeader">
+
+            <div>
+              DRIVER ANALYSIS
+            </div>
+
+          </div>
+
+
+          <div class="tableWrap">
+
+            <table>
+
+              <thead>
+
+                <tr>
+
+                  <th>TEAM</th>
+
+                  <th>DRIVER</th>
+
+                  <th>STINTS</th>
+
+                  <th>SHORT STINTS</th>
+
+                  <th>VALID LAPS</th>
+
+                  <th>TOTAL LAPS</th>
+
+                  <th>AVERAGE</th>
+
+                  <th>BEST</th>
+
+                  <th>CONSISTENCY</th>
+
+                </tr>
+
+              </thead>
+
+
+              <tbody id="driversBody">
+
+                <tr class="empty">
+
+                  <td colspan="9">
+                    Open the Drivers view to load data.
+                  </td>
+
+                </tr>
+
+              </tbody>
+
+            </table>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      <!-- ===================================================
+           TEAMS
+           =================================================== -->
+
+      <section
+        id="view-teams"
+        class="view"
+      >
+
+        <div class="viewHeader">
+
+          <div>
+
+            <h1>
+              Teams
+            </h1>
+
+            <p>
+              Team-level race pace, driver spread and consistency.
+            </p>
+
+          </div>
+
+        </div>
+
+
+        <div class="tableCard">
+
+          <div class="tableHeader">
+
+            <div>
+              TEAM ANALYSIS
+            </div>
+
+          </div>
+
+
+          <div class="tableWrap">
+
+            <table>
+
+              <thead>
+
+                <tr>
+
+                  <th>TEAM</th>
+
+                  <th>DRIVERS</th>
+
+                  <th>STINTS</th>
+
+                  <th>VALID LAPS</th>
+
+                  <th>TOTAL LAPS</th>
+
+                  <th>AVERAGE</th>
+
+                  <th>BEST</th>
+
+                  <th>CONSISTENCY</th>
+
+                  <th>DRIVER SPREAD</th>
+
+                </tr>
+
+              </thead>
+
+
+              <tbody id="teamsBody">
+
+                <tr class="empty">
+
+                  <td colspan="9">
+                    Open the Teams view to load data.
+                  </td>
+
+                </tr>
+
+              </tbody>
+
+            </table>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      <!-- ===================================================
+           PITS
+           =================================================== -->
+
+      <section
+        id="view-pits"
+        class="view"
+      >
+
+        <div class="viewHeader">
+
+          <div>
+
+            <h1>
+              Pit Stops
+            </h1>
+
+            <p>
+              Pit-stop boundaries and driver changes from Apex timing.
+            </p>
+
+          </div>
+
+        </div>
+
+
+        <div class="tableCard">
+
+          <div class="tableHeader">
+
+            <div>
+              PIT HISTORY
+            </div>
+
+          </div>
+
+
+          <div class="tableWrap">
+
+            <table>
+
+              <thead>
+
+                <tr>
+
+                  <th>TEAM</th>
+
+                  <th>DRIVER</th>
+
+                  <th>PIT</th>
+
+                  <th>LAP</th>
+
+                  <th>HOUR</th>
+
+                  <th>ON TRACK</th>
+
+                  <th>PIT TIME</th>
+
+                  <th>TOTAL</th>
+
+                </tr>
+
+              </thead>
+
+
+              <tbody id="pitsBody">
+
+                <tr class="empty">
+
+                  <td colspan="8">
+                    Open the Pits view to load data.
+                  </td>
+
+                </tr>
+
+              </tbody>
+
+            </table>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      <!-- ===================================================
+           EVENTS
+           =================================================== -->
+
+      <section
+        id="view-events"
+        class="view"
+      >
+
+        <div class="viewHeader">
+
+          <div>
+
+            <h1>
+              Events & Lap State
+            </h1>
+
+            <p>
+              Manual exclusions and race events that affect analytical lap validity.
+            </p>
+
+          </div>
+
+
+          <button
+            id="manualExclusionOpen"
+            class="primaryButton"
+            type="button"
+          >
+            EXCLUDE LAP
+          </button>
+
+        </div>
+
+
+        <div class="eventLegend">
+
+          <div class="legendItem">
+
+            <span class="legendDot included"></span>
+
+            Included
+
+          </div>
+
+
+          <div class="legendItem">
+
+            <span class="legendDot pit"></span>
+
+            Pit In / Out
+
+          </div>
+
+
+          <div class="legendItem">
+
+            <span class="legendDot disruption"></span>
+
+            Global Disruption
+
+          </div>
+
+
+          <div class="legendItem">
+
+            <span class="legendDot safety"></span>
+
+            Safety Car / Direction Change
+
+          </div>
+
+
+          <div class="legendItem">
+
+            <span class="legendDot manual"></span>
+
+            Manual
+
+          </div>
+
+        </div>
+
+
+        <div class="tableCard">
+
+          <div class="tableHeader">
+
+            <div>
+              EVENT HISTORY
+            </div>
+
+          </div>
+
+
+          <div class="tableWrap">
+
+            <table>
+
+              <thead>
+
+                <tr>
+
+                  <th>TIME</th>
+
+                  <th>TYPE</th>
+
+                  <th>TEAM</th>
+
+                  <th>DRIVER</th>
+
+                  <th>LAP</th>
+
+                  <th>REASON</th>
+
+                  <th>STATUS</th>
+
+                  <th>ACTION</th>
+
+                </tr>
+
+              </thead>
+
+
+              <tbody id="eventsBody">
+
+                <tr class="empty">
+
+                  <td colspan="8">
+                    Open the Events view to load data.
+                  </td>
+
+                </tr>
+
+              </tbody>
+
+            </table>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      <!-- ===================================================
+           REPORTS
+           =================================================== -->
+
+      <section
+        id="view-reports"
+        class="view"
+      >
+
+        <div class="viewHeader">
+
+          <div>
+
+            <h1>
+              Reports
+            </h1>
+
+            <p>
+              Race Engineer analytics and mandatory Apex-style organiser reports.
+            </p>
+
+          </div>
+
+
+          <div class="reportHeaderStatus">
+
+            <span id="reportStatus">
+              Checking reports...
+            </span>
+
+          </div>
+
+        </div>
+
+
+        <div class="reportScope">
+
+          <span class="reportScopeLabel">
+            CURRENT SCOPE
+          </span>
+
+          <span id="reportFilterNote">
+            Report scope: all teams
+          </span>
+
+        </div>
+
+
+        <div class="reportsGrid">
+
+
+          <!-- ===============================================
+               RACE ANALYTICS
+               =============================================== -->
+
+          <article class="reportCard">
+
+            <div class="reportCardTop">
+
+              <div class="reportIcon">
+                RE
+              </div>
+
+              <div class="reportType">
+                ANALYTICS
+              </div>
+
+            </div>
+
+
+            <h3>
+              Race Analytics
+            </h3>
+
+
+            <p>
+              Processed stint, driver, team and pit-stop statistics from Race Engineer.
+            </p>
+
+
+            <div class="reportMeta">
+
+              <span>
+                Processed statistics
+              </span>
+
+              <span>
+                CSV / PDF
+              </span>
+
+            </div>
+
+
+            <div class="reportActions">
+
+              <button
+                id="downloadRaceCsv"
+                class="reportButton"
+                type="button"
+              >
+                CSV
+              </button>
+
+              <button
+                id="downloadRacePdf"
+                class="reportButton"
+                type="button"
+              >
+                PDF
+              </button>
+
+            </div>
+
+          </article>
+
+
+          <!-- ===============================================
+               APEX LAP TIME RECORDS
+               =============================================== -->
+
+          <article class="reportCard mandatory">
+
+            <div class="reportCardTop">
+
+              <div class="reportIcon">
+                A
+              </div>
+
+              <div class="reportType">
+                APEX SOURCE FORMAT
+              </div>
+
+            </div>
+
+
+            <h3>
+              Lap Time Records
+            </h3>
+
+
+            <p>
+              Apex-style raw lap matrix with every recorded race lap, including long pit, transition and safety-car laps.
+            </p>
+
+
+            <div class="reportMeta">
+
+              <span>
+                Raw race laps
+              </span>
+
+              <span>
+                CSV
+              </span>
+
+            </div>
+
+
+            <div class="reportActions">
+
+              <button
+                id="organiserReport1Csv"
+                class="reportButton primary"
+                type="button"
+              >
+                CSV
+              </button>
+
+              <!--
+                Kept for app.js compatibility.
+                app.js hides this because the mandatory
+                Lap Time Records source report is CSV.
+              -->
+
+              <button
+                id="organiserReport1Pdf"
+                class="reportButton"
+                type="button"
+                hidden
+              >
+                PDF
+              </button>
+
+            </div>
+
+          </article>
+
+
+          <!-- ===============================================
+               APEX PIT STOPS
+               =============================================== -->
+
+          <article class="reportCard mandatory">
+
+            <div class="reportCardTop">
+
+              <div class="reportIcon">
+                A
+              </div>
+
+              <div class="reportType">
+                APEX SOURCE FORMAT
+              </div>
+
+            </div>
+
+
+            <h3>
+              Pit Stops
+            </h3>
+
+
+            <p>
+              Apex-style stint and pit-stop report with Lap, Hour, Total, On track, Laps, Driver, Best lap, Avg, Pits and Out.
+            </p>
+
+
+            <div class="reportMeta">
+
+              <span>
+                Pit / stint history
+              </span>
+
+              <span>
+                PDF
+              </span>
+
+            </div>
+
+
+            <div class="reportActions">
+
+              <!--
+                Kept for app.js compatibility.
+                app.js hides this because the mandatory
+                Pit Stops source report is PDF.
+              -->
+
+              <button
+                id="organiserReport2Csv"
+                class="reportButton"
+                type="button"
+                hidden
+              >
+                CSV
+              </button>
+
+
+              <button
+                id="organiserReport2Pdf"
+                class="reportButton primary"
+                type="button"
+              >
+                PDF
+              </button>
+
+            </div>
+
+          </article>
+
+        </div>
+
+
+        <div class="reportNote">
+
+          <strong>
+            Lap Time Records
+          </strong>
+
+          uses the raw recorded laps and does not remove analytical exclusions.
+
+          <strong>
+            Pit Stops PDF
+          </strong>
+
+          opens the printable report; use the browser's
+          <strong>Print / Save PDF</strong>
+          action to save the PDF.
+
+        </div>
+
+      </section>
+
+    </main>
+
+
+    <!-- =====================================================
+         FOOTER / COLLECTOR
+         ===================================================== -->
+
+    <footer class="footer">
+
+      <div class="footerLeft">
+
+        <span class="footerProduct">
+          Race Engineer
+        </span>
+
+        <span class="footerSeparator">
+          ·
+        </span>
+
+        <span>
+          Apex Timing live data
+        </span>
+
+      </div>
+
+
+      <div class="footerRight">
+
+        <span
+          id="collectorStatus"
+          class="collectorStatus"
+        >
+          Collector status...
+        </span>
+
+
+        <button
+          id="collectorStart"
+          class="footerButton"
+          type="button"
+        >
+          START
+        </button>
+
+
+        <button
+          id="collectorReconnect"
+          class="footerButton"
+          type="button"
+        >
+          RECONNECT
+        </button>
+
+      </div>
+
+    </footer>
+
+  </div>
+
+
+  <!-- =======================================================
+       TEAM DETAIL BACKDROP
+       ======================================================= -->
+
+  <div
+    id="detailBackdrop"
+    class="detailBackdrop"
+  ></div>
+
+
+  <!-- =======================================================
+       TEAM DETAIL PANEL
+       ======================================================= -->
+
+  <aside
+    id="detailPanel"
+    class="detailPanel"
+  >
+
+    <div class="detailPanelHeader">
+
+      <div>
+
+        <div
+          id="detailTitle"
+          class="detailTitle"
+        >
+          Team
+        </div>
+
+        <div
+          id="detailSubtitle"
+          class="detailSubtitle"
+        ></div>
+
+      </div>
+
+
+      <button
+        id="detailClose"
+        class="detailClose"
+        type="button"
+        aria-label="Close"
+      >
+        ×
+      </button>
+
+    </div>
+
+
+    <div
+      id="detailBody"
+      class="detailBody"
+    ></div>
+
+  </aside>
+
+
+  <!-- =======================================================
+       MANUAL EXCLUSION BACKDROP
+       ======================================================= -->
+
+  <div
+    id="manualExclusionBackdrop"
+    class="modalBackdrop"
+  ></div>
+
+
+  <!-- =======================================================
+       MANUAL EXCLUSION MODAL
+       ======================================================= -->
+
+  <div
+    id="manualExclusionModal"
+    class="modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="manualExclusionTitle"
+  >
+
+    <div class="modalHeader">
+
+      <div>
+
+        <div
+          id="manualExclusionTitle"
+          class="modalTitle"
+        >
+          Exclude race lap
+        </div>
+
+        <div class="modalSubtitle">
+          Remove a specific race lap from analytical pace statistics.
+        </div>
+
+      </div>
+
+
+      <button
+        id="manualExclusionClose"
+        class="modalClose"
+        type="button"
+        aria-label="Close"
+      >
+        ×
+      </button>
+
+    </div>
+
+
+    <div class="modalBody">
+
+
+      <label class="formField">
+
+        <span class="formLabel">
+          APEX ID
+        </span>
+
+        <input
+          id="manualExclusionApexId"
+          type="text"
+          autocomplete="off"
+          placeholder="Team / kart Apex ID"
+        >
+
+      </label>
+
+
+      <label class="formField">
+
+        <span class="formLabel">
+          RACE LAP
+        </span>
+
+        <input
+          id="manualExclusionLap"
+          type="number"
+          min="1"
+          step="1"
+          autocomplete="off"
+          placeholder="Lap number"
+        >
+
+      </label>
+
+
+      <label class="formField">
+
+        <span class="formLabel">
+          REASON
+        </span>
+
+        <input
+          id="manualExclusionReason"
+          type="text"
+          autocomplete="off"
+          placeholder="Manual exclusion"
+        >
+
+      </label>
+
+
+      <div class="exclusionHelp">
+
+        This changes the analytical valid-lap set only.
+        The raw lap remains stored and remains present in the
+        Lap Time Records report.
+
+      </div>
+
+    </div>
+
+
+    <div class="modalFooter">
+
+      <button
+        id="manualExclusionCancel"
+        class="secondaryButton"
+        type="button"
+      >
+        CANCEL
+      </button>
+
+
+      <button
+        id="manualExclusionSubmit"
+        class="primaryButton"
+        type="button"
+      >
+        Exclude lap
+      </button>
+
     </div>
 
   </div>
 
 
-  <div class="statusbar">
+  <!-- =======================================================
+       JAVASCRIPT
+       ======================================================= -->
 
-   
+  <script
+    src="/app.js"
+    defer
+  ></script>
+
+</body>
+
+</html>
