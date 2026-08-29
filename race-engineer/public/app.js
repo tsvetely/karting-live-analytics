@@ -44,11 +44,12 @@ const esc = value =>
 
 
 // ============================================================
-// HELPERS
+// BASIC HELPERS
 // ============================================================
 
 function number(value) {
-  const n = Number(value);
+  const n =
+    Number(value);
 
   return Number.isFinite(n)
     ? n
@@ -80,9 +81,11 @@ function time(value) {
 }
 
 
-function pick(object, ...keys) {
+function pick(
+  object,
+  ...keys
+) {
   for (const key of keys) {
-
     if (
       object &&
       object[key] !== undefined &&
@@ -97,7 +100,10 @@ function pick(object, ...keys) {
 }
 
 
-function sum(rows, getter) {
+function sum(
+  rows,
+  getter
+) {
   return rows.reduce(
     (total, row) =>
       total +
@@ -122,7 +128,8 @@ function average(values) {
 
   return (
     clean.reduce(
-      (a, b) => a + b,
+      (a, b) =>
+        a + b,
       0
     ) /
     clean.length
@@ -131,18 +138,205 @@ function average(values) {
 
 
 // ============================================================
+// CUSTOM DROPDOWNS
+// ============================================================
+
+function dropdownValue(id) {
+  return (
+    $(id)?.dataset.value ??
+    ""
+  );
+}
+
+
+function setDropdownValue(
+  dropdownId,
+  labelId,
+  menuId,
+  value,
+  label
+) {
+  const dropdown =
+    $(dropdownId);
+
+  const labelNode =
+    $(labelId);
+
+  const menu =
+    $(menuId);
+
+  if (!dropdown) {
+    return;
+  }
+
+  dropdown.dataset.value =
+    value ?? "";
+
+  if (labelNode) {
+    labelNode.textContent =
+      label ?? "";
+  }
+
+  if (menu) {
+    menu
+      .querySelectorAll(
+        ".dropdownOption[data-value]"
+      )
+      .forEach(
+        option => {
+
+          const selected =
+            String(
+              option.dataset.value ?? ""
+            ) ===
+            String(
+              value ?? ""
+            );
+
+          option.classList.toggle(
+            "selected",
+            selected
+          );
+        }
+      );
+  }
+}
+
+
+function closeAllDropdowns(
+  except = null
+) {
+  document
+    .querySelectorAll(
+      ".dropdown.open"
+    )
+    .forEach(
+      dropdown => {
+
+        if (
+          dropdown !== except
+        ) {
+          dropdown.classList.remove(
+            "open"
+          );
+        }
+      }
+    );
+}
+
+
+function initDropdown(
+  dropdownId,
+  triggerId,
+  menuId,
+  onChange
+) {
+  const dropdown =
+    $(dropdownId);
+
+  const trigger =
+    $(triggerId);
+
+  const menu =
+    $(menuId);
+
+  if (
+    !dropdown ||
+    !trigger ||
+    !menu
+  ) {
+    return;
+  }
+
+  trigger.addEventListener(
+    "click",
+    event => {
+
+      event.stopPropagation();
+
+      const shouldOpen =
+        !dropdown.classList.contains(
+          "open"
+        );
+
+      closeAllDropdowns();
+
+      if (shouldOpen) {
+        dropdown.classList.add(
+          "open"
+        );
+      }
+    }
+  );
+
+
+  menu.addEventListener(
+    "click",
+    async event => {
+
+      const option =
+        event.target.closest(
+          ".dropdownOption[data-value]"
+        );
+
+      if (!option) {
+        return;
+      }
+
+      event.stopPropagation();
+
+      dropdown.classList.remove(
+        "open"
+      );
+
+      await onChange(
+        option.dataset.value ?? "",
+        option
+      );
+    }
+  );
+}
+
+
+document.addEventListener(
+  "click",
+  () =>
+    closeAllDropdowns()
+);
+
+
+// ============================================================
 // SELECTED RACE
 // ============================================================
 
 function isLiveRace() {
-  return S.source === "live";
+  return (
+    S.source === "live"
+  );
 }
 
 
 function selectedRaceId() {
-  return isLiveRace()
-    ? null
-    : S.raceId;
+  if (isLiveRace()) {
+    return (
+      S.liveMeta?.active === true
+        ? (
+            S.liveMeta?.race_id ??
+            null
+          )
+        : null
+    );
+  }
+
+  return S.raceId;
+}
+
+
+function liveDataAvailable() {
+  return (
+    !isLiveRace() ||
+    S.liveMeta?.active === true
+  );
 }
 
 
@@ -218,18 +412,17 @@ function updateRaceContext() {
   const badge =
     $("raceModeBadge");
 
-  const auto =
+  const autoControl =
     $("autoRefreshControl");
 
   if (isLiveRace()) {
-
     badge.className =
       "raceModeBadge live";
 
     badge.textContent =
       "LIVE";
 
-    auto.classList.remove(
+    autoControl.classList.remove(
       "hidden"
     );
 
@@ -239,42 +432,39 @@ function updateRaceContext() {
     $("overviewSubtitle").textContent =
       "Current driver and stint performance updated from live timing.";
 
-  } else {
-
-    badge.className =
-      "raceModeBadge history";
-
-    badge.textContent =
-      "HISTORY";
-
-    auto.classList.add(
-      "hidden"
-    );
-
-    const selected =
-      $("raceSelector")
-        .selectedOptions[0];
-
-    const raceName =
-      selected?.textContent ||
-      `Race ${S.raceId}`;
-
-    $("overviewTitle").textContent =
-      raceName;
-
-    $("overviewSubtitle").textContent =
-      "Stored race overview and statistics.";
+    return;
   }
+
+
+  badge.className =
+    "raceModeBadge history";
+
+  badge.textContent =
+    "HISTORY";
+
+  autoControl.classList.add(
+    "hidden"
+  );
+
+  const raceName =
+    $("raceDropdownLabel")
+      ?.textContent ||
+    `Race ${S.raceId}`;
+
+  $("overviewTitle").textContent =
+    raceName;
+
+  $("overviewSubtitle").textContent =
+    "Stored race overview and statistics.";
 }
 
 
 // ============================================================
-// FILTER SOURCE
+// CURRENT VIEW DATA
 // ============================================================
 
 function rowsForCurrentView() {
   switch (S.activeView) {
-
     case "overview":
       return S.overview;
 
@@ -311,58 +501,66 @@ function filterRows(rows) {
       .toLowerCase();
 
   const selectedTeam =
-    $("teamFilter").value;
+    dropdownValue(
+      "teamDropdown"
+    );
 
   const selectedDriver =
-    $("driverFilter").value;
-
-
-  return rows.filter(row => {
-
-    const team =
-      String(
-        row.team_name || ""
-      );
-
-    const driver =
-      String(
-        row.driver_name ||
-        row.current_driver ||
-        ""
-      );
-
-    const searchable =
-      [
-        team,
-        driver,
-        row.apex_id,
-        row.kart,
-        row.kart_number
-      ]
-        .filter(
-          value =>
-            value !== undefined &&
-            value !== null
-        )
-        .join(" ")
-        .toLowerCase();
-
-
-    return (
-      (
-        !selectedTeam ||
-        team === selectedTeam
-      ) &&
-      (
-        !selectedDriver ||
-        driver === selectedDriver
-      ) &&
-      (
-        !search ||
-        searchable.includes(search)
-      )
+    dropdownValue(
+      "driverDropdown"
     );
-  });
+
+
+  return rows.filter(
+    row => {
+
+      const team =
+        String(
+          row.team_name || ""
+        );
+
+      const driver =
+        String(
+          row.driver_name ||
+          row.current_driver ||
+          ""
+        );
+
+      const searchable =
+        [
+          team,
+          driver,
+          row.apex_id,
+          row.kart,
+          row.kart_number
+        ]
+          .filter(
+            value =>
+              value !== undefined &&
+              value !== null
+          )
+          .join(" ")
+          .toLowerCase();
+
+
+      return (
+        (
+          !selectedTeam ||
+          team === selectedTeam
+        ) &&
+        (
+          !selectedDriver ||
+          driver === selectedDriver
+        ) &&
+        (
+          !search ||
+          searchable.includes(
+            search
+          )
+        )
+      );
+    }
+  );
 }
 
 
@@ -370,17 +568,15 @@ function rebuildFilters() {
   const rows =
     rowsForCurrentView();
 
-  const teamSelect =
-    $("teamFilter");
+  const previousTeam =
+    dropdownValue(
+      "teamDropdown"
+    );
 
-  const driverSelect =
-    $("driverFilter");
-
-  const currentTeam =
-    teamSelect.value;
-
-  const currentDriver =
-    driverSelect.value;
+  const previousDriver =
+    dropdownValue(
+      "driverDropdown"
+    );
 
 
   const teams =
@@ -412,58 +608,133 @@ function rebuildFilters() {
       .sort();
 
 
-  teamSelect.innerHTML =
-    '<option value="">All teams</option>' +
+  const teamMenu =
+    $("teamDropdownMenu");
+
+  const driverMenu =
+    $("driverDropdownMenu");
+
+
+  teamMenu.innerHTML = `
+<button
+  type="button"
+  class="dropdownOption"
+  data-value=""
+>
+  <span></span>
+  <span>All teams</span>
+  <span class="dropdownCheck">✓</span>
+</button>
+` +
     teams
       .map(
-        team =>
-          `<option value="${esc(team)}">${esc(team)}</option>`
+        team => `
+<button
+  type="button"
+  class="dropdownOption"
+  data-value="${esc(team)}"
+>
+  <span></span>
+  <span>${esc(team)}</span>
+  <span class="dropdownCheck">✓</span>
+</button>
+`
       )
       .join("");
 
 
-  driverSelect.innerHTML =
-    '<option value="">All drivers</option>' +
+  driverMenu.innerHTML = `
+<button
+  type="button"
+  class="dropdownOption"
+  data-value=""
+>
+  <span></span>
+  <span>All drivers</span>
+  <span class="dropdownCheck">✓</span>
+</button>
+` +
     drivers
       .map(
-        driver =>
-          `<option value="${esc(driver)}">${esc(driver)}</option>`
+        driver => `
+<button
+  type="button"
+  class="dropdownOption"
+  data-value="${esc(driver)}"
+>
+  <span></span>
+  <span>${esc(driver)}</span>
+  <span class="dropdownCheck">✓</span>
+</button>
+`
       )
       .join("");
 
 
-  if (
+  const teamStillValid =
     teams.includes(
-      currentTeam
-    )
-  ) {
-    teamSelect.value =
-      currentTeam;
-  }
+      previousTeam
+    );
 
-
-  if (
+  const driverStillValid =
     drivers.includes(
-      currentDriver
-    )
-  ) {
-    driverSelect.value =
-      currentDriver;
-  }
+      previousDriver
+    );
+
+
+  setDropdownValue(
+    "teamDropdown",
+    "teamDropdownLabel",
+    "teamDropdownMenu",
+    teamStillValid
+      ? previousTeam
+      : "",
+    teamStillValid
+      ? previousTeam
+      : "All teams"
+  );
+
+
+  setDropdownValue(
+    "driverDropdown",
+    "driverDropdownLabel",
+    "driverDropdownMenu",
+    driverStillValid
+      ? previousDriver
+      : "",
+    driverStillValid
+      ? previousDriver
+      : "All drivers"
+  );
 }
 
 
 function resetFilters() {
-  $("teamFilter").value = "";
-  $("driverFilter").value = "";
-  $("search").value = "";
+  setDropdownValue(
+    "teamDropdown",
+    "teamDropdownLabel",
+    "teamDropdownMenu",
+    "",
+    "All teams"
+  );
+
+  setDropdownValue(
+    "driverDropdown",
+    "driverDropdownLabel",
+    "driverDropdownMenu",
+    "",
+    "All drivers"
+  );
+
+  $("search").value =
+    "";
 
   renderActiveView();
 }
 
 
 // ============================================================
-// CLEAR CURRENT RACE DATA
+// CLEAR SELECTED RACE DATA
 // ============================================================
 
 function clearRaceData() {
@@ -474,25 +745,26 @@ function clearRaceData() {
   S.pits = [];
   S.events = [];
 
-  Object.keys(
-    S.loaded
-  ).forEach(
-    key =>
-      S.loaded[key] = false
-  );
+  Object
+    .keys(
+      S.loaded
+    )
+    .forEach(
+      key =>
+        S.loaded[key] = false
+    );
 }
 
 
 // ============================================================
-// RACE LIST
+// RACE / SESSION LIST
 // ============================================================
 
 async function loadRaceList() {
-  const select =
-    $("raceSelector");
+  const menu =
+    $("raceDropdownMenu");
 
   try {
-
     const data =
       await api(
         "/api/races",
@@ -505,51 +777,167 @@ async function loadRaceList() {
       data.rows || [];
 
 
-    select.innerHTML = `
-<option value="live">
-  ● LIVE — Current race
-</option>
-` +
-      races
-        .map(
-          race => {
+    menu.innerHTML = `
+<div class="dropdownGroupLabel">
+  LIVE
+</div>
 
-            const id =
-              race.id ??
-              race.race_id;
-
-            const label =
-              race.name ||
-              race.session_name ||
-              race.title ||
-              race.label ||
-              `Race ${id}`;
-
-            return `
-<option value="race:${esc(id)}">
-  ${esc(label)}
-</option>
+<button
+  type="button"
+  class="dropdownOption"
+  data-value="live"
+>
+  <span class="dropdownStatusDot live"></span>
+  <span>Current race</span>
+  <span class="dropdownCheck">✓</span>
+</button>
 `;
-          }
-        )
-        .join("");
 
+
+    if (races.length) {
+      menu.insertAdjacentHTML(
+        "beforeend",
+        `
+<div class="dropdownDivider"></div>
+
+<div class="dropdownGroupLabel">
+  HISTORY
+</div>
+`
+      );
+
+
+      menu.insertAdjacentHTML(
+        "beforeend",
+        races
+          .map(
+            race => {
+
+              const id =
+                race.id ??
+                race.race_id;
+
+              const label =
+                race.name ||
+                race.session_name ||
+                race.title ||
+                race.label ||
+                `Race ${id}`;
+
+              return `
+<button
+  type="button"
+  class="dropdownOption"
+  data-value="race:${esc(id)}"
+>
+  <span class="dropdownStatusDot history"></span>
+  <span>${esc(label)}</span>
+  <span class="dropdownCheck">✓</span>
+</button>
+`;
+            }
+          )
+          .join("")
+      );
+    }
+
+
+    setDropdownValue(
+      "raceDropdown",
+      "raceDropdownLabel",
+      "raceDropdownMenu",
+      isLiveRace()
+        ? "live"
+        : `race:${S.raceId}`,
+      isLiveRace()
+        ? "Current race"
+        : (
+            races.find(
+              race =>
+                String(
+                  race.id ??
+                  race.race_id
+                ) ===
+                String(S.raceId)
+            )?.name ||
+
+            races.find(
+              race =>
+                String(
+                  race.id ??
+                  race.race_id
+                ) ===
+                String(S.raceId)
+            )?.session_name ||
+
+            races.find(
+              race =>
+                String(
+                  race.id ??
+                  race.race_id
+                ) ===
+                String(S.raceId)
+            )?.title ||
+
+            races.find(
+              race =>
+                String(
+                  race.id ??
+                  race.race_id
+                ) ===
+                String(S.raceId)
+            )?.label ||
+
+            `Race ${S.raceId}`
+          )
+    );
 
   } catch (error) {
+    console.warn(
+      "Historical race list unavailable:",
+      error
+    );
 
-    console.error(error);
 
-    /*
-     * LIVE remains usable even if history list
-     * cannot currently be loaded.
-     */
+    menu.innerHTML = `
+<div class="dropdownGroupLabel">
+  LIVE
+</div>
 
-    select.innerHTML = `
-<option value="live">
-  ● LIVE — Current race
-</option>
+<button
+  type="button"
+  class="dropdownOption selected"
+  data-value="live"
+>
+  <span class="dropdownStatusDot live"></span>
+  <span>Current race</span>
+  <span class="dropdownCheck">✓</span>
+</button>
+
+<div class="dropdownDivider"></div>
+
+<div class="dropdownGroupLabel">
+  HISTORY
+</div>
+
+<div
+  class="dropdownOption"
+  style="cursor:default;opacity:.5"
+>
+  <span></span>
+  <span>Historical races unavailable</span>
+  <span></span>
+</div>
 `;
 
+
+    setDropdownValue(
+      "raceDropdown",
+      "raceDropdownLabel",
+      "raceDropdownMenu",
+      "live",
+      "Current race"
+    );
   }
 }
 
@@ -623,6 +1011,7 @@ function renderOverview() {
 
   $("teamCount").textContent =
     rows.length;
+
 
   $("overviewBody").innerHTML =
     rows
@@ -752,21 +1141,17 @@ function renderOverview() {
 
 `
 <tr class="empty">
-
-<td colspan="12">
-
-  ${
-    isLiveRace()
-      ? (
-          S.liveMeta?.active === false
-            ? "No active live timing session."
-            : "No race data."
-        )
-      : "No stored overview data for this race."
-  }
-
-</td>
-
+  <td colspan="12">
+    ${
+      isLiveRace()
+        ? (
+            S.liveMeta?.active === false
+              ? "No active live timing session."
+              : "No race data."
+          )
+        : "No stored overview data for this race."
+    }
+  </td>
 </tr>
 `;
 }
@@ -782,11 +1167,17 @@ function renderStints() {
       S.stints
     );
 
+
   $("stintsBody").innerHTML =
     rows
       .map(
         row => `
-<tr>
+<tr
+  class="clickableRow"
+  data-detail-type="team"
+  data-team="${esc(row.team_name || "")}"
+  data-apex-id="${esc(row.apex_id || "")}"
+>
 
 <td class="team">
   ${esc(
@@ -819,7 +1210,11 @@ function renderStints() {
 <td>
   ${esc(
     row.end_lap_count ??
-    "LIVE"
+    (
+      isLiveRace()
+        ? "LIVE"
+        : "—"
+    )
   )}
 </td>
 
@@ -898,7 +1293,7 @@ function renderStints() {
 `
 <tr class="empty">
   <td colspan="12">
-    No stint data.
+    No stint data for the selected race.
   </td>
 </tr>
 `;
@@ -915,11 +1310,17 @@ function renderDrivers() {
       S.drivers
     );
 
+
   $("driversBody").innerHTML =
     rows
       .map(
         row => `
-<tr>
+<tr
+  class="clickableRow"
+  data-detail-type="driver"
+  data-team="${esc(row.team_name || "")}"
+  data-driver="${esc(row.driver_name || "")}"
+>
 
 <td class="team">
   ${esc(
@@ -989,7 +1390,7 @@ function renderDrivers() {
 `
 <tr class="empty">
   <td colspan="9">
-    No driver data.
+    No driver data for the selected race.
   </td>
 </tr>
 `;
@@ -1005,25 +1406,17 @@ function buildTeams() {
     new Map();
 
 
-  for (
-    const driver
-    of S.drivers
-  ) {
-
+  for (const driver of S.drivers) {
     const key =
       driver.team_name ||
       `APEX ${driver.apex_id}`;
 
-
-    if (
-      !groups.has(key)
-    ) {
+    if (!groups.has(key)) {
       groups.set(
         key,
         []
       );
     }
-
 
     groups
       .get(key)
@@ -1189,6 +1582,16 @@ function buildTeams() {
               spread
           };
         }
+      )
+      .sort(
+        (a, b) =>
+          String(
+            a.team_name
+          ).localeCompare(
+            String(
+              b.team_name
+            )
+          )
       );
 }
 
@@ -1203,11 +1606,17 @@ function renderTeams() {
       S.teams
     );
 
+
   $("teamsBody").innerHTML =
     rows
       .map(
         row => `
-<tr>
+<tr
+  class="clickableRow"
+  data-detail-type="team"
+  data-team="${esc(row.team_name || "")}"
+  data-apex-id="${esc(row.apex_id || "")}"
+>
 
 <td class="team">
   ${esc(row.team_name)}
@@ -1253,7 +1662,7 @@ function renderTeams() {
 `
 <tr class="empty">
   <td colspan="9">
-    No team data.
+    No team data for the selected race.
   </td>
 </tr>
 `;
@@ -1269,6 +1678,7 @@ function renderPits() {
     filterRows(
       S.pits
     );
+
 
   $("pitsBody").innerHTML =
     rows
@@ -1342,7 +1752,7 @@ function renderPits() {
 `
 <tr class="empty">
   <td colspan="8">
-    No pit data.
+    No pit data for the selected race.
   </td>
 </tr>
 `;
@@ -1358,6 +1768,7 @@ function renderEvents() {
     filterRows(
       S.events
     );
+
 
   $("eventsBody").innerHTML =
     rows
@@ -1427,12 +1838,11 @@ function renderEvents() {
 
 
 // ============================================================
-// ACTIVE VIEW RENDER
+// ACTIVE VIEW
 // ============================================================
 
 function renderActiveView() {
   switch (S.activeView) {
-
     case "overview":
       renderOverview();
       break;
@@ -1461,6 +1871,32 @@ function renderActiveView() {
 
 
 // ============================================================
+// LIVE CONTEXT
+// ============================================================
+
+async function ensureLiveContext() {
+  if (!isLiveRace()) {
+    return;
+  }
+
+  if (S.liveMeta) {
+    return;
+  }
+
+  const data =
+    await api(
+      "/api/live",
+      {
+        raceId: null
+      }
+    );
+
+  S.liveMeta =
+    data;
+}
+
+
+// ============================================================
 // OVERVIEW LOAD
 // ============================================================
 
@@ -1477,49 +1913,30 @@ async function loadOverview(
 
 
   try {
-
     if (isLiveRace()) {
-
       const data =
         await api(
-          "/api/live"
+          "/api/live",
+          {
+            raceId: null
+          }
         );
 
       S.liveMeta =
         data;
 
-      S.overview =
-        data.current || [];
-
-      $("sessionName").textContent =
-        data.session_name ||
-        data.session ||
-        "Apex Timing";
-
-      $("sessionStatus").textContent =
-        data.active === true
-          ? "LIVE"
-          : "NO LIVE SESSION";
-
-      $("headerTeamCount").textContent =
-        S.overview.length;
-
 
       if (
-        data.active === false
+        data.active === true
       ) {
+        S.overview =
+          data.current || [];
 
-        S.overview = [];
+        $("headerTeamCount").textContent =
+          S.overview.length;
 
-        setStatus(
-          true,
-          "NO LIVE SESSION"
-        );
-
-        $("updated").textContent =
-          "No active Apex timing session";
-
-      } else {
+        $("sessionStatus").textContent =
+          "LIVE";
 
         setStatus(
           true,
@@ -1528,15 +1945,32 @@ async function loadOverview(
 
         $("updated").textContent =
           `Updated ${new Date().toLocaleTimeString()}`;
+
+      } else {
+        S.overview = [];
+
+        $("headerTeamCount").textContent =
+          0;
+
+        $("sessionStatus").textContent =
+          "NO LIVE SESSION";
+
+        setStatus(
+          true,
+          "NO LIVE SESSION"
+        );
+
+        $("updated").textContent =
+          "No active Apex timing session";
       }
 
+
+      $("sessionName").textContent =
+        data.session_name ||
+        data.session ||
+        "Apex Timing";
+
     } else {
-
-      /*
-       * Historical overview is built from
-       * stored race statistics.
-       */
-
       await Promise.all([
         loadStints(),
         loadDrivers()
@@ -1544,23 +1978,55 @@ async function loadOverview(
 
       buildTeams();
 
+
+      const latest =
+        new Map();
+
+
+      for (
+        const stint
+        of S.stints
+      ) {
+        const key =
+          String(
+            stint.apex_id ??
+            stint.team_name
+          );
+
+        const previous =
+          latest.get(key);
+
+        const start =
+          Number(
+            stint.start_lap_count ??
+            -1
+          );
+
+        const previousStart =
+          Number(
+            previous?.start_lap_count ??
+            -1
+          );
+
+        if (
+          !previous ||
+          start >= previousStart
+        ) {
+          latest.set(
+            key,
+            stint
+          );
+        }
+      }
+
+
       S.overview =
-        S.teams.map(
-          team => ({
-            ...team,
-            driver_name: null,
-            current_driver: null,
-            updated_at: null
-          })
-        );
+        [...latest.values()];
 
-
-      const selected =
-        $("raceSelector")
-          .selectedOptions[0];
 
       $("sessionName").textContent =
-        selected?.textContent ||
+        $("raceDropdownLabel")
+          ?.textContent ||
         `Race ${S.raceId}`;
 
       $("sessionStatus").textContent =
@@ -1586,18 +2052,10 @@ async function loadOverview(
 
     renderOverview();
 
-
   } catch (error) {
-
-    console.error(error);
-
-    setStatus(
-      false,
-      "ERROR"
+    showLoadError(
+      error
     );
-
-    $("updated").textContent =
-      error.message;
   }
 }
 
@@ -1619,6 +2077,23 @@ async function loadStints(
 
 
   try {
+    if (isLiveRace()) {
+      await ensureLiveContext();
+
+      if (!liveDataAvailable()) {
+        S.stints = [];
+
+        S.loaded.stints =
+          true;
+
+        rebuildFilters();
+
+        renderStints();
+
+        return;
+      }
+    }
+
 
     const data =
       await api(
@@ -1636,7 +2111,6 @@ async function loadStints(
     renderStints();
 
   } catch (error) {
-
     showLoadError(
       error
     );
@@ -1661,6 +2135,27 @@ async function loadDrivers(
 
 
   try {
+    if (isLiveRace()) {
+      await ensureLiveContext();
+
+      if (!liveDataAvailable()) {
+        S.drivers = [];
+        S.teams = [];
+
+        S.loaded.drivers =
+          true;
+
+        S.loaded.teams =
+          true;
+
+        rebuildFilters();
+
+        renderDrivers();
+
+        return;
+      }
+    }
+
 
     const data =
       await api(
@@ -1683,7 +2178,6 @@ async function loadDrivers(
     renderDrivers();
 
   } catch (error) {
-
     showLoadError(
       error
     );
@@ -1735,6 +2229,23 @@ async function loadPits(
 
 
   try {
+    if (isLiveRace()) {
+      await ensureLiveContext();
+
+      if (!liveDataAvailable()) {
+        S.pits = [];
+
+        S.loaded.pits =
+          true;
+
+        rebuildFilters();
+
+        renderPits();
+
+        return;
+      }
+    }
+
 
     const data =
       await api(
@@ -1752,7 +2263,6 @@ async function loadPits(
     renderPits();
 
   } catch (error) {
-
     showLoadError(
       error
     );
@@ -1765,37 +2275,51 @@ async function loadPits(
 // ============================================================
 
 async function loadEvents() {
+  /*
+   * Backend endpoint for race events / exclusions
+   * is still to be connected.
+   */
+
   renderEvents();
 }
 
 
 // ============================================================
-// VIEW LOAD
+// ACTIVE VIEW LOAD
 // ============================================================
 
 async function loadActiveView(
   force = false
 ) {
   switch (S.activeView) {
-
     case "overview":
-      await loadOverview(force);
+      await loadOverview(
+        force
+      );
       break;
 
     case "stints":
-      await loadStints(force);
+      await loadStints(
+        force
+      );
       break;
 
     case "drivers":
-      await loadDrivers(force);
+      await loadDrivers(
+        force
+      );
       break;
 
     case "teams":
-      await loadTeams(force);
+      await loadTeams(
+        force
+      );
       break;
 
     case "pits":
-      await loadPits(force);
+      await loadPits(
+        force
+      );
       break;
 
     case "events":
@@ -1823,76 +2347,165 @@ function showLoadError(error) {
 
 
 // ============================================================
-// RACE SELECTION
+// RACE DROPDOWN
 // ============================================================
 
-$("raceSelector")
-  .addEventListener(
-    "change",
-    async event => {
+initDropdown(
+  "raceDropdown",
+  "raceDropdownTrigger",
+  "raceDropdownMenu",
 
-      const value =
-        event.target.value;
+  async (
+    value,
+    option
+  ) => {
 
-
-      if (value === "live") {
-
-        S.source =
-          "live";
-
-        S.raceId =
-          null;
-
-      } else if (
-        value.startsWith(
-          "race:"
+    const label =
+      option
+        .querySelector(
+          "span:nth-child(2)"
         )
-      ) {
-
-        S.source =
-          "history";
-
-        S.raceId =
-          value.substring(
-            5
-          );
-      }
+        ?.textContent
+        ?.trim() ||
+      "Current race";
 
 
-      clearRaceData();
+    if (value === "live") {
+      S.source =
+        "live";
 
-      resetFilters();
+      S.raceId =
+        null;
 
-      updateRaceContext();
+      S.liveMeta =
+        null;
 
-      await loadActiveView(
-        true
-      );
+      $("raceDropdownStatusDot").className =
+        "dropdownStatusDot live";
+
+    } else if (
+      value.startsWith(
+        "race:"
+      )
+    ) {
+      S.source =
+        "history";
+
+      S.raceId =
+        value.substring(
+          5
+        );
+
+      $("raceDropdownStatusDot").className =
+        "dropdownStatusDot history";
     }
-  );
+
+
+    setDropdownValue(
+      "raceDropdown",
+      "raceDropdownLabel",
+      "raceDropdownMenu",
+      value,
+      label
+    );
+
+
+    clearRaceData();
+
+    resetFilters();
+
+    updateRaceContext();
+
+    await loadActiveView(
+      true
+    );
+  }
+);
 
 
 // ============================================================
-// FILTER EVENTS
+// TEAM DROPDOWN
+// ============================================================
+
+initDropdown(
+  "teamDropdown",
+  "teamDropdownTrigger",
+  "teamDropdownMenu",
+
+  async (
+    value,
+    option
+  ) => {
+
+    const label =
+      option
+        .querySelector(
+          "span:nth-child(2)"
+        )
+        ?.textContent
+        ?.trim() ||
+      "All teams";
+
+
+    setDropdownValue(
+      "teamDropdown",
+      "teamDropdownLabel",
+      "teamDropdownMenu",
+      value,
+      label
+    );
+
+
+    renderActiveView();
+  }
+);
+
+
+// ============================================================
+// DRIVER DROPDOWN
+// ============================================================
+
+initDropdown(
+  "driverDropdown",
+  "driverDropdownTrigger",
+  "driverDropdownMenu",
+
+  async (
+    value,
+    option
+  ) => {
+
+    const label =
+      option
+        .querySelector(
+          "span:nth-child(2)"
+        )
+        ?.textContent
+        ?.trim() ||
+      "All drivers";
+
+
+    setDropdownValue(
+      "driverDropdown",
+      "driverDropdownLabel",
+      "driverDropdownMenu",
+      value,
+      label
+    );
+
+
+    renderActiveView();
+  }
+);
+
+
+// ============================================================
+// SEARCH / FILTERS
 // ============================================================
 
 $("search")
   .addEventListener(
     "input",
-    renderActiveView
-  );
-
-
-$("teamFilter")
-  .addEventListener(
-    "change",
-    renderActiveView
-  );
-
-
-$("driverFilter")
-  .addEventListener(
-    "change",
     renderActiveView
   );
 
@@ -1914,6 +2527,11 @@ $("refresh")
     async () => {
 
       clearRaceData();
+
+      if (isLiveRace()) {
+        S.liveMeta =
+          null;
+      }
 
       await loadActiveView(
         true
@@ -2014,7 +2632,6 @@ function csvValue(value) {
     string.includes('"') ||
     string.includes("\n")
   ) {
-
     return `"${string.replace(
       /"/g,
       '""'
@@ -2030,7 +2647,6 @@ function downloadCsv(
   rows
 ) {
   if (!rows.length) {
-
     alert(
       "No data available for export."
     );
@@ -2180,7 +2796,7 @@ function raceReportRows() {
 
 
 // ============================================================
-// PDF PRINT
+// PDF
 // ============================================================
 
 function printPdf(
@@ -2191,6 +2807,7 @@ function printPdf(
     alert(
       "No data available for PDF."
     );
+
     return;
   }
 
@@ -2283,6 +2900,11 @@ ${esc(title)}
 body {
   font-family: Arial, sans-serif;
   margin: 20px;
+  color: #111;
+}
+
+h1 {
+  font-size: 20px;
 }
 
 table {
@@ -2295,6 +2917,7 @@ th,
 td {
   border: 1px solid #aaa;
   padding: 4px;
+  text-align: left;
 }
 
 th {
@@ -2377,7 +3000,9 @@ $("downloadRacePdf")
   );
 
 
-// Organiser reports require their exact generators.
+// ============================================================
+// ORGANISER REPORTS
+// ============================================================
 
 [
   "organiserReport1Csv",
@@ -2391,6 +3016,10 @@ $("downloadRacePdf")
       const button =
         $(id);
 
+      if (!button) {
+        return;
+      }
+
       button.disabled =
         true;
 
@@ -2401,8 +3030,41 @@ $("downloadRacePdf")
 
 
 // ============================================================
+// MANUAL EXCLUSION
+// ============================================================
+
+$("addManualExclusion")
+  ?.addEventListener(
+    "click",
+    () => {
+
+      alert(
+        "Manual lap exclusion backend is not connected yet."
+      );
+    }
+  );
+
+
+// ============================================================
 // DETAIL DRAWER
 // ============================================================
+
+function openDrawer(
+  title,
+  html
+) {
+  $("detailTitle").textContent =
+    title;
+
+  $("detailContent").innerHTML =
+    html;
+
+  $("detailDrawer")
+    .classList.add(
+      "open"
+    );
+}
+
 
 function closeDrawer() {
   $("detailDrawer")
@@ -2412,6 +3074,62 @@ function closeDrawer() {
 }
 
 
+document.addEventListener(
+  "click",
+  event => {
+
+    const row =
+      event.target.closest(
+        ".clickableRow"
+      );
+
+    if (!row) {
+      return;
+    }
+
+
+    const team =
+      row.dataset.team ||
+      "Team";
+
+
+    if (
+      row.dataset.detailType ===
+      "driver"
+    ) {
+      const driver =
+        row.dataset.driver ||
+        "Driver";
+
+      openDrawer(
+        driver,
+        `
+<p class="drawerSubtitle">
+  ${esc(team)}
+</p>
+
+<p class="muted">
+  Detailed driver analysis will use the selected race dataset.
+</p>
+`
+      );
+
+      return;
+    }
+
+
+    openDrawer(
+      team,
+      `
+<p class="muted">
+  Detailed team analysis will use the selected race dataset.
+</p>
+`
+    );
+  }
+);
+
+
 $("closeDetail")
   .addEventListener(
     "click",
@@ -2419,18 +3137,17 @@ $("closeDetail")
   );
 
 
-document
-  .addEventListener(
-    "keydown",
-    event => {
+document.addEventListener(
+  "keydown",
+  event => {
 
-      if (
-        event.key === "Escape"
-      ) {
-        closeDrawer();
-      }
+    if (
+      event.key === "Escape"
+    ) {
+      closeDrawer();
     }
-  );
+  }
+);
 
 
 // ============================================================
@@ -2439,35 +3156,74 @@ document
 
 S.timer =
   setInterval(
-    () => {
+    async () => {
 
       if (
-        isLiveRace() &&
-        $("auto").checked
+        !isLiveRace() ||
+        !$("auto").checked
       ) {
-
-        /*
-         * Refresh only the selected view.
-         * STINTS/DRIVERS/etc therefore work LIVE too.
-         */
-
-        clearRaceData();
-
-        loadActiveView(
-          true
-        );
+        return;
       }
+
+
+      /*
+       * Refresh ONLY the currently selected live view.
+       *
+       * OVERVIEW → live endpoint
+       * STINTS   → live race stints
+       * DRIVERS  → live race driver stats
+       * TEAMS    → live race teams
+       * PITS     → live race pits
+       */
+
+      clearRaceData();
+
+      S.liveMeta =
+        null;
+
+      await loadActiveView(
+        true
+      );
     },
     1500
   );
 
 
 // ============================================================
-// INITIAL
+// INITIAL STATE
 // ============================================================
+
+setDropdownValue(
+  "raceDropdown",
+  "raceDropdownLabel",
+  "raceDropdownMenu",
+  "live",
+  "Current race"
+);
+
+
+setDropdownValue(
+  "teamDropdown",
+  "teamDropdownLabel",
+  "teamDropdownMenu",
+  "",
+  "All teams"
+);
+
+
+setDropdownValue(
+  "driverDropdown",
+  "driverDropdownLabel",
+  "driverDropdownMenu",
+  "",
+  "All drivers"
+);
+
 
 updateRaceContext();
 
 loadRaceList();
 
-loadOverview(true);
+loadOverview(
+  true
+);
