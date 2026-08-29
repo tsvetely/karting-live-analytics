@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v7-streaming-csv";
+  "2026-08-30-race-datasets-v8-complete-stint-chain";
 
 const PAGE_SIZE = 1000;
 
@@ -545,8 +545,7 @@ function formatLapTime(value) {
   if (
     seconds < 60
   ) {
-    return seconds
-      .toFixed(3);
+    return seconds.toFixed(3);
   }
 
 
@@ -568,9 +567,7 @@ function formatLapTime(value) {
       );
 
 
-  return (
-    `${minutes}:${rest}`
-  );
+  return `${minutes}:${rest}`;
 }
 
 
@@ -1542,13 +1539,12 @@ function filterCurrentField(
 
 
 // ============================================================
-// STINT NORMALIZATION
+// STINT HELPERS
 // ============================================================
 
-function normalizeStintRow(
+function normalizeAnalyticalStint(
   row,
-  teamMap,
-  status
+  teamMap
 ) {
   return {
     race_id:
@@ -1572,11 +1568,6 @@ function normalizeStintRow(
       row.driver_name ||
       null,
 
-    stint_number:
-      number(
-        row.stint_number
-      ),
-
     start_lap_count:
       number(
         row.start_lap_count
@@ -1584,11 +1575,9 @@ function normalizeStintRow(
       0,
 
     end_lap_count:
-      status === "LIVE"
-        ? null
-        : number(
-            row.end_lap_count
-          ),
+      number(
+        row.end_lap_count
+      ),
 
     current_lap_count:
       number(
@@ -1638,305 +1627,467 @@ function normalizeStintRow(
     consistency:
       number(
         row.consistency
-      ),
-
-    pit_hour:
-      row.pit_hour ||
-      null,
-
-    on_track:
-      row.on_track ||
-      null,
-
-    pit_time:
-      row.pit_time ||
-      null,
-
-    total_time:
-      row.total_time ||
-      null,
-
-    is_live:
-      status === "LIVE",
-
-    status
+      )
   };
 }
 
 
 // ============================================================
-// FALLBACK STINTS
+// BUILD COMPLETE STINT CHAIN
+//
+// IMPORTANT:
+//
+// PIT STOPS DEFINE THE STRUCTURE.
+//
+// Example:
+// 0 -> 35 -> 93 -> 104 -> ... -> 639 -> 650
+//
+// completed_stint_stats ONLY enriches these boundaries.
+//
+// A missing analytical row must NEVER remove a real stint.
 // ============================================================
 
-function fallbackStintsFromPits(
+function buildCompleteStintChainForTeam({
+  rid,
+  apexId,
+  teamName,
+  entry,
   pits,
-  entries,
-  teamMap
-) {
-  const entriesById =
-    new Map(
-      entries.map(
-        row => [
-          String(
-            row.apex_id
-          ),
-          row
-        ]
-      )
+  completed,
+  live,
+  teamMap,
+  sessionIsLive
+}) {
+  const id =
+    String(
+      apexId
     );
 
 
-  const grouped =
+  const sortedPits =
+    [...pits]
+      .filter(
+        row =>
+          String(
+            row.apex_id
+          ) === id
+      )
+      .sort(
+        (a, b) =>
+          Number(
+            a.pit_number
+          ) -
+          Number(
+            b.pit_number
+          )
+      );
+
+
+  const analytical =
+    completed
+      .filter(
+        row =>
+          String(
+            row.apex_id
+          ) === id
+      )
+      .map(
+        row =>
+          normalizeAnalyticalStint(
+            row,
+            teamMap
+          )
+      );
+
+
+  const liveRows =
+    live
+      .filter(
+        row =>
+          String(
+            row.apex_id
+          ) === id
+      )
+      .map(
+        row =>
+          normalizeAnalyticalStint(
+            row,
+            teamMap
+          )
+      );
+
+
+  const analyticalByStart =
     new Map();
 
 
   for (
-    const pit
-    of pits
+    const row
+    of analytical
   ) {
-    const id =
-      String(
-        pit.apex_id
-      );
+    analyticalByStart.set(
+      Number(
+        row.start_lap_count
+      ),
+      row
+    );
+  }
 
 
-    if (
-      !grouped.has(id)
-    ) {
-      grouped.set(
-        id,
-        []
-      );
-    }
+  const liveByStart =
+    new Map();
 
 
-    grouped
-      .get(id)
-      .push(pit);
+  for (
+    const row
+    of liveRows
+  ) {
+    liveByStart.set(
+      Number(
+        row.start_lap_count
+      ),
+      row
+    );
   }
 
 
   const result = [];
 
 
+  let previousBoundary =
+    0;
+
+
+  /*
+   * Each pit row marks the END of a stint.
+   */
   for (
-    const [
-      id,
-      teamPits
-    ]
-    of grouped
+    let index = 0;
+    index <
+      sortedPits.length;
+    index++
   ) {
-    teamPits.sort(
-      (a, b) =>
-        Number(
-          a.pit_number
-        ) -
-        Number(
-          b.pit_number
-        )
+    const pit =
+      sortedPits[index];
+
+
+    const endBoundary =
+      Number(
+        pit.pit_lap
+      );
+
+
+    if (
+      !Number.isFinite(
+        endBoundary
+      ) ||
+      endBoundary <=
+        previousBoundary
+    ) {
+      continue;
+    }
+
+
+    const stats =
+      analyticalByStart.get(
+        previousBoundary
+      ) ||
+      liveByStart.get(
+        previousBoundary
+      ) ||
+      null;
+
+
+    const totalLaps =
+      Math.max(
+        0,
+        endBoundary -
+        previousBoundary
+      );
+
+
+    result.push({
+      race_id:
+        rid,
+
+      apex_id:
+        id,
+
+      team_name:
+        resolveTeam(
+          id,
+          teamMap,
+          teamName,
+          pit.team_name,
+          stats?.team_name
+        ),
+
+      /*
+       * Driver recorded against this pit is the driver
+       * whose stint ended here.
+       *
+       * Prefer analytical driver if available.
+       */
+      driver_name:
+        stats?.driver_name ||
+        pit.driver_name ||
+        null,
+
+      stint_number:
+        result.length + 1,
+
+      start_lap_count:
+        previousBoundary,
+
+      end_lap_count:
+        endBoundary,
+
+      current_lap_count:
+        null,
+
+      total_laps:
+        stats?.total_laps > 0
+          ? stats.total_laps
+          : totalLaps,
+
+      valid_laps:
+        stats?.valid_laps ??
+        0,
+
+      avg_lap_time:
+        stats?.avg_lap_time ??
+        null,
+
+      best_lap_time:
+        stats?.best_lap_time ??
+        null,
+
+      best_lap_number:
+        stats?.best_lap_number ??
+        null,
+
+      worst_lap_time:
+        stats?.worst_lap_time ??
+        null,
+
+      worst_lap_number:
+        stats?.worst_lap_number ??
+        null,
+
+      consistency:
+        stats?.consistency ??
+        null,
+
+      pit_hour:
+        pit.pit_hour ||
+        null,
+
+      on_track:
+        pit.on_track ||
+        null,
+
+      pit_time:
+        pit.pit_time ||
+        null,
+
+      total_time:
+        pit.total_time ||
+        null,
+
+      is_live:
+        false,
+
+      status:
+        "COMPLETED",
+
+      statistics_available:
+        !!stats
+    });
+
+
+    previousBoundary =
+      endBoundary;
+  }
+
+
+  /*
+   * FINAL STINT:
+   *
+   * Only exists if the car has completed laps AFTER the
+   * last recorded pit boundary.
+   */
+  const raceLap =
+    Number(
+      entry?.lap_count
     );
 
 
-    let previous =
-      0;
+  if (
+    Number.isFinite(
+      raceLap
+    ) &&
+    raceLap >
+      previousBoundary
+  ) {
+    const stats =
+      analyticalByStart.get(
+        previousBoundary
+      ) ||
+      liveByStart.get(
+        previousBoundary
+      ) ||
+      null;
 
 
-    for (
-      let i = 0;
-      i <
-        teamPits.length;
-      i++
-    ) {
-      const pit =
-        teamPits[i];
+    const liveStatus =
+      sessionIsLive === true;
 
 
-      const end =
-        Number(
-          pit.pit_lap
+    result.push({
+      race_id:
+        rid,
+
+      apex_id:
+        id,
+
+      team_name:
+        resolveTeam(
+          id,
+          teamMap,
+          teamName,
+          entry?.team_name,
+          stats?.team_name
+        ),
+
+      driver_name:
+        stats?.driver_name ||
+        entry?.current_driver ||
+        null,
+
+      stint_number:
+        result.length + 1,
+
+      start_lap_count:
+        previousBoundary,
+
+      /*
+       * IMPORTANT:
+       *
+       * Once the session is finished, the final race lap
+       * becomes the real END boundary.
+       */
+      end_lap_count:
+        liveStatus
+          ? null
+          : raceLap,
+
+      current_lap_count:
+        raceLap,
+
+      total_laps:
+        stats?.total_laps > 0
+          ? stats.total_laps
+          : Math.max(
+              0,
+              raceLap -
+              previousBoundary
+            ),
+
+      valid_laps:
+        stats?.valid_laps ??
+        0,
+
+      avg_lap_time:
+        stats?.avg_lap_time ??
+        null,
+
+      best_lap_time:
+        stats?.best_lap_time ??
+        null,
+
+      best_lap_number:
+        stats?.best_lap_number ??
+        null,
+
+      worst_lap_time:
+        stats?.worst_lap_time ??
+        null,
+
+      worst_lap_number:
+        stats?.worst_lap_number ??
+        null,
+
+      consistency:
+        stats?.consistency ??
+        null,
+
+      pit_hour:
+        null,
+
+      on_track:
+        null,
+
+      pit_time:
+        null,
+
+      total_time:
+        null,
+
+      is_live:
+        liveStatus,
+
+      status:
+        liveStatus
+          ? "LIVE"
+          : "COMPLETED",
+
+      statistics_available:
+        !!stats
+    });
+  }
+
+
+  /*
+   * EDGE CASE:
+   *
+   * No pit data at all.
+   * We still preserve analytical rows if they exist.
+   */
+  if (
+    result.length === 0 &&
+    analytical.length > 0
+  ) {
+    const sorted =
+      [...analytical]
+        .sort(
+          (a, b) =>
+            Number(
+              a.start_lap_count
+            ) -
+            Number(
+              b.start_lap_count
+            )
         );
 
 
-      if (
-        !Number.isFinite(end) ||
-        end <= previous
-      ) {
-        continue;
-      }
-
-
+    for (
+      const row
+      of sorted
+    ) {
       result.push({
-        race_id:
-          Number(
-            pit.race_id
-          ),
-
-        apex_id:
-          id,
-
-        team_name:
-          resolveTeam(
-            id,
-            teamMap,
-            pit.team_name
-          ),
-
-        driver_name:
-          pit.driver_name ||
-          null,
+        ...row,
 
         stint_number:
-          i + 1,
-
-        start_lap_count:
-          previous,
-
-        end_lap_count:
-          end,
-
-        current_lap_count:
-          null,
-
-        total_laps:
-          Math.max(
-            0,
-            end -
-            previous
-          ),
-
-        valid_laps:
-          0,
-
-        avg_lap_time:
-          null,
-
-        best_lap_time:
-          null,
-
-        best_lap_number:
-          null,
-
-        worst_lap_time:
-          null,
-
-        worst_lap_number:
-          null,
-
-        consistency:
-          null,
-
-        pit_hour:
-          pit.pit_hour ||
-          null,
-
-        on_track:
-          pit.on_track ||
-          null,
-
-        pit_time:
-          pit.pit_time ||
-          null,
-
-        total_time:
-          pit.total_time ||
-          null,
+          result.length + 1,
 
         is_live:
           false,
 
         status:
-          "COMPLETED"
-      });
+          "COMPLETED",
 
-
-      previous =
-        end;
-    }
-
-
-    const entry =
-      entriesById.get(id);
-
-
-    const currentLap =
-      Number(
-        entry?.lap_count
-      );
-
-
-    if (
-      Number.isFinite(
-        currentLap
-      ) &&
-      currentLap >
-        previous
-    ) {
-      result.push({
-        race_id:
-          Number(
-            entry.race_id
-          ),
-
-        apex_id:
-          id,
-
-        team_name:
-          resolveTeam(
-            id,
-            teamMap,
-            entry.team_name
-          ),
-
-        driver_name:
-          entry.current_driver ||
-          null,
-
-        stint_number:
-          teamPits.length +
-          1,
-
-        start_lap_count:
-          previous,
-
-        end_lap_count:
-          null,
-
-        current_lap_count:
-          currentLap,
-
-        total_laps:
-          Math.max(
-            0,
-            currentLap -
-            previous
-          ),
-
-        valid_laps:
-          0,
-
-        avg_lap_time:
-          null,
-
-        best_lap_time:
-          null,
-
-        best_lap_number:
-          null,
-
-        worst_lap_time:
-          null,
-
-        worst_lap_number:
-          null,
-
-        consistency:
-          null,
-
-        is_live:
-          true,
-
-        status:
-          "LIVE"
+        statistics_available:
+          true
       });
     }
   }
@@ -2041,163 +2192,89 @@ async function stintsPayload(
     );
 
 
-  const rows = [];
-
-  const completedKeys =
-    new Set();
-
-  const stintCounter =
-    new Map();
-
-
-  for (
-    const row
-    of completed
-  ) {
-    const id =
-      String(
-        row.apex_id
-      );
-
-
-    const start =
-      Number(
-        row.start_lap_count ??
-        0
-      );
-
-
-    const normalized =
-      normalizeStintRow(
-        row,
-        teamMap,
-        "COMPLETED"
-      );
-
-
-    const nextStint =
-      (
-        stintCounter.get(id) ||
-        0
-      ) + 1;
-
-
-    if (
-      !normalized.stint_number
-    ) {
-      normalized.stint_number =
-        nextStint;
-    }
-
-
-    stintCounter.set(
-      id,
-      Math.max(
-        nextStint,
-        Number(
-          normalized.stint_number
-        ) ||
-        0
-      )
-    );
-
-
-    completedKeys.add(
-      `${id}:${start}`
-    );
-
-
-    rows.push(
-      normalized
-    );
-  }
-
-
-  for (
-    const row
-    of live
-  ) {
-    const id =
-      String(
-        row.apex_id
-      );
-
-
-    const start =
-      Number(
-        row.start_lap_count ??
-        0
-      );
-
-
-    if (
-      completedKeys.has(
-        `${id}:${start}`
-      )
-    ) {
-      continue;
-    }
-
-
-    const normalized =
-      normalizeStintRow(
-        row,
-        teamMap,
-        "LIVE"
-      );
-
-
-    normalized.stint_number =
-      (
-        stintCounter.get(id) ||
-        0
-      ) + 1;
-
-
-    stintCounter.set(
-      id,
-      normalized.stint_number
-    );
-
-
-    rows.push(
-      normalized
-    );
-  }
-
-
-  const idsWithStints =
-    new Set(
-      rows.map(
-        row =>
+  const entryMap =
+    new Map(
+      entries.map(
+        row => [
           String(
             row.apex_id
-          )
+          ),
+          row
+        ]
       )
     );
 
 
-  const fallback =
-    fallbackStintsFromPits(
-      pits,
-      entries,
-      teamMap
+  /*
+   * Determine whether the session is ACTUALLY still live.
+   *
+   * A stale row in live_stint_stats is NOT enough to call
+   * anything LIVE.
+   */
+  const lastPacket =
+    Date.parse(
+      realSnapshot
+        ?.last_packet_at ||
+      ""
     );
+
+
+  const sessionIsLive =
+    Number.isFinite(
+      lastPacket
+    ) &&
+    (
+      Date.now() -
+      lastPacket
+    ) <
+      180000;
+
+
+  const rows = [];
 
 
   for (
-    const row
-    of fallback
+    const apexId
+    of fieldIds
   ) {
-    if (
-      !idsWithStints.has(
-        String(
-          row.apex_id
-        )
-      )
-    ) {
-      rows.push(row);
-    }
+    const id =
+      String(
+        apexId
+      );
+
+
+    const entry =
+      entryMap.get(id) ||
+      null;
+
+
+    const teamName =
+      resolveTeam(
+        id,
+        teamMap,
+        entry?.team_name
+      );
+
+
+    const teamRows =
+      buildCompleteStintChainForTeam({
+        rid,
+        apexId:
+          id,
+
+        teamName,
+        entry,
+        pits,
+        completed,
+        live,
+        teamMap,
+        sessionIsLive
+      });
+
+
+    rows.push(
+      ...teamRows
+    );
   }
 
 
@@ -2235,15 +2312,13 @@ async function stintsPayload(
 
 
       if (
-        Number.isFinite(pa) &&
-        !Number.isFinite(pb)
+        Number.isFinite(pa)
       ) {
         return -1;
       }
 
 
       if (
-        !Number.isFinite(pa) &&
         Number.isFinite(pb)
       ) {
         return 1;
@@ -3467,14 +3542,6 @@ function safeFilename(value) {
 }
 
 
-/*
- * PostgREST IN syntax:
- *
- *   apex_id=in.(1,2,3)
- *
- * Our Apex IDs are numeric strings, so no quote escaping is
- * required here.
- */
 function postgrestInNumbers(values) {
   const clean =
     [
@@ -3508,15 +3575,6 @@ function postgrestInNumbers(values) {
 
 // ============================================================
 // STREAMING LAP CSV
-//
-// CRITICAL FIX FOR ERROR 1102:
-//
-// - does NOT call sbGetAll() for the entire lap table
-// - does NOT create a 48k-row array
-// - does NOT create a giant CSV string
-// - Supabase filters by current 72 Apex IDs BEFORE returning data
-// - only one page is held in memory at a time
-// - each team is written directly into the response stream
 // ============================================================
 
 async function createLapRecordsCsvResponse(
@@ -3606,29 +3664,6 @@ async function createLapRecordsCsvResponse(
   );
 
 
-  /*
-   * Query-side field filter.
-   *
-   * This is what prevents old historical records sharing
-   * race_id=1 from even reaching the Worker.
-   */
-  const idFilter =
-    postgrestInNumbers(
-      orderedIds
-    );
-
-
-  if (!idFilter) {
-    return json(
-      {
-        error:
-          "The Apex field contains no valid numeric Apex IDs."
-      },
-      409
-    );
-  }
-
-
   const encoder =
     new TextEncoder();
 
@@ -3649,10 +3684,6 @@ async function createLapRecordsCsvResponse(
 
         try {
 
-          /*
-           * UTF-8 BOM, useful when the CSV is opened directly
-           * with Excel.
-           */
           write("\uFEFF");
 
 
@@ -3675,13 +3706,6 @@ async function createLapRecordsCsvResponse(
           write("\r\n");
 
 
-          /*
-           * We export team-by-team.
-           *
-           * This is intentional: a single team has only ~667
-           * rows, so every request stays small and we never hold
-           * the entire 72-team race in memory.
-           */
           for (
             const apexId
             of orderedIds
@@ -3699,17 +3723,6 @@ async function createLapRecordsCsvResponse(
             );
 
 
-            /*
-             * This is the RAW race-lap file.
-             *
-             * We do NOT remove:
-             * - pit laps
-             * - transition laps
-             * - safety-car laps
-             * - slow laps
-             *
-             * Every recorded lap remains present.
-             */
             write(
               "Lap,Time\r\n"
             );
@@ -3813,10 +3826,6 @@ async function createLapRecordsCsvResponse(
           );
 
 
-          /*
-           * If the HTTP response has already started, the only
-           * safe action is to fail the stream.
-           */
           controller.error(
             error
           );
