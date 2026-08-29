@@ -1,35 +1,25 @@
 function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
+  return new Response(
+    JSON.stringify(data),
+    {
+      status,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store"
+      }
     }
-  });
+  );
 }
 
-function defaultRaceId(env) {
-  const value = Number(env.DEFAULT_RACE_ID || 1);
+function raceId(env) {
+  const n = Number(env.DEFAULT_RACE_ID || 1);
 
-  return Number.isFinite(value) && value > 0
-    ? Math.trunc(value)
+  return Number.isFinite(n) && n > 0
+    ? Math.trunc(n)
     : 1;
 }
 
-function requestedRaceId(url, env) {
-  const raw =
-    url.searchParams.get("race_id") ||
-    env.DEFAULT_RACE_ID ||
-    "1";
-
-  const value = Number(raw);
-
-  return Number.isFinite(value) && value > 0
-    ? Math.trunc(value)
-    : 1;
-}
-
-function supabaseHeaders(env, extra = {}) {
+function sbHeaders(env, extra = {}) {
   if (!env.SUPABASE_URL || !env.SUPABASE_KEY) {
     throw new Error(
       "Missing SUPABASE_URL or SUPABASE_KEY"
@@ -49,15 +39,13 @@ async function sbGet(
   table,
   params = {}
 ) {
-  const url = new URL(
-    `/rest/v1/${table}`,
-    env.SUPABASE_URL
-  );
+  const url =
+    new URL(
+      `/rest/v1/${table}`,
+      env.SUPABASE_URL
+    );
 
-  for (
-    const [key, value]
-    of Object.entries(params)
-  ) {
+  for (const [key, value] of Object.entries(params)) {
     if (
       value !== undefined &&
       value !== null &&
@@ -75,11 +63,10 @@ async function sbGet(
       url,
       {
         headers:
-          supabaseHeaders(
+          sbHeaders(
             env,
             {
-              accept:
-                "application/json"
+              accept: "application/json"
             }
           )
       }
@@ -87,9 +74,7 @@ async function sbGet(
 
   if (!response.ok) {
     throw new Error(
-      `Supabase GET ${table}: ` +
-      `${response.status} ` +
-      `${await response.text()}`
+      `Supabase GET ${table}: ${response.status} ${await response.text()}`
     );
   }
 
@@ -110,20 +95,11 @@ async function sbWrite(
       env.SUPABASE_URL
     );
 
-  for (
-    const [key, value]
-    of Object.entries(params)
-  ) {
-    if (
-      value !== undefined &&
-      value !== null &&
-      value !== ""
-    ) {
-      url.searchParams.set(
-        key,
-        value
-      );
-    }
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(
+      key,
+      value
+    );
   }
 
   const response =
@@ -131,16 +107,13 @@ async function sbWrite(
       url,
       {
         method,
-
         headers:
-          supabaseHeaders(
+          sbHeaders(
             env,
             {
-              Prefer:
-                prefer
+              Prefer: prefer
             }
           ),
-
         body:
           body === undefined
             ? undefined
@@ -150,9 +123,7 @@ async function sbWrite(
 
   if (!response.ok) {
     throw new Error(
-      `Supabase ${method} ${table}: ` +
-      `${response.status} ` +
-      `${await response.text()}`
+      `Supabase ${method} ${table}: ${response.status} ${await response.text()}`
     );
   }
 }
@@ -183,8 +154,7 @@ const sbUpsert = (
     "POST",
     body,
     {
-      on_conflict:
-        conflict
+      on_conflict: conflict
     },
     "resolution=merge-duplicates,return=minimal,missing=default"
   );
@@ -218,138 +188,25 @@ const sbDelete = (
     "return=minimal"
   );
 
-function parseProtocolLine(line) {
-  const parts =
-    String(line || "")
-      .split("|");
 
-  return {
-    id:
-      parts[0] || "",
-
-    cls:
-      parts[1] || "",
-
-    value:
-      parts
-        .slice(2)
-        .join("|")
-  };
-}
-
-function parseRowId(id) {
+function parseApexLine(line) {
   const match =
-    /^r(\d+)(?:c(\d+))?$/
-      .exec(id);
+    line.match(
+      /^r(\d+)(?:c(\d+))?\|([^|]+)\|(.*)$/
+    );
 
   if (!match) {
     return null;
   }
 
   return {
-    apexId:
-      match[1],
-
-    column:
-      match[2] || null
+    apexId: match[1],
+    column: match[2] || null,
+    field: match[3],
+    value: match[4] || ""
   };
 }
 
-function parseGridData(html) {
-  const source =
-    String(html || "");
-
-  const positions =
-    new Map();
-
-  const columnTypes =
-    new Map();
-
-  const cellRegex =
-    /<td\b[^>]*>/gi;
-
-  let cellMatch;
-
-  while (
-    (
-      cellMatch =
-        cellRegex.exec(source)
-    ) !== null
-  ) {
-    const tag =
-      cellMatch[0];
-
-    const idMatch =
-      /data-id=["'](c\d+)["']/i
-        .exec(tag);
-
-    const typeMatch =
-      /data-type=["']([^"']+)["']/i
-        .exec(tag);
-
-    if (
-      idMatch &&
-      typeMatch
-    ) {
-      columnTypes.set(
-        idMatch[1],
-        typeMatch[1]
-      );
-    }
-  }
-
-  const rowRegex =
-    /<tr\b[^>]*>/gi;
-
-  let rowMatch;
-
-  while (
-    (
-      rowMatch =
-        rowRegex.exec(source)
-    ) !== null
-  ) {
-    const tag =
-      rowMatch[0];
-
-    const idMatch =
-      /data-id=["']r(\d+)["']/i
-        .exec(tag);
-
-    const positionMatch =
-      /data-pos=["'](\d+)["']/i
-        .exec(tag);
-
-    if (
-      !idMatch ||
-      !positionMatch
-    ) {
-      continue;
-    }
-
-    const position =
-      Number(
-        positionMatch[1]
-      );
-
-    if (
-      !Number.isFinite(position) ||
-      position <= 0
-    ) {
-      continue;
-    }
-
-    positions.set(
-      String(idMatch[1]),
-      position
-    );
-  }
-
-  return {
-    positions,
-    columnTypes
-  };
-}
 
 function parseLapTime(value) {
   if (!value) {
@@ -357,51 +214,36 @@ function parseLapTime(value) {
   }
 
   if (value.includes(":")) {
-    const parts =
+    const [minutes, seconds] =
       value.split(":");
 
-    if (
-      parts.length !== 2
-    ) {
-      return null;
-    }
+    const result =
+      Number(minutes) * 60 +
+      Number(seconds);
 
-    const minutes =
-      Number(parts[0]);
-
-    const seconds =
-      Number(parts[1]);
-
-    return (
-      Number.isFinite(minutes) &&
-      Number.isFinite(seconds)
-    )
-      ? minutes * 60 + seconds
+    return Number.isFinite(result)
+      ? result
       : null;
   }
 
-  const parsed =
+  const result =
     Number(value);
 
-  return Number.isFinite(parsed)
-    ? parsed
+  return Number.isFinite(result)
+    ? result
     : null;
 }
 
-function msToTime(ms) {
-  const value =
-    Number(ms);
 
-  if (
-    !Number.isFinite(value)
-  ) {
+function msToTime(ms) {
+  ms = Number(ms);
+
+  if (!Number.isFinite(ms)) {
     return null;
   }
 
   const totalSeconds =
-    Math.floor(
-      value / 1000
-    );
+    Math.floor(ms / 1000);
 
   const hours =
     Math.floor(
@@ -410,16 +252,11 @@ function msToTime(ms) {
 
   const minutes =
     Math.floor(
-      (
-        totalSeconds %
-        3600
-      ) /
-      60
+      (totalSeconds % 3600) / 60
     );
 
   const seconds =
-    totalSeconds %
-    60;
+    totalSeconds % 60;
 
   return (
     `${String(hours).padStart(2, "0")}:` +
@@ -428,41 +265,41 @@ function msToTime(ms) {
   );
 }
 
-function msToPitTime(ms) {
-  const value =
-    Number(ms);
 
-  if (
-    !Number.isFinite(value)
-  ) {
+function msToPitTime(ms) {
+  ms = Number(ms);
+
+  if (!Number.isFinite(ms)) {
     return null;
   }
 
+  const totalSeconds =
+    Math.floor(ms / 1000);
+
   const minutes =
     Math.floor(
-      value / 60000
+      totalSeconds / 60
     );
 
   const seconds =
-    Math.floor(
-      (
-        value %
-        60000
-      ) /
-      1000
+    String(
+      totalSeconds % 60
+    ).padStart(
+      2,
+      "0"
     );
 
-  const millis =
-    Math.floor(
-      value % 1000
+  const milliseconds =
+    String(
+      ms % 1000
+    ).padStart(
+      3,
+      "0"
     );
 
-  return (
-    `${minutes}:` +
-    `${String(seconds).padStart(2, "0")}.` +
-    `${String(millis).padStart(3, "0")}`
-  );
+  return `${minutes}:${seconds}.${milliseconds}`;
 }
+
 
 function parseDrivers(raw) {
   const drivers =
@@ -474,12 +311,7 @@ function parseDrivers(raw) {
   let match;
 
   while (
-    (
-      match =
-        regex.exec(
-          String(raw || "")
-        )
-    ) !== null
+    (match = regex.exec(raw)) !== null
   ) {
     drivers.set(
       Number(match[1]),
@@ -490,294 +322,163 @@ function parseDrivers(raw) {
   return drivers;
 }
 
+
 function parseLapRows(
   raw,
-  raceId
+  currentRaceId
 ) {
-  const rows = [];
+  return raw
+    .split("\n")
+    .map(
+      line =>
+        line.trim()
+    )
+    .map(
+      line => {
+        const match =
+          line.match(
+            /^D(\d+)\.L0*(\d+)#(.+)$/
+          );
 
-  for (
-    const rawLine
-    of String(raw || "")
-      .split("\n")
-  ) {
-    const line =
-      rawLine.trim();
+        if (!match) {
+          return null;
+        }
 
-    const match =
-      /^D(\d+)\.L0*(\d+)#(.+)$/
-        .exec(line);
+        const parts =
+          match[3].split("|");
 
-    if (!match) {
-      continue;
-    }
+        const lapTimeMs =
+          Number(parts[3]);
 
-    const parts =
-      match[3]
-        .split("|");
+        if (
+          !Number.isFinite(
+            lapTimeMs
+          )
+        ) {
+          return null;
+        }
 
-    const milliseconds =
-      Number(parts[3]);
+        return {
+          race_id:
+            currentRaceId,
 
-    if (
-      !Number.isFinite(
-        milliseconds
-      ) ||
-      milliseconds <= 0
-    ) {
-      continue;
-    }
+          apex_id:
+            String(match[1]),
 
-    rows.push({
-      race_id:
-        raceId,
+          lap_number:
+            Number(match[2]),
 
-      apex_id:
-        String(match[1]),
+          lap_time:
+            Number(
+              (
+                lapTimeMs /
+                1000
+              ).toFixed(3)
+            ),
 
-      lap_number:
-        Number(match[2]),
-
-      lap_time:
-        Number(
-          (
-            milliseconds /
-            1000
-          ).toFixed(3)
-        ),
-
-      received_at:
-        new Date()
-          .toISOString()
-    });
-  }
-
-  return rows;
+          received_at:
+            new Date()
+              .toISOString()
+        };
+      }
+    )
+    .filter(Boolean);
 }
 
-function parsePitRows(
+
+function parsePits(
   raw,
   teamName,
-  raceId
+  currentRaceId
 ) {
   const drivers =
     parseDrivers(raw);
 
-  const rows = [];
+  return raw
+    .split("\n")
+    .map(
+      line =>
+        line.trim()
+    )
+    .map(
+      line => {
+        const match =
+          line.match(
+            /^D(\d+)\.P\d+#(.+)$/
+          );
 
-  for (
-    const rawLine
-    of String(raw || "")
-      .split("\n")
-  ) {
-    const line =
-      rawLine.trim();
+        if (!match) {
+          return null;
+        }
 
-    const match =
-      /^D(\d+)\.P\d+#(.+)$/
-        .exec(line);
+        const parts =
+          match[2].split("|");
 
-    if (!match) {
-      continue;
-    }
+        return {
+          race_id:
+            currentRaceId,
 
-    const parts =
-      match[2]
-        .split("|");
+          apex_id:
+            Number(match[1]),
 
-    const pitNumber =
-      Number(parts[0]);
+          team_name:
+            teamName,
 
-    const pitLap =
-      Number(parts[1]);
+          pit_number:
+            Number(parts[0]),
 
-    if (
-      !Number.isFinite(
-        pitNumber
-      ) ||
-      !Number.isFinite(
-        pitLap
-      )
-    ) {
-      continue;
-    }
+          pit_lap:
+            Number(parts[1]),
 
-    rows.push({
-      race_id:
-        raceId,
+          pit_hour:
+            msToTime(
+              parts[2]
+            ),
 
-      apex_id:
-        Number(match[1]),
+          on_track:
+            msToTime(
+              parts[5]
+            ),
 
-      team_name:
-        teamName || null,
+          driver_name:
+            drivers.get(
+              Number(parts[7])
+            ) || null,
 
-      pit_number:
-        pitNumber,
+          total_time:
+            msToTime(
+              parts[8]
+            ),
 
-      pit_lap:
-        pitLap,
+          pit_time:
+            msToPitTime(
+              parts[4]
+            ),
 
-      pit_hour:
-        msToTime(
-          parts[2]
-        ),
-
-      on_track:
-        msToTime(
-          parts[5]
-        ),
-
-      driver_name:
-        drivers.get(
-          Number(parts[7])
-        ) || null,
-
-      total_time:
-        msToTime(
-          parts[8]
-        ),
-
-      pit_time:
-        msToPitTime(
-          parts[4]
-        ),
-
-      updated_at:
-        new Date()
-          .toISOString()
-    });
-  }
-
-  return rows;
+          updated_at:
+            new Date()
+              .toISOString()
+        };
+      }
+    )
+    .filter(Boolean);
 }
 
-function calculateStats(laps) {
-  if (!laps.length) {
-    return {
-      validLaps: 0,
-      sum: 0,
-      sumSquares: 0,
-      avg: null,
-      best: null,
-      bestLapNumber: null,
-      worst: null,
-      worstLapNumber: null,
-      consistency: null
-    };
-  }
-
-  let sum = 0;
-  let sumSquares = 0;
-
-  let best = null;
-  let bestLapNumber = null;
-
-  let worst = null;
-  let worstLapNumber = null;
-
-  let validLaps = 0;
-
-  for (const lap of laps) {
-    const time =
-      Number(
-        lap.lap_time
-      );
-
-    if (
-      !Number.isFinite(time) ||
-      time <= 0
-    ) {
-      continue;
-    }
-
-    validLaps += 1;
-
-    sum += time;
-
-    sumSquares +=
-      time * time;
-
-    if (
-      best === null ||
-      time < best
-    ) {
-      best =
-        time;
-
-      bestLapNumber =
-        Number(
-          lap.lap_number
-        );
-    }
-
-    if (
-      worst === null ||
-      time > worst
-    ) {
-      worst =
-        time;
-
-      worstLapNumber =
-        Number(
-          lap.lap_number
-        );
-    }
-  }
-
-  if (!validLaps) {
-    return {
-      validLaps: 0,
-      sum: 0,
-      sumSquares: 0,
-      avg: null,
-      best: null,
-      bestLapNumber: null,
-      worst: null,
-      worstLapNumber: null,
-      consistency: null
-    };
-  }
-
-  const avg =
-    sum /
-    validLaps;
-
-  const variance =
-    Math.max(
-      0,
-      sumSquares /
-        validLaps -
-        avg * avg
-    );
-
-  return {
-    validLaps,
-    sum,
-    sumSquares,
-    avg,
-    best,
-    bestLapNumber,
-    worst,
-    worstLapNumber,
-
-    consistency:
-      Math.sqrt(
-        variance
-      )
-  };
-}
 
 export class ApexCollector {
-  constructor(state, env) {
+
+  constructor(
+    state,
+    env
+  ) {
     this.state =
       state;
 
     this.env =
       env;
 
-    this.raceId =
-      defaultRaceId(env);
+    this.rid =
+      raceId(env);
 
     this.ws =
       null;
@@ -788,82 +489,23 @@ export class ApexCollector {
     this.queue =
       Promise.resolve();
 
-    this.packetCount =
-      0;
-
     this.lastPacketAt =
       null;
 
-    this.positions =
-      new Map();
-
-    this.columnTypes =
-      new Map();
-
-    this.detailRunning =
-      new Set();
-
-    this.lastDetailFetch =
-      new Map();
+    this.packetCount =
+      0;
 
     state.blockConcurrencyWhile(
       async () => {
-        this.packetCount =
-          await state.storage.get(
-            "packetCount"
-          ) || 0;
-
         this.lastPacketAt =
           await state.storage.get(
             "lastPacketAt"
           ) || null;
 
-        const storedPositions =
+        this.packetCount =
           await state.storage.get(
-            "positions"
-          ) || {};
-
-        this.positions =
-          new Map(
-            Object.entries(
-              storedPositions
-            )
-              .map(
-                (
-                  [
-                    apexId,
-                    value
-                  ]
-                ) => [
-                  String(apexId),
-                  Number(value)
-                ]
-              )
-              .filter(
-                (
-                  [
-                    ,
-                    value
-                  ]
-                ) =>
-                  Number.isFinite(
-                    value
-                  ) &&
-                  value > 0
-              )
-          );
-
-        const storedColumnTypes =
-          await state.storage.get(
-            "columnTypes"
-          ) || {};
-
-        this.columnTypes =
-          new Map(
-            Object.entries(
-              storedColumnTypes
-            )
-          );
+            "packetCount"
+          ) || 0;
 
         if (
           await state.storage.getAlarm() ===
@@ -878,15 +520,15 @@ export class ApexCollector {
     );
   }
 
+
   async fetch(request) {
-    const pathname =
+    const path =
       new URL(
         request.url
       ).pathname;
 
     if (
-      pathname ===
-      "/start"
+      path === "/start"
     ) {
       await this.connect();
 
@@ -896,8 +538,7 @@ export class ApexCollector {
     }
 
     if (
-      pathname ===
-      "/status"
+      path === "/status"
     ) {
       return json(
         await this.status()
@@ -905,40 +546,17 @@ export class ApexCollector {
     }
 
     if (
-      pathname ===
-      "/snapshot"
-    ) {
-      return json({
-        ...(await this.status()),
-
-        positions:
-          Object.fromEntries(
-            this.positions
-          ),
-
-        columnTypes:
-          Object.fromEntries(
-            this.columnTypes
-          )
-      });
-    }
-
-    if (
-      pathname ===
-      "/reconnect"
+      path === "/reconnect"
     ) {
       try {
         this.ws?.close(
           1000,
-          "manual reconnect"
+          "reconnect"
         );
       } catch {}
 
       this.ws =
         null;
-
-      this.connecting =
-        false;
 
       await this.connect();
 
@@ -955,10 +573,11 @@ export class ApexCollector {
     );
   }
 
+
   async status() {
     return {
       race_id:
-        this.raceId,
+        this.rid,
 
       connected:
         !!this.ws &&
@@ -976,25 +595,6 @@ export class ApexCollector {
     };
   }
 
-  async persistState() {
-    await this.state.storage.put({
-      packetCount:
-        this.packetCount,
-
-      lastPacketAt:
-        this.lastPacketAt,
-
-      positions:
-        Object.fromEntries(
-          this.positions
-        ),
-
-      columnTypes:
-        Object.fromEntries(
-          this.columnTypes
-        )
-    });
-  }
 
   async alarm() {
     const stale =
@@ -1018,9 +618,6 @@ export class ApexCollector {
       this.ws =
         null;
 
-      this.connecting =
-        false;
-
       await this.connect();
     }
 
@@ -1030,16 +627,17 @@ export class ApexCollector {
     );
   }
 
+
   async connect() {
     if (
       this.connecting ||
       (
         this.ws &&
-        (
-          this.ws.readyState ===
-            WebSocket.OPEN ||
-          this.ws.readyState ===
-            WebSocket.CONNECTING
+        [
+          WebSocket.OPEN,
+          WebSocket.CONNECTING
+        ].includes(
+          this.ws.readyState
         )
       )
     ) {
@@ -1072,7 +670,7 @@ export class ApexCollector {
         event => {
           const payload =
             typeof event.data ===
-            "string"
+              "string"
               ? event.data
               : new TextDecoder()
                   .decode(
@@ -1083,7 +681,7 @@ export class ApexCollector {
             this.queue
               .then(
                 () =>
-                  this.handlePacket(
+                  this.packet(
                     payload
                   )
               )
@@ -1106,35 +704,29 @@ export class ApexCollector {
           this.connecting =
             false;
 
-          this.state.storage
-            .setAlarm(
-              Date.now() +
-              5000
-            );
+          this.state.storage.setAlarm(
+            Date.now() +
+            5000
+          );
         }
       );
 
       ws.addEventListener(
         "error",
-        error => {
-          console.error(
-            "APEX WS ERROR:",
-            error
-          );
-
+        () => {
           this.ws =
             null;
 
           this.connecting =
             false;
 
-          this.state.storage
-            .setAlarm(
-              Date.now() +
-              5000
-            );
+          this.state.storage.setAlarm(
+            Date.now() +
+            5000
+          );
         }
       );
+
     } catch (error) {
       this.ws =
         null;
@@ -1142,96 +734,86 @@ export class ApexCollector {
       this.connecting =
         false;
 
-      await this.state.storage
-        .setAlarm(
-          Date.now() +
-          5000
-        );
+      await this.state.storage.setAlarm(
+        Date.now() +
+        5000
+      );
 
       throw error;
     }
   }
 
-  async getEntry(apexId) {
+
+  async packet(payload) {
+    this.packetCount++;
+
+    this.lastPacketAt =
+      new Date()
+        .toISOString();
+
+    await sbInsert(
+      this.env,
+      "apex_raw_packets",
+      {
+        race_id:
+          this.rid,
+
+        payload
+      }
+    );
+
+    await this.parseAndSave(
+      payload
+    );
+
+    if (
+      this.packetCount %
+        20 ===
+      0
+    ) {
+      await this.state.storage.put({
+        packetCount:
+          this.packetCount,
+
+        lastPacketAt:
+          this.lastPacketAt
+      });
+    }
+  }
+
+
+  async entry(apexId) {
     const rows =
       await sbGet(
         this.env,
         "apex_entries",
         {
-          select:
-            "*",
+          select: "*",
 
           race_id:
-            `eq.${this.raceId}`,
+            `eq.${this.rid}`,
 
           apex_id:
             `eq.${apexId}`,
 
-          limit:
-            "1"
+          limit: "1"
         }
       );
 
-    return rows[0] || null;
+    return rows[0] ||
+      null;
   }
 
-  async upsertEntry(update) {
-    const existing =
-      await this.getEntry(
-        update.apex_id
-      );
 
+  async upsertEntry(update) {
     await sbUpsert(
       this.env,
       "apex_entries",
       {
         race_id:
-          this.raceId,
+          this.rid,
 
-        apex_id:
-          String(
-            update.apex_id
-          ),
-
-        team_name:
-          update.team_name !==
-          undefined
-            ? update.team_name
-            : existing
-                ?.team_name ??
-              null,
-
-        current_driver:
-          update.current_driver !==
-          undefined
-            ? update.current_driver
-            : existing
-                ?.current_driver ??
-              null,
-
-        last_lap:
-          update.last_lap !==
-          undefined
-            ? update.last_lap
-            : existing
-                ?.last_lap ??
-              null,
-
-        best_lap:
-          update.best_lap !==
-          undefined
-            ? update.best_lap
-            : existing
-                ?.best_lap ??
-              null,
-
-        lap_count:
-          update.lap_count !==
-          undefined
-            ? update.lap_count
-            : existing
-                ?.lap_count ??
-              null,
+        ...update,
 
         updated_at:
           new Date()
@@ -1241,38 +823,478 @@ export class ApexCollector {
     );
   }
 
-  async requestDetails(
+
+  async closeStint(stint) {
+    await sbInsert(
+      this.env,
+      "completed_stint_stats",
+      {
+        race_id:
+          this.rid,
+
+        apex_id:
+          String(
+            stint.apex_id
+          ),
+
+        team_name:
+          stint.team_name,
+
+        driver_name:
+          stint.driver_name,
+
+        start_lap_count:
+          stint.start_lap_count,
+
+        end_lap_count:
+          stint.current_lap_count,
+
+        total_laps:
+          stint.total_laps,
+
+        valid_laps:
+          stint.valid_laps,
+
+        avg_lap:
+          stint.avg_lap,
+
+        best_lap:
+          stint.best_lap,
+
+        best_lap_number:
+          stint.best_lap_number,
+
+        worst_lap:
+          stint.worst_lap,
+
+        worst_lap_number:
+          stint.worst_lap_number,
+
+        consistency:
+          stint.consistency,
+
+        stint_started_at:
+          stint.stint_started_at,
+
+        stint_ended_at:
+          new Date()
+            .toISOString()
+      }
+    );
+
+    await sbDelete(
+      this.env,
+      "live_stint_stats",
+      {
+        race_id:
+          `eq.${this.rid}`,
+
+        apex_id:
+          `eq.${stint.apex_id}`
+      }
+    );
+  }
+
+
+  async driverChange(
     apexId,
-    currentLapCount
+    driverName
   ) {
-    const configured =
-      Number(
-        this.env
-          .APEX_DETAIL_LAPS ||
-        120
+    if (!driverName) {
+      return;
+    }
+
+    const before =
+      await this.entry(
+        apexId
       );
 
-    const historyCount =
-      Math.max(
-        1,
-        Math.min(
-          currentLapCount,
-          (
-            Number.isFinite(
-              configured
-            ) &&
-            configured > 0
-          )
-            ? Math.trunc(
-                configured
-              )
-            : 120
+    const live =
+      await sbGet(
+        this.env,
+        "live_stint_stats",
+        {
+          select: "*",
+
+          race_id:
+            `eq.${this.rid}`,
+
+          apex_id:
+            `eq.${apexId}`,
+
+          limit: "1"
+        }
+      );
+
+    if (
+      live[0] &&
+      live[0].driver_name &&
+      live[0].driver_name !==
+        driverName
+    ) {
+      await this.closeStint(
+        live[0]
+      );
+    }
+
+    await this.upsertEntry({
+      apex_id:
+        apexId,
+
+      current_driver:
+        driverName
+    });
+
+    if (
+      before?.lap_count
+    ) {
+      await this.fetchDetails(
+        apexId,
+        before.team_name
+      );
+    }
+  }
+
+
+  async processLap(
+    apexId,
+    lapNumber
+  ) {
+    const entry =
+      await this.entry(
+        apexId
+      );
+
+    if (!entry) {
+      return;
+    }
+
+    const lapTime =
+      Number(
+        entry.last_lap
+      );
+
+    if (
+      !Number.isFinite(
+        lapTime
+      )
+    ) {
+      return;
+    }
+
+    await sbUpsert(
+      this.env,
+      "apex_lap_events",
+      {
+        race_id:
+          this.rid,
+
+        apex_id:
+          String(apexId),
+
+        lap_number:
+          Number(
+            lapNumber
+          ),
+
+        lap_time:
+          lapTime,
+
+        received_at:
+          new Date()
+            .toISOString()
+      },
+      "race_id,apex_id,lap_number"
+    );
+
+    await this.liveStats(
+      apexId,
+      Number(lapNumber),
+      lapTime,
+      entry.team_name,
+      entry.current_driver
+    );
+  }
+
+
+  async liveStats(
+    apexId,
+    lapNumber,
+    lapTime,
+    teamName,
+    driverName
+  ) {
+    if (!driverName) {
+      return;
+    }
+
+    const rows =
+      await sbGet(
+        this.env,
+        "live_stint_stats",
+        {
+          select: "*",
+
+          race_id:
+            `eq.${this.rid}`,
+
+          apex_id:
+            `eq.${apexId}`,
+
+          limit: "1"
+        }
+      );
+
+    const current =
+      rows[0];
+
+    const now =
+      new Date()
+        .toISOString();
+
+    if (
+      !current ||
+      current.driver_name !==
+        driverName
+    ) {
+      if (current) {
+        await this.closeStint(
+          current
+        );
+      }
+
+      await sbUpsert(
+        this.env,
+        "live_stint_stats",
+        {
+          race_id:
+            this.rid,
+
+          apex_id:
+            String(apexId),
+
+          team_name:
+            teamName,
+
+          driver_name:
+            driverName,
+
+          start_lap_count:
+            lapNumber,
+
+          current_lap_count:
+            lapNumber,
+
+          total_laps:
+            1,
+
+          valid_laps:
+            1,
+
+          lap_sum:
+            lapTime,
+
+          lap_sum_squares:
+            lapTime *
+            lapTime,
+
+          last_lap:
+            lapTime,
+
+          avg_lap:
+            lapTime,
+
+          best_lap:
+            lapTime,
+
+          best_lap_number:
+            lapNumber,
+
+          worst_lap:
+            lapTime,
+
+          worst_lap_number:
+            lapNumber,
+
+          consistency:
+            0,
+
+          stint_started_at:
+            now,
+
+          updated_at:
+            now
+        },
+        "race_id,apex_id"
+      );
+
+      return;
+    }
+
+    if (
+      current.current_lap_count !==
+        null &&
+      current.current_lap_count !==
+        undefined &&
+      lapNumber <=
+        Number(
+          current.current_lap_count
+        )
+    ) {
+      return;
+    }
+
+    const validLaps =
+      Number(
+        current.valid_laps ||
+        0
+      ) + 1;
+
+    const totalLaps =
+      Number(
+        current.total_laps ||
+        0
+      ) + 1;
+
+    const lapSum =
+      Number(
+        current.lap_sum ||
+        0
+      ) +
+      lapTime;
+
+    const lapSumSquares =
+      Number(
+        current.lap_sum_squares ||
+        0
+      ) +
+      lapTime *
+      lapTime;
+
+    const average =
+      lapSum /
+      validLaps;
+
+    const consistency =
+      Math.sqrt(
+        Math.max(
+          0,
+          lapSumSquares /
+            validLaps -
+            average *
+            average
         )
       );
 
+    const isBest =
+      current.best_lap ===
+        null ||
+      current.best_lap ===
+        undefined ||
+      lapTime <
+        Number(
+          current.best_lap
+        );
+
+    const isWorst =
+      current.worst_lap ===
+        null ||
+      current.worst_lap ===
+        undefined ||
+      lapTime >
+        Number(
+          current.worst_lap
+        );
+
+    await sbPatch(
+      this.env,
+      "live_stint_stats",
+      {
+        team_name:
+          teamName,
+
+        driver_name:
+          driverName,
+
+        current_lap_count:
+          lapNumber,
+
+        total_laps:
+          totalLaps,
+
+        valid_laps:
+          validLaps,
+
+        lap_sum:
+          lapSum,
+
+        lap_sum_squares:
+          lapSumSquares,
+
+        last_lap:
+          lapTime,
+
+        avg_lap:
+          average,
+
+        best_lap:
+          isBest
+            ? lapTime
+            : current.best_lap,
+
+        best_lap_number:
+          isBest
+            ? lapNumber
+            : current.best_lap_number,
+
+        worst_lap:
+          isWorst
+            ? lapTime
+            : current.worst_lap,
+
+        worst_lap_number:
+          isWorst
+            ? lapNumber
+            : current.worst_lap_number,
+
+        consistency,
+
+        updated_at:
+          now
+      },
+      {
+        race_id:
+          `eq.${this.rid}`,
+
+        apex_id:
+          `eq.${apexId}`
+      }
+    );
+  }
+
+
+  async fetchDetails(
+    apexId,
+    teamName
+  ) {
+    const entry =
+      await this.entry(
+        apexId
+      );
+
+    const lapCount =
+      Number(
+        entry?.lap_count ||
+        0
+      );
+
+    if (!lapCount) {
+      return;
+    }
+
     const request =
-      `D#-${historyCount}` +
-      `#D${apexId}.L#-${historyCount}` +
+      `D#-${lapCount}` +
+      `#D${apexId}.L#-${lapCount}` +
       `#D${apexId}.P#-999` +
       `#D${apexId}.B#1` +
       `#D${apexId}.INF`;
@@ -1303,1089 +1325,116 @@ export class ApexCollector {
 
     if (!response.ok) {
       throw new Error(
-        `Apex detail request failed: ${response.status}`
+        `Apex detail ${response.status}`
       );
     }
 
-    return response.text();
-  }
+    const raw =
+      await response.text();
 
-  async saveLapRows(rows) {
-    const chunkSize =
-      250;
+    const laps =
+      parseLapRows(
+        raw,
+        this.rid
+      );
 
-    for (
-      let index = 0;
-      index < rows.length;
-      index += chunkSize
+    const pits =
+      parsePits(
+        raw,
+        teamName,
+        this.rid
+      );
+
+    if (
+      laps.length
     ) {
       await sbUpsert(
         this.env,
         "apex_lap_events",
-        rows.slice(
-          index,
-          index +
-          chunkSize
-        ),
+        laps,
         "race_id,apex_id,lap_number"
       );
     }
-  }
-
-  async getManualExclusions(
-    apexId,
-    startLap,
-    endLap
-  ) {
-    try {
-      const rows =
-        await sbGet(
-          this.env,
-          "manual_lap_exclusions",
-          {
-            select:
-              "lap_number",
-
-            race_id:
-              `eq.${this.raceId}`,
-
-            apex_id:
-              `eq.${apexId}`,
-
-            lap_number:
-              `gt.${startLap}`,
-
-            order:
-              "lap_number.asc"
-          }
-        );
-
-      return new Set(
-        rows
-          .map(
-            row =>
-              Number(
-                row.lap_number
-              )
-          )
-          .filter(
-            lap =>
-              Number.isFinite(
-                lap
-              ) &&
-              lap <= endLap
-          )
-      );
-    } catch (error) {
-      console.error(
-        "MANUAL EXCLUSION READ ERROR:",
-        error
-      );
-
-      return new Set();
-    }
-  }
-
-  async getValidatedRows(
-    apexId,
-    driverName,
-    startLap,
-    endLap
-  ) {
-    try {
-      const rows =
-        await sbGet(
-          this.env,
-          "valid_driver_laps",
-          {
-            select:
-              "*",
-
-            race_id:
-              `eq.${this.raceId}`,
-
-            apex_id:
-              `eq.${apexId}`,
-
-            lap_number:
-              `gt.${startLap}`,
-
-            order:
-              "lap_number.asc"
-          }
-        );
-
-      return rows.filter(
-        row => {
-          const lap =
-            Number(
-              row.lap_number
-            );
-
-          const time =
-            Number(
-              row.lap_time
-            );
-
-          if (
-            !Number.isFinite(
-              lap
-            ) ||
-            lap > endLap
-          ) {
-            return false;
-          }
-
-          if (
-            !Number.isFinite(
-              time
-            ) ||
-            time <= 0
-          ) {
-            return false;
-          }
-
-          if (
-            row.driver_name &&
-            driverName &&
-            row.driver_name !==
-              driverName
-          ) {
-            return false;
-          }
-
-          return true;
-        }
-      );
-    } catch (error) {
-      console.error(
-        "VALID LAP VIEW READ ERROR:",
-        error
-      );
-
-      return null;
-    }
-  }
-
-  async syncDriverStints(
-    apexId,
-    entry,
-    pitRows
-  ) {
-    const sortedPits =
-      [...pitRows]
-        .filter(
-          pit =>
-            Number.isFinite(
-              Number(
-                pit.pit_lap
-              )
-            )
-        )
-        .sort(
-          (a, b) =>
-            Number(
-              a.pit_number
-            ) -
-            Number(
-              b.pit_number
-            )
-        );
-
-    const stints = [];
-
-    let startLap = 0;
-
-    for (
-      const pit
-      of sortedPits
-    ) {
-      const pitLap =
-        Number(
-          pit.pit_lap
-        );
-
-      if (
-        pit.driver_name
-      ) {
-        stints.push({
-          race_id:
-            this.raceId,
-
-          apex_id:
-            String(apexId),
-
-          team_name:
-            entry.team_name,
-
-          driver_name:
-            pit.driver_name,
-
-          stint_start_at:
-            new Date()
-              .toISOString(),
-
-          stint_end_at:
-            new Date()
-              .toISOString(),
-
-          start_lap_count:
-            startLap,
-
-          end_lap_count:
-            pitLap
-        });
-      }
-
-      startLap =
-        pitLap;
-    }
 
     if (
-      entry.current_driver
+      pits.length
     ) {
-      stints.push({
-        race_id:
-          this.raceId,
-
-        apex_id:
-          String(apexId),
-
-        team_name:
-          entry.team_name,
-
-        driver_name:
-          entry.current_driver,
-
-        stint_start_at:
-          new Date()
-            .toISOString(),
-
-        stint_end_at:
-          null,
-
-        start_lap_count:
-          startLap,
-
-        end_lap_count:
-          null
-      });
-    }
-
-    if (stints.length) {
-      await sbDelete(
+      await sbUpsert(
         this.env,
-        "driver_stints",
-        {
-          race_id:
-            `eq.${this.raceId}`,
-
-          apex_id:
-            `eq.${apexId}`
-        }
-      );
-
-      await sbInsert(
-        this.env,
-        "driver_stints",
-        stints
-      );
-    }
-
-    return {
-      startLap,
-
-      stintNumber:
-        sortedPits.length +
-        1
-    };
-  }
-
-  async rebuildCurrentLiveStint(
-    apexId,
-    entry,
-    lapRows,
-    pitRows
-  ) {
-    if (
-      !entry
-        ?.current_driver
-    ) {
-      return;
-    }
-
-    const currentLapCount =
-      Number(
-        entry.lap_count
-      );
-
-    if (
-      !Number.isFinite(
-        currentLapCount
-      ) ||
-      currentLapCount <= 0
-    ) {
-      return;
-    }
-
-    const stintInfo =
-      await this.syncDriverStints(
-        apexId,
-        entry,
-        pitRows
-      );
-
-    const startLap =
-      Number(
-        stintInfo
-          .startLap ||
-        0
-      );
-
-    const currentStintLaps =
-      lapRows
-        .filter(
-          row => {
-            const lap =
-              Number(
-                row.lap_number
-              );
-
-            return (
-              Number.isFinite(
-                lap
-              ) &&
-              lap > startLap &&
-              lap <=
-                currentLapCount
-            );
-          }
-        )
-        .sort(
-          (a, b) =>
-            Number(
-              a.lap_number
-            ) -
-            Number(
-              b.lap_number
-            )
-        );
-
-    const validatedRows =
-      await this.getValidatedRows(
-        apexId,
-        entry.current_driver,
-        startLap,
-        currentLapCount
-      );
-
-    let validLaps;
-
-    if (
-      validatedRows &&
-      validatedRows.length
-    ) {
-      validLaps =
-        validatedRows;
-    } else {
-      const manualExclusions =
-        await this.getManualExclusions(
-          apexId,
-          startLap,
-          currentLapCount
-        );
-
-      const excludedPitLaps =
-        new Set();
-
-      for (
-        const pit
-        of pitRows
-      ) {
-        const lap =
-          Number(
-            pit.pit_lap
-          );
-
-        if (
-          !Number.isFinite(
-            lap
-          )
-        ) {
-          continue;
-        }
-
-        excludedPitLaps
-          .add(lap);
-
-        excludedPitLaps
-          .add(
-            lap + 1
-          );
-      }
-
-      const maxLapSeconds =
-        Number(
-          this.env
-            .MAX_VALID_LAP_SECONDS ||
-          90
-        );
-
-      const hardMaximum =
-        (
-          Number.isFinite(
-            maxLapSeconds
-          ) &&
-          maxLapSeconds > 0
-        )
-          ? maxLapSeconds
-          : 90;
-
-      validLaps =
-        currentStintLaps
-          .filter(
-            row => {
-              const lap =
-                Number(
-                  row.lap_number
-                );
-
-              const time =
-                Number(
-                  row.lap_time
-                );
-
-              if (
-                !Number.isFinite(
-                  time
-                ) ||
-                time <= 0 ||
-                time >
-                  hardMaximum
-              ) {
-                return false;
-              }
-
-              if (
-                manualExclusions
-                  .has(lap)
-              ) {
-                return false;
-              }
-
-              if (
-                excludedPitLaps
-                  .has(lap)
-              ) {
-                return false;
-              }
-
-              return true;
-            }
-          );
-    }
-
-    const stats =
-      calculateStats(
-        validLaps
-      );
-
-    const now =
-      new Date()
-        .toISOString();
-
-    await sbUpsert(
-      this.env,
-      "live_stint_stats",
-      {
-        race_id:
-          this.raceId,
-
-        apex_id:
-          String(apexId),
-
-        team_name:
-          entry.team_name,
-
-        driver_name:
-          entry.current_driver,
-
-        start_lap_count:
-          startLap,
-
-        current_lap_count:
-          currentLapCount,
-
-        total_laps:
-          currentStintLaps
-            .length,
-
-        valid_laps:
-          stats.validLaps,
-
-        lap_sum:
-          stats.sum,
-
-        lap_sum_squares:
-          stats.sumSquares,
-
-        last_lap:
-          Number.isFinite(
-            Number(
-              entry.last_lap
-            )
-          )
-            ? Number(
-                entry.last_lap
-              )
-            : (
-                currentStintLaps
-                  .length
-                  ? Number(
-                      currentStintLaps[
-                        currentStintLaps
-                          .length -
-                        1
-                      ].lap_time
-                    )
-                  : null
-              ),
-
-        avg_lap:
-          stats.avg,
-
-        best_lap:
-          stats.best,
-
-        best_lap_number:
-          stats.bestLapNumber,
-
-        worst_lap:
-          stats.worst,
-
-        worst_lap_number:
-          stats.worstLapNumber,
-
-        consistency:
-          stats.consistency,
-
-        stint_started_at:
-          now,
-
-        updated_at:
-          now
-      },
-      "race_id,apex_id"
-    );
-  }
-
-  async refreshTeam(
-    apexId,
-    force = false
-  ) {
-    const key =
-      String(apexId);
-
-    if (
-      this.detailRunning
-        .has(key)
-    ) {
-      return;
-    }
-
-    const entry =
-      await this.getEntry(
-        apexId
-      );
-
-    const currentLapCount =
-      Number(
-        entry?.lap_count ||
-        0
-      );
-
-    if (
-      !entry ||
-      !Number.isFinite(
-        currentLapCount
-      ) ||
-      currentLapCount <= 0
-    ) {
-      return;
-    }
-
-    const now =
-      Date.now();
-
-    const previous =
-      this.lastDetailFetch
-        .get(key) || 0;
-
-    if (
-      !force &&
-      now - previous <
-        1500
-    ) {
-      return;
-    }
-
-    this.detailRunning
-      .add(key);
-
-    this.lastDetailFetch
-      .set(
-        key,
-        now
-      );
-
-    try {
-      const raw =
-        await this.requestDetails(
-          apexId,
-          currentLapCount
-        );
-
-      const lapRows =
-        parseLapRows(
-          raw,
-          this.raceId
-        );
-
-      const pitRows =
-        parsePitRows(
-          raw,
-          entry.team_name,
-          this.raceId
-        );
-
-      if (
-        lapRows.length
-      ) {
-        await this.saveLapRows(
-          lapRows
-        );
-      }
-
-      if (
-        pitRows.length
-      ) {
-        await sbUpsert(
-          this.env,
-          "apex_pit_stints",
-          pitRows,
-          "race_id,apex_id,pit_number"
-        );
-      }
-
-      await this
-        .rebuildCurrentLiveStint(
-          apexId,
-          (
-            await this.getEntry(
-              apexId
-            )
-          ) || entry,
-          lapRows,
-          pitRows
-        );
-    } catch (error) {
-      console.error(
-        "DETAIL REFRESH ERROR:",
-        apexId,
-        error
-      );
-    } finally {
-      this.detailRunning
-        .delete(key);
-    }
-  }
-
-  async closeLiveStint(
-    apexId,
-    newDriver
-  ) {
-    const rows =
-      await sbGet(
-        this.env,
-        "live_stint_stats",
-        {
-          select:
-            "*",
-
-          race_id:
-            `eq.${this.raceId}`,
-
-          apex_id:
-            `eq.${apexId}`,
-
-          limit:
-            "1"
-        }
-      );
-
-    const live =
-      rows[0];
-
-    if (
-      !live
-        ?.driver_name ||
-      live.driver_name ===
-        newDriver
-    ) {
-      return;
-    }
-
-    await sbInsert(
-      this.env,
-      "completed_stint_stats",
-      {
-        race_id:
-          this.raceId,
-
-        apex_id:
-          String(apexId),
-
-        team_name:
-          live.team_name,
-
-        driver_name:
-          live.driver_name,
-
-        start_lap_count:
-          live.start_lap_count,
-
-        end_lap_count:
-          live.current_lap_count,
-
-        total_laps:
-          live.total_laps,
-
-        valid_laps:
-          live.valid_laps,
-
-        avg_lap:
-          live.avg_lap,
-
-        best_lap:
-          live.best_lap,
-
-        best_lap_number:
-          live.best_lap_number,
-
-        worst_lap:
-          live.worst_lap,
-
-        worst_lap_number:
-          live.worst_lap_number,
-
-        consistency:
-          live.consistency,
-
-        stint_started_at:
-          live.stint_started_at,
-
-        stint_ended_at:
-          new Date()
-            .toISOString()
-      }
-    );
-
-    await sbDelete(
-      this.env,
-      "live_stint_stats",
-      {
-        race_id:
-          `eq.${this.raceId}`,
-
-        apex_id:
-          `eq.${apexId}`
-      }
-    );
-  }
-
-  async handleDriverChange(
-    apexId,
-    driverName
-  ) {
-    if (!driverName) {
-      return;
-    }
-
-    const before =
-      await this.getEntry(
-        apexId
-      );
-
-    if (!before) {
-      await this.upsertEntry({
-        apex_id:
-          apexId,
-
-        current_driver:
-          driverName
-      });
-
-      return;
-    }
-
-    if (
-      before.current_driver ===
-      driverName
-    ) {
-      return;
-    }
-
-    if (
-      Number(
-        before.lap_count
-      ) > 0
-    ) {
-      await this.refreshTeam(
-        apexId,
-        true
-      );
-    }
-
-    await this.closeLiveStint(
-      apexId,
-      driverName
-    );
-
-    await this.upsertEntry({
-      apex_id:
-        apexId,
-
-      current_driver:
-        driverName
-    });
-
-    await this.refreshTeam(
-      apexId,
-      true
-    );
-  }
-
-  async handleLapCount(
-    apexId,
-    newLapCount
-  ) {
-    if (
-      !Number.isFinite(
-        Number(
-          newLapCount
-        )
-      )
-    ) {
-      return;
-    }
-
-    const entry =
-      await this.getEntry(
-        apexId
-      );
-
-    const oldLapCount =
-      Number(
-        entry?.lap_count ??
-        -1
-      );
-
-    await this.upsertEntry({
-      apex_id:
-        apexId,
-
-      lap_count:
-        Number(
-          newLapCount
-        )
-    });
-
-    if (
-      oldLapCount !==
-      Number(
-        newLapCount
-      )
-    ) {
-      await this.refreshTeam(
-        apexId,
-        true
+        "apex_pit_stints",
+        pits,
+        "race_id,apex_id,pit_number"
       );
     }
   }
 
-  updatePosition(
-    apexId,
-    value
-  ) {
-    const position =
-      Number(
-        String(
-          value || ""
-        ).replace(
-          /[^\d.-]/g,
-          ""
-        )
-      );
-
-    if (
-      Number.isFinite(
-        position
-      ) &&
-      position > 0
-    ) {
-      this.positions.set(
-        String(apexId),
-        position
-      );
-    }
-  }
 
   async parseAndSave(payload) {
     for (
       const rawLine
-      of String(
-        payload || ""
-      ).split("\n")
+      of payload.split("\n")
     ) {
-      const update =
-        parseProtocolLine(
+      const parsed =
+        parseApexLine(
           rawLine.trim()
         );
 
-      if (!update.id) {
+      if (!parsed) {
         continue;
       }
 
       if (
-        update.id ===
-        "grid"
-      ) {
-        const grid =
-          parseGridData(
-            update.value
-          );
-
-        if (
-          grid.positions.size
-        ) {
-          this.positions =
-            grid.positions;
-        }
-
-        if (
-          grid.columnTypes.size
-        ) {
-          this.columnTypes =
-            grid.columnTypes;
-        }
-
-        await this.state.storage.put({
-          positions:
-            Object.fromEntries(
-              this.positions
-            ),
-
-          columnTypes:
-            Object.fromEntries(
-              this.columnTypes
-            )
-        });
-
-        continue;
-      }
-
-      const row =
-        parseRowId(
-          update.id
-        );
-
-      if (!row) {
-        continue;
-      }
-
-      const {
-        apexId,
-        column
-      } = row;
-
-      const {
-        cls,
-        value
-      } = update;
-
-      const type =
-        this.columnTypes.get(
-          `c${column}`
-        ) || cls;
-
-      if (
-        type === "rk" ||
-        cls === "rk"
-      ) {
-        this.updatePosition(
-          apexId,
-          value
-        );
-
-        continue;
-      }
-
-      if (
-        type === "dr" ||
-        cls === "dr"
+        parsed.field ===
+        "dr"
       ) {
         await this.upsertEntry({
           apex_id:
-            apexId,
+            parsed.apexId,
 
           team_name:
-            value
+            parsed.value
         });
 
         continue;
       }
 
       if (
-        cls ===
+        parsed.field ===
         "drteam"
       ) {
         const driverName =
-          value
+          parsed.value
             .replace(
               /\s*\[[^\]]+\]\s*$/,
-              ""
+              " "
             )
             .trim();
 
-        await this
-          .handleDriverChange(
-            apexId,
-            driverName
-          );
+        await this.driverChange(
+          parsed.apexId,
+          driverName
+        );
 
         continue;
       }
 
       if (
-        type === "llp" ||
-        (
-          cls === "tn" &&
-          column === "9"
-        ) ||
-        cls === "llp"
+        parsed.field ===
+          "tn" &&
+        parsed.column ===
+          "9"
       ) {
         const lapTime =
           parseLapTime(
-            value
+            parsed.value
           );
 
         if (
-          lapTime !==
-          null
+          lapTime !== null
         ) {
           await this.upsertEntry({
             apex_id:
-              apexId,
+              parsed.apexId,
 
             last_lap:
               lapTime
@@ -2396,57 +1445,54 @@ export class ApexCollector {
       }
 
       if (
-        (
-          type === "tlp" ||
-          (
-            cls === "in" &&
-            column === "13"
-          ) ||
-          cls === "tlp"
-        ) &&
+        parsed.field ===
+          "in" &&
+        parsed.column ===
+          "13" &&
         /^\d+$/.test(
-          value
+          parsed.value
         )
       ) {
-        await this.handleLapCount(
-          apexId,
-          Number(value)
-        );
+        const newLapCount =
+          Number(
+            parsed.value
+          );
+
+        const entry =
+          await this.entry(
+            parsed.apexId
+          );
+
+        const oldLapCount =
+          Number(
+            entry?.lap_count ??
+            -1
+          );
+
+        await this.upsertEntry({
+          apex_id:
+            parsed.apexId,
+
+          lap_count:
+            newLapCount
+        });
+
+        if (
+          newLapCount >
+            oldLapCount ||
+          oldLapCount <
+            0
+        ) {
+          await this.processLap(
+            parsed.apexId,
+            newLapCount
+          );
+        }
       }
-    }
-  }
-
-  async handlePacket(payload) {
-    this.packetCount +=
-      1;
-
-    this.lastPacketAt =
-      new Date()
-        .toISOString();
-
-    await sbInsert(
-      this.env,
-      "apex_raw_packets",
-      {
-        race_id:
-          this.raceId,
-
-        payload
-      }
-    );
-
-    await this.parseAndSave(
-      payload
-    );
-
-    if (
-      this.packetCount %
-      20 === 0
-    ) {
-      await this.persistState();
     }
   }
 }
+
 
 function collectorStub(env) {
   const id =
@@ -2459,136 +1505,64 @@ function collectorStub(env) {
     .get(id);
 }
 
+
 async function startCollector(env) {
-  const response =
-    await collectorStub(env)
-      .fetch(
-        "https://collector/start"
-      );
-
-  if (!response.ok) {
-    throw new Error(
-      `Collector start failed: ${response.status}`
-    );
-  }
-
-  return response.json();
+  return (
+    await collectorStub(
+      env
+    ).fetch(
+      "https://collector/start"
+    )
+  ).json();
 }
 
-async function collectorSnapshot(env) {
-  const response =
-    await collectorStub(env)
-      .fetch(
-        "https://collector/snapshot"
-      );
-
-  if (!response.ok) {
-    throw new Error(
-      `Collector snapshot failed: ${response.status}`
-    );
-  }
-
-  return response.json();
-}
 
 async function livePayload(
   env,
-  raceId
+  currentRaceId
 ) {
-  const [
-    entries,
-    liveStints,
-    pits,
-    snapshot
-  ] =
-    await Promise.all([
-      sbGet(
-        env,
-        "apex_entries",
-        {
-          select:
-            "*",
+  const entries =
+    await sbGet(
+      env,
+      "apex_entries",
+      {
+        select: "*",
 
-          race_id:
-            `eq.${raceId}`,
+        race_id:
+          `eq.${currentRaceId}`,
 
-          order:
-            "updated_at.desc"
-        }
-      ),
+        order:
+          "updated_at.desc"
+      }
+    );
 
-      sbGet(
-        env,
-        "live_stint_stats",
-        {
-          select:
-            "*",
-
-          race_id:
-            `eq.${raceId}`,
-
-          order:
-            "team_name.asc"
-        }
-      ),
-
-      sbGet(
-        env,
-        "apex_pit_stints",
-        {
-          select:
-            "apex_id,pit_number,pit_lap",
-
-          race_id:
-            `eq.${raceId}`,
-
-          order:
-            "apex_id.asc,pit_number.asc"
-        }
-      ),
-
-      collectorSnapshot(
-        env
-      ).catch(
-        () => ({
-          positions: {}
-        })
-      )
-    ]);
-
-  const newestTimestamp =
+  const newest =
     entries.reduce(
       (
         latest,
         entry
-      ) => {
-        const timestamp =
+      ) =>
+        Math.max(
+          latest,
           Date.parse(
             entry.updated_at ||
             ""
-          );
-
-        return Number.isFinite(
-          timestamp
-        )
-          ? Math.max(
-              latest,
-              timestamp
-            )
-          : latest;
-      },
+          ) || 0
+        ),
       0
     );
 
   if (
-    !newestTimestamp ||
+    !newest ||
     Date.now() -
-      newestTimestamp >
+      newest >
       180000
   ) {
     return {
       race_id:
-        Number(raceId),
+        Number(
+          currentRaceId
+        ),
 
       generated_at:
         new Date()
@@ -2597,97 +1571,25 @@ async function livePayload(
       active:
         false,
 
-      current:
-        [],
+      current: [],
 
-      entries:
-        []
+      entries: []
     };
   }
 
   const activeEntries =
     entries.filter(
-      entry => {
-        const timestamp =
-          Date.parse(
-            entry.updated_at ||
-            ""
-          );
-
-        return (
-          Number.isFinite(
-            timestamp
-          ) &&
-          newestTimestamp -
-            timestamp <=
-            180000
-        );
-      }
-    );
-
-  const positionMap =
-    new Map(
-      Object.entries(
-        snapshot.positions ||
-        {}
-      )
-        .map(
+      entry =>
+        newest -
           (
-            [
-              apexId,
-              value
-            ]
-          ) => [
-            String(apexId),
-            Number(value)
-          ]
-        )
-        .filter(
-          (
-            [
-              ,
-              value
-            ]
-          ) =>
-            Number.isFinite(
-              value
-            ) &&
-            value > 0
-        )
+            Date.parse(
+              entry.updated_at ||
+              ""
+            ) ||
+            0
+          ) <=
+        180000
     );
-
-  const pitCountByApex =
-    new Map();
-
-  for (const pit of pits) {
-    const apexId =
-      String(
-        pit.apex_id
-      );
-
-    const pitNumber =
-      Number(
-        pit.pit_number
-      );
-
-    if (
-      !Number.isFinite(
-        pitNumber
-      )
-    ) {
-      continue;
-    }
-
-    pitCountByApex.set(
-      apexId,
-      Math.max(
-        pitCountByApex
-          .get(apexId) ||
-        0,
-        pitNumber
-      )
-    );
-  }
 
   const activeIds =
     new Set(
@@ -2711,28 +1613,40 @@ async function livePayload(
       )
     );
 
-  const current = [];
+  const live =
+    await sbGet(
+      env,
+      "live_stint_stats",
+      {
+        select: "*",
+
+        race_id:
+          `eq.${currentRaceId}`,
+
+        order:
+          "team_name.asc"
+      }
+    );
+
+  const current =
+    [];
 
   for (
     const stint
-    of liveStints
+    of live.filter(
+      row =>
+        activeIds.has(
+          String(
+            row.apex_id
+          )
+        )
+    )
   ) {
-    const apexId =
-      String(
-        stint.apex_id
-      );
-
-    if (
-      !activeIds.has(
-        apexId
-      )
-    ) {
-      continue;
-    }
-
     const entry =
       entryMap.get(
-        apexId
+        String(
+          stint.apex_id
+        )
       ) || {};
 
     current.push({
@@ -2742,45 +1656,34 @@ async function livePayload(
       apex_id:
         stint.apex_id,
 
-      position:
-        positionMap.get(
-          apexId
-        ) ?? null,
-
-      stint_number:
-        (
-          pitCountByApex
-            .get(apexId) ||
-          0
-        ) + 1,
-
       team_name:
         stint.team_name ??
-        entry.team_name ??
-        null,
+        entry.team_name,
 
       driver_name:
         stint.driver_name ??
-        entry.current_driver ??
-        null,
+        entry.current_driver,
 
       current_driver:
         stint.driver_name ??
-        entry.current_driver ??
-        null,
+        entry.current_driver,
 
       start_lap_count:
-        stint.start_lap_count ??
-        null,
+        stint.start_lap_count,
 
       end_lap_count:
         null,
 
       lap_count:
         stint.valid_laps ??
+        stint.total_laps ??
         0,
 
-      total_stint_laps:
+      valid_laps:
+        stint.valid_laps ??
+        0,
+
+      total_laps:
         stint.total_laps ??
         0,
 
@@ -2824,8 +1727,8 @@ async function livePayload(
         null,
 
       updated_at:
-        stint.updated_at ??
         entry.updated_at ??
+        stint.updated_at ??
         null
     });
   }
@@ -2844,14 +1747,11 @@ async function livePayload(
     const entry
     of activeEntries
   ) {
-    const apexId =
-      String(
-        entry.apex_id
-      );
-
     if (
       seen.has(
-        apexId
+        String(
+          entry.apex_id
+        )
       )
     ) {
       continue;
@@ -2864,29 +1764,14 @@ async function livePayload(
       apex_id:
         entry.apex_id,
 
-      position:
-        positionMap.get(
-          apexId
-        ) ?? null,
-
-      stint_number:
-        (
-          pitCountByApex
-            .get(apexId) ||
-          0
-        ) + 1,
-
       team_name:
-        entry.team_name ??
-        null,
+        entry.team_name,
 
       driver_name:
-        entry.current_driver ??
-        null,
+        entry.current_driver,
 
       current_driver:
-        entry.current_driver ??
-        null,
+        entry.current_driver,
 
       start_lap_count:
         null,
@@ -2897,7 +1782,10 @@ async function livePayload(
       lap_count:
         0,
 
-      total_stint_laps:
+      valid_laps:
+        0,
+
+      total_laps:
         0,
 
       avg_lap_time:
@@ -2919,95 +1807,37 @@ async function livePayload(
         null,
 
       live_last_lap:
-        entry.last_lap ??
-        null,
+        entry.last_lap,
 
       live_best_lap:
-        entry.best_lap ??
-        null,
+        entry.best_lap,
 
       live_lap_count:
-        entry.lap_count ??
-        null,
+        entry.lap_count,
 
       updated_at:
-        entry.updated_at ??
-        null
+        entry.updated_at
     });
   }
 
   current.sort(
-    (a, b) => {
-      const positionA =
-        Number.isFinite(
-          Number(
-            a.position
-          )
+    (a, b) =>
+      String(
+        a.team_name ||
+        ""
+      ).localeCompare(
+        String(
+          b.team_name ||
+          ""
         )
-          ? Number(
-              a.position
-            )
-          : 999999;
-
-      const positionB =
-        Number.isFinite(
-          Number(
-            b.position
-          )
-        )
-          ? Number(
-              b.position
-            )
-          : 999999;
-
-      if (
-        positionA !==
-        positionB
-      ) {
-        return (
-          positionA -
-          positionB
-        );
-      }
-
-      const lapsA =
-        Number(
-          a.live_lap_count ||
-          0
-        );
-
-      const lapsB =
-        Number(
-          b.live_lap_count ||
-          0
-        );
-
-      if (
-        lapsA !==
-        lapsB
-      ) {
-        return (
-          lapsB -
-          lapsA
-        );
-      }
-
-      return (
-        Number(
-          a.apex_id ||
-          0
-        ) -
-        Number(
-          b.apex_id ||
-          0
-        )
-      );
-    }
+      )
   );
 
   return {
     race_id:
-      Number(raceId),
+      Number(
+        currentRaceId
+      ),
 
     generated_at:
       new Date()
@@ -3023,140 +1853,9 @@ async function livePayload(
   };
 }
 
-async function stintsPayload(
-  env,
-  raceId
-) {
-  const [
-    completed,
-    live,
-    pits
-  ] =
-    await Promise.all([
-      sbGet(
-        env,
-        "completed_stint_stats",
-        {
-          select:
-            "*",
-
-          race_id:
-            `eq.${raceId}`,
-
-          order:
-            "stint_ended_at.asc"
-        }
-      ),
-
-      sbGet(
-        env,
-        "live_stint_stats",
-        {
-          select:
-            "*",
-
-          race_id:
-            `eq.${raceId}`,
-
-          order:
-            "team_name.asc"
-        }
-      ),
-
-      sbGet(
-        env,
-        "apex_pit_stints",
-        {
-          select:
-            "apex_id,pit_number",
-
-          race_id:
-            `eq.${raceId}`,
-
-          order:
-            "apex_id.asc,pit_number.asc"
-        }
-      )
-    ]);
-
-  const maxPitByApex =
-    new Map();
-
-  for (const pit of pits) {
-    const apexId =
-      String(
-        pit.apex_id
-      );
-
-    const pitNumber =
-      Number(
-        pit.pit_number
-      );
-
-    if (
-      !Number.isFinite(
-        pitNumber
-      )
-    ) {
-      continue;
-    }
-
-    maxPitByApex.set(
-      apexId,
-      Math.max(
-        maxPitByApex
-          .get(apexId) ||
-        0,
-        pitNumber
-      )
-    );
-  }
-
-  return [
-    ...completed,
-
-    ...live.map(
-      row => ({
-        ...row,
-
-        stint_number:
-          (
-            maxPitByApex
-              .get(
-                String(
-                  row.apex_id
-                )
-              ) ||
-            0
-          ) + 1,
-
-        is_live:
-          true,
-
-        end_lap_count:
-          null,
-
-        lap_count:
-          row.valid_laps ??
-          0,
-
-        avg_lap_time:
-          row.avg_lap ??
-          null,
-
-        best_lap_time:
-          row.best_lap ??
-          null,
-
-        worst_lap_time:
-          row.worst_lap ??
-          null
-      })
-    )
-  ];
-}
 
 export default {
+
   async fetch(
     request,
     env,
@@ -3168,6 +1867,7 @@ export default {
       );
 
     try {
+
       if (
         url.pathname ===
         "/api/health"
@@ -3176,7 +1876,10 @@ export default {
           startCollector(
             env
           ).catch(
-            console.error
+            error =>
+              console.error(
+                error
+              )
           )
         );
 
@@ -3193,6 +1896,7 @@ export default {
         });
       }
 
+
       if (
         url.pathname ===
         "/api/collector/start"
@@ -3203,6 +1907,7 @@ export default {
           )
         );
       }
+
 
       if (
         url.pathname ===
@@ -3218,16 +1923,14 @@ export default {
         return new Response(
           await response.text(),
           {
-            status:
-              response.status,
-
             headers: {
               "content-type":
-                "application/json; charset=utf-8"
+                "application/json"
             }
           }
         );
       }
+
 
       if (
         url.pathname ===
@@ -3243,22 +1946,37 @@ export default {
         return new Response(
           await response.text(),
           {
-            status:
-              response.status,
-
             headers: {
               "content-type":
-                "application/json; charset=utf-8"
+                "application/json"
             }
           }
         );
       }
 
-      const raceId =
-        requestedRaceId(
-          url,
-          env
+
+      const explicitRaceId =
+        url.searchParams.get(
+          "race_id"
         );
+
+      const currentRaceId =
+        explicitRaceId &&
+        Number(
+          explicitRaceId
+        ) >
+        0
+          ? String(
+              Math.trunc(
+                Number(
+                  explicitRaceId
+                )
+              )
+            )
+          : String(
+              raceId(env)
+            );
+
 
       if (
         url.pathname ===
@@ -3268,17 +1986,21 @@ export default {
           startCollector(
             env
           ).catch(
-            console.error
+            error =>
+              console.error(
+                error
+              )
           )
         );
 
         return json(
           await livePayload(
             env,
-            raceId
+            currentRaceId
           )
         );
       }
+
 
       if (
         url.pathname ===
@@ -3289,23 +2011,79 @@ export default {
         });
       }
 
+
       if (
         url.pathname ===
         "/api/stints"
       ) {
+        const completed =
+          await sbGet(
+            env,
+            "completed_stint_stats",
+            {
+              select: "*",
+
+              race_id:
+                `eq.${currentRaceId}`,
+
+              order:
+                "stint_ended_at.asc"
+            }
+          );
+
+        const live =
+          await sbGet(
+            env,
+            "live_stint_stats",
+            {
+              select: "*",
+
+              race_id:
+                `eq.${currentRaceId}`,
+
+              order:
+                "team_name.asc"
+            }
+          );
+
         return json({
           race_id:
             Number(
-              raceId
+              currentRaceId
             ),
 
-          rows:
-            await stintsPayload(
-              env,
-              raceId
+          rows: [
+            ...completed,
+
+            ...live.map(
+              row => ({
+                ...row,
+
+                is_live:
+                  true,
+
+                end_lap_count:
+                  null,
+
+                avg_lap_time:
+                  row.avg_lap,
+
+                best_lap_time:
+                  row.best_lap,
+
+                worst_lap_time:
+                  row.worst_lap,
+
+                lap_count:
+                  row.valid_laps ??
+                  row.total_laps ??
+                  0
+              })
             )
+          ]
         });
       }
+
 
       if (
         url.pathname ===
@@ -3314,7 +2092,7 @@ export default {
         return json({
           race_id:
             Number(
-              raceId
+              currentRaceId
             ),
 
           rows:
@@ -3322,11 +2100,10 @@ export default {
               env,
               "driver_lap_totals_clean",
               {
-                select:
-                  "*",
+                select: "*",
 
                 race_id:
-                  `eq.${raceId}`,
+                  `eq.${currentRaceId}`,
 
                 order:
                   "team_name.asc,driver_name.asc"
@@ -3335,6 +2112,7 @@ export default {
         });
       }
 
+
       if (
         url.pathname ===
         "/api/pits"
@@ -3342,7 +2120,7 @@ export default {
         return json({
           race_id:
             Number(
-              raceId
+              currentRaceId
             ),
 
           rows:
@@ -3350,11 +2128,10 @@ export default {
               env,
               "apex_pit_stints",
               {
-                select:
-                  "*",
+                select: "*",
 
                 race_id:
-                  `eq.${raceId}`,
+                  `eq.${currentRaceId}`,
 
                 order:
                   "apex_id.asc,pit_number.asc"
@@ -3363,12 +2140,14 @@ export default {
         });
       }
 
+
       return env.ASSETS.fetch(
         request
       );
+
     } catch (error) {
       console.error(
-        "WORKER ERROR:",
+        "WORKER ERROR",
         error
       );
 
@@ -3383,6 +2162,7 @@ export default {
     }
   },
 
+
   async scheduled(
     controller,
     env,
@@ -3392,7 +2172,10 @@ export default {
       startCollector(
         env
       ).catch(
-        console.error
+        error =>
+          console.error(
+            error
+          )
       )
     );
   }
