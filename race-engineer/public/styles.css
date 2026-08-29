@@ -6,17 +6,27 @@
   --panel-3: #17222d;
 
   --border: #24313d;
+  --border-hover: #354755;
+  --border-strong: #425666;
 
   --text: #f5f7fa;
   --muted: #8fa1b2;
+  --muted-2: #657789;
 
   --green: #29e58c;
   --green-soft: rgba(41, 229, 140, 0.10);
+  --green-border: rgba(41, 229, 140, 0.38);
 
   --red: #ff5b68;
+  --red-soft: rgba(255, 91, 104, 0.10);
 
   --yellow: #f5c451;
   --yellow-soft: rgba(245, 196, 81, 0.10);
+  --yellow-border: rgba(245, 196, 81, 0.38);
+
+  --shadow-menu:
+    0 20px 55px rgba(0, 0, 0, 0.58),
+    0 5px 16px rgba(0, 0, 0, 0.34);
 
   --radius: 9px;
 }
@@ -59,7 +69,7 @@ body {
 
   grid-template-columns:
     auto
-    minmax(340px, 1fr)
+    minmax(320px, 1fr)
     auto;
 
   grid-template-areas:
@@ -86,6 +96,8 @@ body {
   align-items: center;
 
   gap: 12px;
+
+  min-width: max-content;
 }
 
 
@@ -95,6 +107,8 @@ body {
 
   display: grid;
   place-items: center;
+
+  flex: 0 0 42px;
 
   border-radius: 9px;
 
@@ -134,17 +148,16 @@ body {
   display: flex;
   align-items: flex-end;
 
-  gap: 10px;
+  gap: 8px;
 
   min-width: 0;
 }
 
 
 .raceSelectorGroup {
-  min-width: 300px;
-  max-width: 560px;
-
   width: 100%;
+  max-width: 360px;
+  min-width: 260px;
 }
 
 
@@ -162,52 +175,45 @@ body {
 }
 
 
-#raceSelector {
-  width: 100%;
-
-  height: 38px;
-
-  padding: 0 11px;
-
-  border:
-    1px solid var(--border);
-
-  border-radius: 7px;
-
-  background: var(--panel);
-
-  color: var(--text);
-
-  font-weight: 700;
-}
-
+/* ========================================================== */
+/* RACE MODE BADGE                                            */
+/* ========================================================== */
 
 .raceModeBadge {
-  height: 38px;
+  height: 36px;
 
   display: flex;
   align-items: center;
 
-  padding: 0 13px;
+  flex: 0 0 auto;
 
-  border-radius: 7px;
+  padding: 0 11px;
 
-  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  background: var(--panel);
+
+  font-size: 10px;
   font-weight: 900;
 
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
 }
 
 
 .raceModeBadge.live {
-  background: var(--green);
-  color: #03120b;
+  border-color: var(--green-border);
+
+  background: var(--green-soft);
+  color: var(--green);
 }
 
 
 .raceModeBadge.history {
-  background: var(--yellow);
-  color: #201800;
+  border-color: var(--yellow-border);
+
+  background: var(--yellow-soft);
+  color: var(--yellow);
 }
 
 
@@ -279,6 +285,8 @@ body {
   width: 8px;
   height: 8px;
 
+  flex: 0 0 auto;
+
   border-radius: 50%;
 
   background: #596773;
@@ -342,11 +350,17 @@ body {
   font-weight: 800;
 
   cursor: pointer;
+
+  transition:
+    color 0.14s ease,
+    background 0.14s ease;
 }
 
 
 .tab:hover {
   color: var(--text);
+
+  background: rgba(255, 255, 255, 0.015);
 }
 
 
@@ -402,8 +416,11 @@ main {
 }
 
 
+/* ========================================================== */
+/* INPUTS / BUTTONS                                           */
+/* ========================================================== */
+
 input,
-select,
 button {
   min-height: 38px;
 
@@ -420,16 +437,37 @@ button {
 }
 
 
-input,
-select {
+input {
   width: 100%;
 
   padding: 0 11px;
+
+  outline: none;
+
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease,
+    background 0.14s ease;
+}
+
+
+input:hover {
+  border-color: var(--border-hover);
+}
+
+
+input:focus {
+  border-color: var(--green-border);
+
+  background: #10181f;
+
+  box-shadow:
+    0 0 0 3px rgba(41, 229, 140, 0.07);
 }
 
 
 input::placeholder {
-  color: #657789;
+  color: var(--muted-2);
 }
 
 
@@ -443,6 +481,11 @@ button {
   font-weight: 700;
 
   cursor: pointer;
+
+  transition:
+    filter 0.14s ease,
+    border-color 0.14s ease,
+    background 0.14s ease;
 }
 
 
@@ -455,6 +498,11 @@ button.secondary {
 
 button:hover:not(:disabled) {
   filter: brightness(1.08);
+}
+
+
+button.secondary:hover:not(:disabled) {
+  border-color: var(--border-hover);
 }
 
 
@@ -489,6 +537,384 @@ button:disabled {
 
 .hidden {
   display: none !important;
+}
+
+
+/* ========================================================== */
+/* CUSTOM DROPDOWNS                                           */
+/* ========================================================== */
+
+/*
+ * IMPORTANT:
+ *
+ * Race / Team / Driver dropdowns use custom HTML controls.
+ * We intentionally do NOT style native <select> here because
+ * macOS/Safari draws the opened native menu itself.
+ */
+
+.dropdown {
+  position: relative;
+
+  width: 100%;
+
+  min-width: 0;
+
+  font-size: 12px;
+}
+
+
+.raceSelectorGroup .dropdown {
+  width: 100%;
+}
+
+
+.filterDropdown {
+  width: 100%;
+}
+
+
+/* CLOSED DROPDOWN */
+
+.dropdownTrigger {
+  width: 100%;
+  height: 38px;
+  min-height: 38px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 10px;
+
+  padding: 0 12px;
+
+  border:
+    1px solid var(--border);
+
+  border-radius: 8px;
+
+  background:
+    linear-gradient(
+      180deg,
+      #111920 0%,
+      #0d141a 100%
+    );
+
+  color: var(--text);
+
+  font-size: 12px;
+  font-weight: 650;
+
+  text-align: left;
+
+  cursor: pointer;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025);
+
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease,
+    box-shadow 0.14s ease;
+}
+
+
+.dropdownTrigger:hover {
+  border-color: var(--border-hover);
+
+  background:
+    linear-gradient(
+      180deg,
+      #141e26 0%,
+      #10171e 100%
+    );
+
+  filter: none;
+}
+
+
+.dropdown.open .dropdownTrigger {
+  border-color: rgba(41, 229, 140, 0.70);
+
+  box-shadow:
+    0 0 0 3px rgba(41, 229, 140, 0.08);
+}
+
+
+.dropdownTriggerContent {
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+
+  min-width: 0;
+}
+
+
+.dropdownTriggerContent > span:last-child,
+.dropdownTrigger > span:first-child {
+  overflow: hidden;
+
+  min-width: 0;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+
+.dropdownChevron {
+  flex: 0 0 auto;
+
+  color: #7d909f;
+
+  font-size: 11px;
+
+  transition:
+    transform 0.14s ease,
+    color 0.14s ease;
+}
+
+
+.dropdownTrigger:hover .dropdownChevron {
+  color: #b7c3cc;
+}
+
+
+.dropdown.open .dropdownChevron {
+  transform: rotate(180deg);
+
+  color: var(--green);
+}
+
+
+/* OPEN MENU */
+
+.dropdownMenu {
+  position: absolute;
+
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+
+  z-index: 500;
+
+  display: none;
+
+  max-height: 340px;
+
+  padding: 6px;
+
+  overflow-y: auto;
+  overscroll-behavior: contain;
+
+  border:
+    1px solid #2a3946;
+
+  border-radius: 10px;
+
+  background:
+    linear-gradient(
+      180deg,
+      #101820 0%,
+      #0b1218 100%
+    );
+
+  box-shadow: var(--shadow-menu);
+
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+
+.dropdown.open .dropdownMenu {
+  display: block;
+
+  animation:
+    dropdownOpen 0.12s ease-out;
+}
+
+
+@keyframes dropdownOpen {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+}
+
+
+/* OPTIONS */
+
+.dropdownOption {
+  width: 100%;
+  min-height: 36px;
+
+  display: grid;
+
+  grid-template-columns:
+    auto
+    minmax(0, 1fr)
+    auto;
+
+  align-items: center;
+
+  gap: 9px;
+
+  padding: 7px 9px;
+
+  border: 0;
+  border-radius: 7px;
+
+  background: transparent;
+
+  color: #d9e2e9;
+
+  font-size: 12px;
+  font-weight: 550;
+
+  text-align: left;
+
+  cursor: pointer;
+
+  transition:
+    color 0.11s ease,
+    background 0.11s ease;
+}
+
+
+.dropdownOption:hover {
+  background: #16222c;
+
+  color: #ffffff;
+
+  filter: none;
+}
+
+
+.dropdownOption.selected {
+  background: rgba(41, 229, 140, 0.095);
+
+  color: var(--green);
+}
+
+
+.dropdownOption.selected:hover {
+  background: rgba(41, 229, 140, 0.14);
+}
+
+
+.dropdownOption > span:nth-child(2) {
+  overflow: hidden;
+
+  min-width: 0;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+
+.dropdownCheck {
+  color: var(--green);
+
+  font-size: 12px;
+  font-weight: 900;
+
+  opacity: 0;
+}
+
+
+.dropdownOption.selected .dropdownCheck {
+  opacity: 1;
+}
+
+
+/* LIVE / HISTORY INDICATORS */
+
+.dropdownStatusDot {
+  width: 7px;
+  height: 7px;
+
+  flex: 0 0 auto;
+
+  border-radius: 50%;
+
+  background: #647482;
+}
+
+
+.dropdownStatusDot.live {
+  background: var(--green);
+
+  box-shadow:
+    0 0 7px rgba(41, 229, 140, 0.65);
+}
+
+
+.dropdownStatusDot.history {
+  background: var(--yellow);
+}
+
+
+/* GROUP TITLE INSIDE MENU */
+
+.dropdownGroupLabel {
+  padding: 9px 9px 6px;
+
+  color: #657789;
+
+  font-size: 9px;
+  font-weight: 900;
+
+  letter-spacing: 0.09em;
+
+  text-transform: uppercase;
+}
+
+
+/* OPTIONAL DIVIDER */
+
+.dropdownDivider {
+  height: 1px;
+
+  margin: 5px 4px;
+
+  background: #21303b;
+}
+
+
+/* CUSTOM MENU SCROLLBAR */
+
+.dropdownMenu::-webkit-scrollbar {
+  width: 8px;
+}
+
+
+.dropdownMenu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+
+.dropdownMenu::-webkit-scrollbar-thumb {
+  border:
+    2px solid #0d141a;
+
+  border-radius: 999px;
+
+  background: #344653;
+}
+
+
+.dropdownMenu::-webkit-scrollbar-thumb:hover {
+  background: #465c6b;
 }
 
 
@@ -626,6 +1052,12 @@ th {
 }
 
 
+tbody tr {
+  transition:
+    background 0.10s ease;
+}
+
+
 tbody tr:hover {
   background: #111b24;
 }
@@ -682,7 +1114,10 @@ tbody tr:last-child td {
   display: grid;
 
   grid-template-columns:
-    repeat(3, minmax(0, 1fr));
+    repeat(
+      3,
+      minmax(0, 1fr)
+    );
 
   gap: 14px;
 }
@@ -699,6 +1134,17 @@ tbody tr:last-child td {
   border-radius: var(--radius);
 
   background: var(--panel);
+
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease;
+}
+
+
+.reportCard:hover {
+  border-color: var(--border-hover);
+
+  background: #0f171e;
 }
 
 
@@ -835,6 +1281,113 @@ tbody tr:last-child td {
 
 
 /* ========================================================== */
+/* DETAIL CONTENT                                             */
+/* ========================================================== */
+
+.drawerSubtitle {
+  margin:
+    -8px 0 16px;
+
+  color: var(--muted);
+
+  font-size: 12px;
+}
+
+
+.detailGrid {
+  display: grid;
+
+  grid-template-columns:
+    repeat(
+      2,
+      minmax(0, 1fr)
+    );
+
+  gap: 10px;
+
+  margin-bottom: 20px;
+}
+
+
+.metricCard {
+  padding: 12px;
+
+  border:
+    1px solid var(--border);
+
+  border-radius: 8px;
+
+  background: var(--panel);
+}
+
+
+.metricCard span {
+  display: block;
+
+  margin-bottom: 5px;
+
+  color: var(--muted);
+
+  font-size: 10px;
+}
+
+
+.metricCard strong {
+  font-size: 18px;
+}
+
+
+.detailDrawer h3 {
+  margin:
+    20px 0 8px;
+
+  font-size: 14px;
+}
+
+
+.detailList {
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 6px;
+}
+
+
+.detailListRow {
+  display: flex;
+
+  justify-content: space-between;
+  align-items: center;
+
+  gap: 15px;
+
+  padding: 10px 12px;
+
+  border:
+    1px solid var(--border);
+
+  border-radius: 7px;
+
+  background: var(--panel);
+}
+
+
+.detailListRow strong {
+  font-size: 12px;
+}
+
+
+.detailListRow span {
+  color: var(--muted);
+
+  font-size: 11px;
+
+  text-align: right;
+}
+
+
+/* ========================================================== */
 /* RESPONSIVE                                                 */
 /* ========================================================== */
 
@@ -842,7 +1395,8 @@ tbody tr:last-child td {
 
   .header {
     grid-template-columns:
-      1fr auto;
+      1fr
+      auto;
 
     grid-template-areas:
       "brand summary"
@@ -856,11 +1410,20 @@ tbody tr:last-child td {
   }
 
 
+  .raceSelectorGroup {
+    width: min(360px, 100%);
+    max-width: 360px;
+  }
+
+
   .controls {
     grid-template-columns:
       repeat(
         2,
-        minmax(180px, 1fr)
+        minmax(
+          180px,
+          1fr
+        )
       );
   }
 
@@ -888,13 +1451,20 @@ tbody tr:last-child td {
 
   .raceContext {
     align-items: stretch;
+
     flex-direction: column;
   }
 
 
   .raceSelectorGroup {
+    width: 100%;
     max-width: none;
     min-width: 0;
+  }
+
+
+  .raceModeBadge {
+    width: fit-content;
   }
 
 
@@ -904,8 +1474,16 @@ tbody tr:last-child td {
     grid-template-columns:
       repeat(
         3,
-        minmax(0, 1fr)
+        minmax(
+          0,
+          1fr
+        )
       );
+  }
+
+
+  .raceSummaryItem {
+    min-width: 0;
   }
 
 
@@ -922,5 +1500,28 @@ tbody tr:last-child td {
 
   .sectionHead {
     flex-direction: column;
+  }
+
+
+  .detailGrid {
+    grid-template-columns:
+      1fr;
+  }
+
+
+  .detailListRow {
+    align-items: flex-start;
+
+    flex-direction: column;
+  }
+
+
+  .detailListRow span {
+    text-align: left;
+  }
+
+
+  .dropdownMenu {
+    max-height: 300px;
   }
 }
