@@ -41,6 +41,10 @@
   </div>
 
 
+  <!-- ====================================================== -->
+  <!-- RACE / SESSION SELECTOR                                -->
+  <!-- ====================================================== -->
+
   <div class="raceContext">
 
     <div class="raceSelectorGroup">
@@ -49,13 +53,72 @@
         RACE / SESSION
       </span>
 
-      <select id="raceSelector">
 
-        <option value="live">
-          ● LIVE — Current race
-        </option>
+      <div
+        class="dropdown"
+        id="raceDropdown"
+        data-value="live"
+      >
 
-      </select>
+        <button
+          type="button"
+          class="dropdownTrigger"
+          id="raceDropdownTrigger"
+        >
+
+          <span class="dropdownTriggerContent">
+
+            <span
+              class="dropdownStatusDot live"
+              id="raceDropdownStatusDot"
+            ></span>
+
+            <span id="raceDropdownLabel">
+              Current race
+            </span>
+
+          </span>
+
+
+          <span class="dropdownChevron">
+            ▾
+          </span>
+
+        </button>
+
+
+        <div
+          class="dropdownMenu"
+          id="raceDropdownMenu"
+        >
+
+          <div class="dropdownGroupLabel">
+            LIVE
+          </div>
+
+
+          <button
+            type="button"
+            class="dropdownOption selected"
+            data-value="live"
+            data-mode="live"
+          >
+
+            <span class="dropdownStatusDot live"></span>
+
+            <span>
+              Current race
+            </span>
+
+            <span class="dropdownCheck">
+              ✓
+            </span>
+
+          </button>
+
+        </div>
+
+      </div>
 
     </div>
 
@@ -70,11 +133,17 @@
   </div>
 
 
+  <!-- ====================================================== -->
+  <!-- RACE SUMMARY                                           -->
+  <!-- ====================================================== -->
+
   <div class="raceSummary">
 
     <div class="raceSummaryItem">
 
-      <span>SESSION</span>
+      <span>
+        SESSION
+      </span>
 
       <strong id="sessionName">
         Apex Timing
@@ -85,7 +154,9 @@
 
     <div class="raceSummaryItem">
 
-      <span>STATUS</span>
+      <span>
+        STATUS
+      </span>
 
       <strong id="sessionStatus">
         —
@@ -96,7 +167,9 @@
 
     <div class="raceSummaryItem">
 
-      <span>TEAMS</span>
+      <span>
+        TEAMS
+      </span>
 
       <strong id="headerTeamCount">
         0
@@ -106,6 +179,10 @@
 
   </div>
 
+
+  <!-- ====================================================== -->
+  <!-- CONNECTION STATUS                                      -->
+  <!-- ====================================================== -->
 
   <div class="statusbar">
 
@@ -202,25 +279,124 @@
 
   <section class="controls">
 
-    <select id="teamFilter">
-      <option value="">
-        All teams
-      </option>
-    </select>
+
+    <!-- TEAM FILTER -->
+
+    <div
+      class="dropdown filterDropdown"
+      id="teamDropdown"
+      data-value=""
+    >
+
+      <button
+        type="button"
+        class="dropdownTrigger"
+        id="teamDropdownTrigger"
+      >
+
+        <span id="teamDropdownLabel">
+          All teams
+        </span>
+
+        <span class="dropdownChevron">
+          ▾
+        </span>
+
+      </button>
 
 
-    <select id="driverFilter">
-      <option value="">
-        All drivers
-      </option>
-    </select>
+      <div
+        class="dropdownMenu"
+        id="teamDropdownMenu"
+      >
 
+        <button
+          type="button"
+          class="dropdownOption selected"
+          data-value=""
+        >
+
+          <span></span>
+
+          <span>
+            All teams
+          </span>
+
+          <span class="dropdownCheck">
+            ✓
+          </span>
+
+        </button>
+
+      </div>
+
+    </div>
+
+
+
+    <!-- DRIVER FILTER -->
+
+    <div
+      class="dropdown filterDropdown"
+      id="driverDropdown"
+      data-value=""
+    >
+
+      <button
+        type="button"
+        class="dropdownTrigger"
+        id="driverDropdownTrigger"
+      >
+
+        <span id="driverDropdownLabel">
+          All drivers
+        </span>
+
+        <span class="dropdownChevron">
+          ▾
+        </span>
+
+      </button>
+
+
+      <div
+        class="dropdownMenu"
+        id="driverDropdownMenu"
+      >
+
+        <button
+          type="button"
+          class="dropdownOption selected"
+          data-value=""
+        >
+
+          <span></span>
+
+          <span>
+            All drivers
+          </span>
+
+          <span class="dropdownCheck">
+            ✓
+          </span>
+
+        </button>
+
+      </div>
+
+    </div>
+
+
+
+    <!-- SEARCH -->
 
     <input
       id="search"
       placeholder="Search team / driver / kart"
     />
 
+
+    <!-- RESET -->
 
     <button
       id="resetFilters"
@@ -229,6 +405,8 @@
       Reset
     </button>
 
+
+    <!-- AUTO REFRESH -->
 
     <label
       id="autoRefreshControl"
@@ -245,6 +423,8 @@
 
     </label>
 
+
+    <!-- REFRESH -->
 
     <button id="refresh">
       Refresh
@@ -281,8 +461,15 @@
       <div class="sectionStats">
 
         <div>
-          <b id="teamCount">0</b>
-          <span>teams</span>
+
+          <b id="teamCount">
+            0
+          </b>
+
+          <span>
+            teams
+          </span>
+
         </div>
 
       </div>
@@ -791,4 +978,5 @@
 
 
 </body>
+
 </html>
