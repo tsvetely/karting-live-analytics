@@ -2,26 +2,28 @@
 <html lang="en">
 
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8">
 
   <meta
     name="viewport"
-    content="width=device-width,initial-scale=1"
-  />
+    content="width=device-width, initial-scale=1"
+  >
 
-  <title>
-    Race Engineer
-  </title>
+  <title>Race Engineer</title>
 
   <link
     rel="stylesheet"
     href="/styles.css"
-  />
+  >
 </head>
 
 
 <body>
 
+
+<!-- =========================================================
+     HEADER
+========================================================= -->
 
 <header class="header">
 
@@ -31,53 +33,91 @@
       RE
     </div>
 
-    <div>
-      <h1>
-        Race Engineer
-      </h1>
-
-      <span>
-        Live Race Analytics
-      </span>
+    <div class="brandText">
+      <h1>Race Engineer</h1>
+      <span>Live Race Analytics</span>
     </div>
 
   </div>
 
 
-  <div class="raceContext">
+  <div class="headerRace">
 
-    <div class="raceSelectorGroup">
-
-      <span class="fieldLabel">
-        RACE / SESSION
-      </span>
-
-      <select id="raceSelector">
-
-        <option value="live">
-          ● Current race
-        </option>
-
-      </select>
-
+    <div class="fieldLabel">
+      RACE / SESSION
     </div>
 
 
     <div
+      id="raceDropdown"
+      class="dropdown raceDropdown"
+      data-value="live"
+    >
+
+      <button
+        id="raceDropdownTrigger"
+        type="button"
+        class="dropdownTrigger raceDropdownTrigger"
+      >
+
+        <span
+          id="raceDropdownStatusDot"
+          class="dropdownStatusDot live"
+        ></span>
+
+        <span
+          id="raceDropdownLabel"
+          class="dropdownLabel"
+        >
+          Current race
+        </span>
+
+        <span class="dropdownChevron">
+          ▾
+        </span>
+
+      </button>
+
+
+      <div
+        id="raceDropdownMenu"
+        class="dropdownMenu"
+      >
+
+        <div class="dropdownGroupLabel">
+          LIVE
+        </div>
+
+        <button
+          type="button"
+          class="dropdownOption selected"
+          data-value="live"
+        >
+          <span class="dropdownStatusDot live"></span>
+          <span>Current race</span>
+          <span class="dropdownCheck">✓</span>
+        </button>
+
+      </div>
+
+    </div>
+
+
+    <span
       id="raceModeBadge"
       class="raceModeBadge live"
     >
       LIVE
-    </div>
+    </span>
 
   </div>
 
 
-  <div class="raceSummary">
+  <div class="headerMetrics">
 
-    <div class="raceSummaryItem">
+    <div class="headerMetric">
 
-      <span>
+      <span class="headerMetricLabel">
         SESSION
       </span>
 
@@ -88,9 +128,9 @@
     </div>
 
 
-    <div class="raceSummaryItem">
+    <div class="headerMetric">
 
-      <span>
+      <span class="headerMetricLabel">
         STATUS
       </span>
 
@@ -101,9 +141,9 @@
     </div>
 
 
-    <div class="raceSummaryItem">
+    <div class="headerMetric">
 
-      <span>
+      <span class="headerMetricLabel">
         TEAMS
       </span>
 
@@ -137,57 +177,62 @@
 
 
 
+<!-- =========================================================
+     NAVIGATION
+========================================================= -->
+
 <nav class="tabs">
 
   <button
+    type="button"
     class="tab active"
     data-view="overview"
   >
     OVERVIEW
   </button>
 
-
   <button
+    type="button"
     class="tab"
     data-view="stints"
   >
     STINTS
   </button>
 
-
   <button
+    type="button"
     class="tab"
     data-view="drivers"
   >
     DRIVERS
   </button>
 
-
   <button
+    type="button"
     class="tab"
     data-view="teams"
   >
     TEAMS
   </button>
 
-
   <button
+    type="button"
     class="tab"
     data-view="pits"
   >
     PITS
   </button>
 
-
   <button
+    type="button"
     class="tab"
     data-view="events"
   >
     EVENTS
   </button>
 
-
   <button
+    type="button"
     class="tab"
     data-view="reports"
   >
@@ -201,400 +246,217 @@
 <main>
 
 
-  <section class="controls">
+<!-- =========================================================
+     FILTER BAR
+========================================================= -->
 
-    <select id="teamFilter">
-
-      <option value="">
-        All teams
-      </option>
-
-    </select>
+<section class="controls">
 
 
-    <select id="driverFilter">
+  <!-- TEAM -->
 
-      <option value="">
-        All drivers
-      </option>
-
-    </select>
-
-
-    <input
-      id="search"
-      placeholder="Search position / team / driver / kart / lap"
-    />
-
+  <div
+    id="teamDropdown"
+    class="dropdown filterDropdown"
+    data-value=""
+  >
 
     <button
-      id="resetFilters"
-      class="secondary"
+      id="teamDropdownTrigger"
+      type="button"
+      class="dropdownTrigger"
     >
-      Reset
+
+      <span
+        id="teamDropdownLabel"
+        class="dropdownLabel"
+      >
+        All teams
+      </span>
+
+      <span class="dropdownChevron">
+        ▾
+      </span>
+
     </button>
 
 
-    <label
-      id="autoRefreshControl"
-      class="check"
+    <div
+      id="teamDropdownMenu"
+      class="dropdownMenu"
     >
-
-      <input
-        id="auto"
-        type="checkbox"
-        checked
-      />
-
-      Auto refresh
-
-    </label>
-
-
-    <button id="refresh">
-      Refresh
-    </button>
-
-  </section>
-
-
-
-  <section
-    id="overview"
-    class="view active"
-  >
-
-    <div class="sectionHead">
-
-      <div>
-
-        <h2 id="overviewTitle">
-          Current race overview
-        </h2>
-
-        <p id="overviewSubtitle">
-          Live race order, current driver, current stint and live performance.
-        </p>
-
-      </div>
-
-
-      <div class="sectionStats">
-
-        <div>
-
-          <b id="teamCount">
-            0
-          </b>
-
-          <span>
-            teams
-          </span>
-
-        </div>
-
-      </div>
-
-    </div>
-
-
-    <div class="tableWrap">
-
-      <table>
-
-        <thead>
-
-          <tr>
-
-            <th>Pos</th>
-            <th>Team</th>
-            <th>Driver</th>
-            <th>Race lap</th>
-            <th>Pits</th>
-            <th>Stint</th>
-            <th>Stint laps</th>
-            <th>Last</th>
-            <th>Average</th>
-            <th>Best</th>
-            <th>Best lap</th>
-            <th>Worst</th>
-            <th>Worst lap</th>
-            <th>Consistency</th>
-            <th>Updated</th>
-
-          </tr>
-
-        </thead>
-
-
-        <tbody id="overviewBody"></tbody>
-
-      </table>
-
-    </div>
-
-  </section>
-
-
-
-  <section
-    id="stints"
-    class="view"
-  >
-
-    <div class="sectionHead">
-
-      <div>
-
-        <h2>
-          Stints
-        </h2>
-
-        <p>
-          Completed and current stints for every team, in race order.
-        </p>
-
-      </div>
-
-    </div>
-
-
-    <div class="tableWrap">
-
-      <table>
-
-        <thead>
-
-          <tr>
-
-            <th>Pos</th>
-            <th>Team</th>
-            <th>Driver</th>
-            <th>Stint</th>
-            <th>Start lap</th>
-            <th>End lap</th>
-            <th>Total laps</th>
-            <th>Valid laps</th>
-            <th>Average</th>
-            <th>Best</th>
-            <th>Best lap</th>
-            <th>Worst</th>
-            <th>Worst lap</th>
-            <th>Consistency</th>
-            <th>Status</th>
-
-          </tr>
-
-        </thead>
-
-
-        <tbody id="stintsBody"></tbody>
-
-      </table>
-
-    </div>
-
-  </section>
-
-
-
-  <section
-    id="drivers"
-    class="view"
-  >
-
-    <div class="sectionHead">
-
-      <div>
-
-        <h2>
-          Drivers
-        </h2>
-
-        <p>
-          Driver performance aggregated from the selected race only.
-        </p>
-
-      </div>
-
-    </div>
-
-
-    <div class="tableWrap">
-
-      <table>
-
-        <thead>
-
-          <tr>
-
-            <th>Pos</th>
-            <th>Team</th>
-            <th>Driver</th>
-            <th>Stints</th>
-            <th>Valid stints</th>
-            <th>Short stints</th>
-            <th>Valid laps</th>
-            <th>Total laps</th>
-            <th>Average</th>
-            <th>Best</th>
-            <th>Consistency</th>
-
-          </tr>
-
-        </thead>
-
-
-        <tbody id="driversBody"></tbody>
-
-      </table>
-
-    </div>
-
-  </section>
-
-
-
-  <section
-    id="teams"
-    class="view"
-  >
-
-    <div class="sectionHead">
-
-      <div>
-
-        <h2>
-          Teams
-        </h2>
-
-        <p>
-          Team performance and driver comparison, ordered by race position when live.
-        </p>
-
-      </div>
-
-    </div>
-
-
-    <div class="tableWrap">
-
-      <table>
-
-        <thead>
-
-          <tr>
-
-            <th>Pos</th>
-            <th>Team</th>
-            <th>Drivers</th>
-            <th>Stints</th>
-            <th>Valid laps</th>
-            <th>Total laps</th>
-            <th>Average</th>
-            <th>Best</th>
-            <th>Consistency</th>
-            <th>Driver spread</th>
-
-          </tr>
-
-        </thead>
-
-
-        <tbody id="teamsBody"></tbody>
-
-      </table>
-
-    </div>
-
-  </section>
-
-
-
-  <section
-    id="pits"
-    class="view"
-  >
-
-    <div class="sectionHead">
-
-      <div>
-
-        <h2>
-          Pit stops
-        </h2>
-
-        <p>
-          Pit history for the selected race only; live mode is limited to the current session and current pit count.
-        </p>
-
-      </div>
-
-    </div>
-
-
-    <div class="tableWrap">
-
-      <table>
-
-        <thead>
-
-          <tr>
-
-            <th>Pos</th>
-            <th>Team</th>
-            <th>Pit #</th>
-            <th>Driver</th>
-            <th>Lap</th>
-            <th>Hour</th>
-            <th>On track</th>
-            <th>Pit time</th>
-            <th>Out</th>
-
-          </tr>
-
-        </thead>
-
-
-        <tbody id="pitsBody"></tbody>
-
-      </table>
-
-    </div>
-
-  </section>
-
-
-
-  <section
-    id="events"
-    class="view"
-  >
-
-    <div class="sectionHead">
-
-      <div>
-
-        <h2>
-          Race events & exclusions
-        </h2>
-
-        <p>
-          Manual exclusions now affect the current analytics; automatic race-event detection can be added on top of this clean session data.
-        </p>
-
-      </div>
-
 
       <button
-        id="addManualExclusion"
-        class="secondary"
+        type="button"
+        class="dropdownOption selected"
+        data-value=""
       >
-        + Exclude lap
+        <span></span>
+        <span>All teams</span>
+        <span class="dropdownCheck">✓</span>
       </button>
 
     </div>
 
+  </div>
+
+
+
+  <!-- DRIVER -->
+
+  <div
+    id="driverDropdown"
+    class="dropdown filterDropdown"
+    data-value=""
+  >
+
+    <button
+      id="driverDropdownTrigger"
+      type="button"
+      class="dropdownTrigger"
+    >
+
+      <span
+        id="driverDropdownLabel"
+        class="dropdownLabel"
+      >
+        All drivers
+      </span>
+
+      <span class="dropdownChevron">
+        ▾
+      </span>
+
+    </button>
+
+
+    <div
+      id="driverDropdownMenu"
+      class="dropdownMenu"
+    >
+
+      <button
+        type="button"
+        class="dropdownOption selected"
+        data-value=""
+      >
+        <span></span>
+        <span>All drivers</span>
+        <span class="dropdownCheck">✓</span>
+      </button>
+
+    </div>
+
+  </div>
+
+
+
+  <!-- SEARCH -->
+
+  <div class="searchBox">
+
+    <span class="searchIcon">
+      ⌕
+    </span>
+
+    <input
+      id="search"
+      type="search"
+      autocomplete="off"
+      placeholder="Search team / driver / Apex ID / lap"
+    >
+
+  </div>
+
+
+
+  <button
+    id="resetFilters"
+    type="button"
+    class="secondary"
+  >
+    Reset
+  </button>
+
+
+
+  <label
+    id="autoRefreshControl"
+    class="autoRefresh"
+  >
+
+    <input
+      id="auto"
+      type="checkbox"
+      checked
+    >
+
+    <span class="switch"></span>
+
+    <span>
+      Auto refresh
+    </span>
+
+  </label>
+
+
+
+  <button
+    id="refresh"
+    type="button"
+    class="primary"
+  >
+    Refresh
+  </button>
+
+</section>
+
+
+
+<!-- =========================================================
+     OVERVIEW
+========================================================= -->
+
+<section
+  id="overview"
+  class="view active"
+>
+
+  <div class="sectionHead">
+
+    <div>
+
+      <div class="sectionEyebrow">
+        RACE CONTROL
+      </div>
+
+      <h2 id="overviewTitle">
+        Current race overview
+      </h2>
+
+      <p id="overviewSubtitle">
+        Race order, current driver, current stint and live performance.
+      </p>
+
+    </div>
+
+
+    <div class="sectionCounter">
+
+      <strong id="teamCount">
+        0
+      </strong>
+
+      <span>
+        teams
+      </span>
+
+    </div>
+
+  </div>
+
+
+  <div class="tableCard">
 
     <div class="tableWrap">
 
@@ -603,174 +465,662 @@
         <thead>
 
           <tr>
-
-            <th>Time</th>
-            <th>Team / Apex</th>
-            <th>Lap</th>
-            <th>Type</th>
-            <th>Reason</th>
-            <th>Status</th>
-            <th>Action</th>
-
+            <th class="positionColumn">POS</th>
+            <th>TEAM</th>
+            <th>DRIVER</th>
+            <th>RACE LAP</th>
+            <th>PITS</th>
+            <th>STINT</th>
+            <th>STINT LAPS</th>
+            <th>LAST</th>
+            <th>AVERAGE</th>
+            <th>BEST</th>
+            <th>BEST LAP</th>
+            <th>WORST</th>
+            <th>WORST LAP</th>
+            <th>CONSISTENCY</th>
+            <th>UPDATED</th>
           </tr>
 
         </thead>
 
 
-        <tbody id="eventsBody"></tbody>
+        <tbody id="overviewBody">
+
+          <tr class="empty">
+            <td colspan="15">
+              Loading race data…
+            </td>
+          </tr>
+
+        </tbody>
 
       </table>
 
     </div>
 
-  </section>
+  </div>
+
+</section>
 
 
 
-  <section
-    id="reports"
-    class="view"
-  >
+<!-- =========================================================
+     STINTS
+========================================================= -->
 
-    <div class="sectionHead">
+<section
+  id="stints"
+  class="view"
+>
 
-      <div>
+  <div class="sectionHead">
 
-        <h2>
-          Reports & downloads
-        </h2>
+    <div>
 
-        <p>
-          Real CSV and PDF files generated from the selected race.
-        </p>
-
+      <div class="sectionEyebrow">
+        RACE ANALYSIS
       </div>
+
+      <h2>
+        Stints
+      </h2>
+
+      <p>
+        Every completed and current stint for the selected race.
+      </p>
+
+    </div>
+
+  </div>
+
+
+  <div class="tableCard">
+
+    <div class="tableWrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>POS</th>
+            <th>TEAM</th>
+            <th>DRIVER</th>
+            <th>STINT</th>
+            <th>START LAP</th>
+            <th>END LAP</th>
+            <th>TOTAL LAPS</th>
+            <th>VALID LAPS</th>
+            <th>AVERAGE</th>
+            <th>BEST</th>
+            <th>BEST LAP</th>
+            <th>WORST</th>
+            <th>WORST LAP</th>
+            <th>CONSISTENCY</th>
+            <th>STATUS</th>
+          </tr>
+
+        </thead>
+
+
+        <tbody id="stintsBody">
+
+          <tr class="empty">
+            <td colspan="15">
+              Open this tab to load stint data.
+            </td>
+          </tr>
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     DRIVERS
+========================================================= -->
+
+<section
+  id="drivers"
+  class="view"
+>
+
+  <div class="sectionHead">
+
+    <div>
+
+      <div class="sectionEyebrow">
+        DRIVER ANALYSIS
+      </div>
+
+      <h2>
+        Drivers
+      </h2>
+
+      <p>
+        Driver pace, stint volume, valid laps and consistency.
+      </p>
+
+    </div>
+
+  </div>
+
+
+  <div class="tableCard">
+
+    <div class="tableWrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>POS</th>
+            <th>TEAM</th>
+            <th>DRIVER</th>
+            <th>STINTS</th>
+            <th>VALID STINTS</th>
+            <th>SHORT STINTS</th>
+            <th>VALID LAPS</th>
+            <th>TOTAL LAPS</th>
+            <th>AVERAGE</th>
+            <th>BEST</th>
+            <th>CONSISTENCY</th>
+          </tr>
+
+        </thead>
+
+
+        <tbody id="driversBody">
+
+          <tr class="empty">
+            <td colspan="11">
+              Open this tab to load driver data.
+            </td>
+          </tr>
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     TEAMS
+========================================================= -->
+
+<section
+  id="teams"
+  class="view"
+>
+
+  <div class="sectionHead">
+
+    <div>
+
+      <div class="sectionEyebrow">
+        TEAM ANALYSIS
+      </div>
+
+      <h2>
+        Teams
+      </h2>
+
+      <p>
+        Team performance and comparison across the selected race.
+      </p>
+
+    </div>
+
+  </div>
+
+
+  <div class="tableCard">
+
+    <div class="tableWrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>POS</th>
+            <th>TEAM</th>
+            <th>DRIVERS</th>
+            <th>STINTS</th>
+            <th>VALID LAPS</th>
+            <th>TOTAL LAPS</th>
+            <th>AVERAGE</th>
+            <th>BEST</th>
+            <th>CONSISTENCY</th>
+            <th>DRIVER SPREAD</th>
+          </tr>
+
+        </thead>
+
+
+        <tbody id="teamsBody">
+
+          <tr class="empty">
+            <td colspan="10">
+              Open this tab to load team data.
+            </td>
+          </tr>
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     PITS
+========================================================= -->
+
+<section
+  id="pits"
+  class="view"
+>
+
+  <div class="sectionHead">
+
+    <div>
+
+      <div class="sectionEyebrow">
+        PIT ANALYSIS
+      </div>
+
+      <h2>
+        Pit stops
+      </h2>
+
+      <p>
+        Pit sequence and driver changes for the selected race.
+      </p>
+
+    </div>
+
+  </div>
+
+
+  <div class="tableCard">
+
+    <div class="tableWrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>POS</th>
+            <th>TEAM</th>
+            <th>PIT #</th>
+            <th>DRIVER</th>
+            <th>LAP</th>
+            <th>HOUR</th>
+            <th>ON TRACK</th>
+            <th>PIT TIME</th>
+            <th>OUT</th>
+          </tr>
+
+        </thead>
+
+
+        <tbody id="pitsBody">
+
+          <tr class="empty">
+            <td colspan="9">
+              Open this tab to load pit data.
+            </td>
+          </tr>
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     EVENTS
+========================================================= -->
+
+<section
+  id="events"
+  class="view"
+>
+
+  <div class="sectionHead">
+
+    <div>
+
+      <div class="sectionEyebrow">
+        RACE CONTROL
+      </div>
+
+      <h2>
+        Events & exclusions
+      </h2>
+
+      <p>
+        Race events and laps manually excluded from analytics.
+      </p>
 
     </div>
 
 
-    <div class="reportGrid">
+    <button
+      id="addManualExclusion"
+      type="button"
+      class="primary"
+    >
+      + Exclude lap
+    </button>
+
+  </div>
 
 
-      <article class="reportCard">
+  <div class="tableCard">
+
+    <div class="tableWrap">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>TIME</th>
+            <th>TEAM / APEX</th>
+            <th>LAP</th>
+            <th>TYPE</th>
+            <th>REASON</th>
+            <th>STATUS</th>
+            <th>ACTION</th>
+          </tr>
+
+        </thead>
+
+
+        <tbody id="eventsBody">
+
+          <tr class="empty">
+            <td colspan="7">
+              No race events.
+            </td>
+          </tr>
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     REPORTS
+========================================================= -->
+
+<section
+  id="reports"
+  class="view"
+>
+
+  <div class="sectionHead">
+
+    <div>
+
+      <div class="sectionEyebrow">
+        EXPORT
+      </div>
+
+      <h2>
+        Reports & downloads
+      </h2>
+
+      <p>
+        Export the selected race analytics as CSV or print-ready PDF.
+      </p>
+
+    </div>
+
+  </div>
+
+
+  <div class="reportGrid">
+
+
+    <article class="reportCard">
+
+      <div class="reportIcon">
+        RE
+      </div>
+
+      <div class="reportContent">
+
+        <span class="reportType">
+          FULL ANALYTICS
+        </span>
 
         <h3>
           Race analytics
         </h3>
 
         <p>
-          Teams, drivers, stints, pits and exclusions.
+          Teams, drivers, stints, pit stops and race events in one complete report.
         </p>
 
-        <div class="reportActions">
-
-          <button id="downloadRaceCsv">
-            CSV
-          </button>
-
-          <button id="downloadRacePdf">
-            PDF
-          </button>
-
-        </div>
-
-      </article>
+      </div>
 
 
-      <article class="reportCard">
+      <div class="reportActions">
+
+        <button
+          id="downloadRaceCsv"
+          type="button"
+          class="secondary"
+        >
+          CSV
+        </button>
+
+        <button
+          id="downloadRacePdf"
+          type="button"
+          class="primary"
+        >
+          PDF
+        </button>
+
+      </div>
+
+    </article>
+
+
+
+    <article class="reportCard">
+
+      <div class="reportIcon">
+        P1
+      </div>
+
+      <div class="reportContent">
+
+        <span class="reportType">
+          ORGANISER
+        </span>
 
         <h3>
-          Organiser report 1
+          Stints & pit stops
         </h3>
 
         <p>
-          Stints and pit stops.
+          Operational report focused on stint sequence and pit-stop execution.
         </p>
 
-        <div class="reportActions">
-
-          <button id="organiserReport1Csv">
-            CSV
-          </button>
-
-          <button id="organiserReport1Pdf">
-            PDF
-          </button>
-
-        </div>
-
-      </article>
+      </div>
 
 
-      <article class="reportCard">
+      <div class="reportActions">
+
+        <button
+          id="organiserReport1Csv"
+          type="button"
+          class="secondary"
+          disabled
+          title="Generator will be connected next"
+        >
+          CSV
+        </button>
+
+        <button
+          id="organiserReport1Pdf"
+          type="button"
+          class="primary"
+          disabled
+          title="Generator will be connected next"
+        >
+          PDF
+        </button>
+
+      </div>
+
+    </article>
+
+
+
+    <article class="reportCard">
+
+      <div class="reportIcon">
+        D
+      </div>
+
+      <div class="reportContent">
+
+        <span class="reportType">
+          ORGANISER
+        </span>
 
         <h3>
-          Organiser report 2
+          Teams & drivers
         </h3>
 
         <p>
-          Teams and drivers.
+          Team and driver performance report for race review and comparison.
         </p>
 
-        <div class="reportActions">
-
-          <button id="organiserReport2Csv">
-            CSV
-          </button>
-
-          <button id="organiserReport2Pdf">
-            PDF
-          </button>
-
-        </div>
-
-      </article>
+      </div>
 
 
-    </div>
+      <div class="reportActions">
 
-  </section>
+        <button
+          id="organiserReport2Csv"
+          type="button"
+          class="secondary"
+          disabled
+          title="Generator will be connected next"
+        >
+          CSV
+        </button>
+
+        <button
+          id="organiserReport2Pdf"
+          type="button"
+          class="primary"
+          disabled
+          title="Generator will be connected next"
+        >
+          PDF
+        </button>
+
+      </div>
+
+    </article>
+
+
+  </div>
+
+</section>
 
 
 </main>
 
 
 
+<!-- =========================================================
+     DETAIL DRAWER
+========================================================= -->
+
 <aside
   id="detailDrawer"
   class="detailDrawer"
 >
 
-  <div class="detailHeader">
+  <div class="detailDrawerInner">
 
-    <div>
+    <div class="detailHeader">
 
-      <span class="eyebrow">
-        DETAIL
-      </span>
+      <div>
 
-      <h2 id="detailTitle">
-        —
-      </h2>
+        <span class="sectionEyebrow">
+          ANALYSIS
+        </span>
+
+        <h2 id="detailTitle">
+          Detail
+        </h2>
+
+      </div>
+
+
+      <button
+        id="closeDetail"
+        type="button"
+        class="iconButton"
+        aria-label="Close"
+      >
+        ×
+      </button>
 
     </div>
 
 
-    <button
-      id="closeDetail"
-      class="iconButton"
-    >
-      ×
-    </button>
+    <div id="detailContent">
 
-  </div>
+      <p class="muted">
+        Select a team or driver to inspect its race data.
+      </p>
 
-
-  <div id="detailContent">
-
-    <p class="muted">
-      Select a team or driver.
-    </p>
+    </div>
 
   </div>
 
@@ -778,12 +1128,7 @@
 
 
 
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-
-<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js"></script>
-
 <script src="/app.js"></script>
-
 
 </body>
 
