@@ -8,25 +8,12 @@ function json(data, status = 200) {
   });
 }
 
-function raceIdFromEnv(env) {
+function raceId(env) {
   const n = Number(env.DEFAULT_RACE_ID || 1);
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 1;
 }
 
-function safeRaceId(url, env) {
-  const raw =
-    url.searchParams.get("race_id") ||
-    env.DEFAULT_RACE_ID ||
-    "1";
-
-  const n = Number(raw);
-
-  return Number.isFinite(n) && n > 0
-    ? String(Math.trunc(n))
-    : "1";
-}
-
-function supabaseHeaders(env, extra = {}) {
+function sbHeaders(env, extra = {}) {
   if (!env.SUPABASE_URL || !env.SUPABASE_KEY) {
     throw new Error("Missing SUPABASE_URL or SUPABASE_KEY");
   }
@@ -39,111 +26,135 @@ function supabaseHeaders(env, extra = {}) {
   };
 }
 
-async function supabase(env, path, params = {}) {
-  const url = new URL(`/rest/v1/${path}`, env.SUPABASE_URL);
+async function sbGet(env, table, params = {}) {
+  const url = new URL(`/rest/v1/${table}`, env.SUPABASE_URL);
 
-  for (const [key, value] of Object.entries(params)) {
-    if (
-      value !== undefined &&
-      value !== null &&
-      value !== ""
-    ) {
-      url.searchParams.set(key, value);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") {
+      url.searchParams.set(k, v);
     }
   }
 
-  const res = await fetch(url, {
-    headers: supabaseHeaders(env, {
+  const r = await fetch(url, {
+    headers: sbHeaders(env, {
       accept: "application/json"
     })
   });
 
-  if (!res.ok) {
+  if (!r.ok) {
     throw new Error(
-      `Supabase ${path}: ${res.status} ${await res.text()}`
+      `Supabase GET ${table}: ${r.status} ${await r.text()}`
     );
   }
 
-  return res.json();
+  return r.json();
 }
 
-async function supabaseInsert(env, table, row) {
-  const url = new URL(`/rest/v1/${table}`, env.SUPABASE_URL);
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: supabaseHeaders(env, {
-      Prefer: "return=minimal"
-    }),
-    body: JSON.stringify(row)
-  });
-
-  if (!res.ok) {
-    throw new Error(
-      `Supabase INSERT ${table}: ${res.status} ${await res.text()}`
-    );
-  }
-}
-
-async function supabaseUpsert(
+async function sbWrite(
   env,
   table,
-  row,
-  conflict
+  method,
+  body,
+  params = {},
+  prefer = "return=minimal"
 ) {
   const url = new URL(`/rest/v1/${table}`, env.SUPABASE_URL);
 
-  if (conflict) {
-    url.searchParams.set("on_conflict", conflict);
+  for (const [k, v] of Object.entries(params)) {
+    url.searchParams.set(k, v);
   }
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: supabaseHeaders(env, {
-      Prefer:
-        "resolution=merge-duplicates,return=minimal,missing=default"
+  const r = await fetch(url, {
+    method,
+    headers: sbHeaders(env, {
+      Prefer: prefer
     }),
-    body: JSON.stringify(row)
+    body:
+      body === undefined
+        ? undefined
+        : JSON.stringify(body)
   });
 
-  if (!res.ok) {
+  if (!r.ok) {
     throw new Error(
-      `Supabase UPSERT ${table}: ${res.status} ${await res.text()}`
+      `Supabase ${method} ${table}: ${r.status} ${await r.text()}`
     );
   }
 }
 
+const sbInsert = (env, table, body) =>
+  sbWrite(
+    env,
+    table,
+    "POST",
+    body,
+    {},
+    "return=minimal"
+  );
 
-// ============================================================
-// APEX PARSING
-// ============================================================
+const sbUpsert = (env, table, body, conflict) =>
+  sbWrite(
+    env,
+    table,
+    "POST",
+    body,
+    {
+      on_conflict: conflict
+    },
+    "resolution=merge-duplicates,return=minimal,missing=default"
+  );
+
+const sbPatch = (env, table, body, filters) =>
+  sbWrite(
+    env,
+    table,
+    "PATCH",
+    body,
+    filters,
+    "return=minimal"
+  );
+
+const sbDelete = (env, table, filters) =>
+  sbWrite(
+    env,
+    table,
+    "DELETE",
+    undefined,
+    filters,
+    "return=minimal"
+  );
 
 function parseApexLine(line) {
-  const match =
-    line.match(/^r(\d+)(?:c(\d+))?\|([^|]+)\|(.*)$/);
+  const m =
+    line.match(
+      /^r(\d+)(?:c(\d+))?\|([^|]+)\|(.*)$/
+    );
 
-  if (!match) return null;
-
-  return {
-    apexId: match[1],
-    column: match[2] || null,
-    field: match[3],
-    value: match[4] || ""
-  };
+  return m
+    ? {
+        apexId: m[1],
+        column: m[2] || null,
+        field: m[3],
+        value: m[4] || ""
+      }
+    : null;
 }
 
 function parseLapTime(value) {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
 
   if (value.includes(":")) {
-    const [minutes, seconds] = value.split(":");
+    const [minutes, seconds] =
+      value.split(":");
 
-    const total =
+    const n =
       Number(minutes) * 60 +
       Number(seconds);
 
-    return Number.isFinite(total)
-      ? total
+    return Number.isFinite(n)
+      ? n
       : null;
   }
 
@@ -154,95 +165,303 @@ function parseLapTime(value) {
     : null;
 }
 
+function msToTime(ms) {
+  ms = Number(ms);
 
-// ============================================================
-// DURABLE OBJECT — APEX COLLECTOR
-// ============================================================
+  if (!Number.isFinite(ms)) {
+    return null;
+  }
+
+  const total =
+    Math.floor(ms / 1000);
+
+  const hours =
+    Math.floor(total / 3600);
+
+  const minutes =
+    Math.floor(
+      (total % 3600) / 60
+    );
+
+  const seconds =
+    total % 60;
+
+  return (
+    `${String(hours).padStart(2, "0")}:` +
+    `${String(minutes).padStart(2, "0")}:` +
+    `${String(seconds).padStart(2, "0")}`
+  );
+}
+
+function msToPitTime(ms) {
+  ms = Number(ms);
+
+  if (!Number.isFinite(ms)) {
+    return null;
+  }
+
+  const total =
+    Math.floor(ms / 1000);
+
+  return (
+    `${Math.floor(total / 60)}:` +
+    `${String(total % 60).padStart(2, "0")}.` +
+    `${String(ms % 1000).padStart(3, "0")}`
+  );
+}
+
+function parseDrivers(raw) {
+  const map =
+    new Map();
+
+  const re =
+    /<driver\s+[^>]*id="(\d+)"[^>]*name="([^"]+)"/g;
+
+  let match;
+
+  while (
+    (match = re.exec(raw)) !== null
+  ) {
+    map.set(
+      Number(match[1]),
+      match[2]
+    );
+  }
+
+  return map;
+}
+
+function parseLapRows(raw, currentRaceId) {
+  return raw
+    .split("\n")
+    .map(line => line.trim())
+    .map(line => {
+      const match =
+        line.match(
+          /^D(\d+)\.L0*(\d+)#(.+)$/
+        );
+
+      if (!match) {
+        return null;
+      }
+
+      const parts =
+        match[3].split("|");
+
+      const milliseconds =
+        Number(parts[3]);
+
+      if (
+        !Number.isFinite(milliseconds)
+      ) {
+        return null;
+      }
+
+      return {
+        race_id:
+          currentRaceId,
+
+        apex_id:
+          String(match[1]),
+
+        lap_number:
+          Number(match[2]),
+
+        lap_time:
+          Number(
+            (
+              milliseconds /
+              1000
+            ).toFixed(3)
+          ),
+
+        received_at:
+          new Date()
+            .toISOString()
+      };
+    })
+    .filter(Boolean);
+}
+
+function parsePits(
+  raw,
+  teamName,
+  currentRaceId
+) {
+  const drivers =
+    parseDrivers(raw);
+
+  return raw
+    .split("\n")
+    .map(line => line.trim())
+    .map(line => {
+      const match =
+        line.match(
+          /^D(\d+)\.P\d+#(.+)$/
+        );
+
+      if (!match) {
+        return null;
+      }
+
+      const parts =
+        match[2].split("|");
+
+      return {
+        race_id:
+          currentRaceId,
+
+        apex_id:
+          Number(match[1]),
+
+        team_name:
+          teamName,
+
+        pit_number:
+          Number(parts[0]),
+
+        pit_lap:
+          Number(parts[1]),
+
+        pit_hour:
+          msToTime(parts[2]),
+
+        on_track:
+          msToTime(parts[5]),
+
+        driver_name:
+          drivers.get(
+            Number(parts[7])
+          ) || null,
+
+        total_time:
+          msToTime(parts[8]),
+
+        pit_time:
+          msToPitTime(parts[4]),
+
+        updated_at:
+          new Date()
+            .toISOString()
+      };
+    })
+    .filter(Boolean);
+}
 
 export class ApexCollector {
   constructor(state, env) {
-    this.state = state;
-    this.env = env;
+    this.state =
+      state;
 
-    this.ws = null;
-    this.connecting = false;
+    this.env =
+      env;
 
-    this.packetCount = 0;
-    this.lastPacketAt = null;
-    this.connectedAt = null;
-    this.lastError = null;
+    this.rid =
+      raceId(env);
 
-    this.raceId = raceIdFromEnv(env);
+    this.ws =
+      null;
 
-    this.queue = Promise.resolve();
+    this.connecting =
+      false;
 
-    this.state.blockConcurrencyWhile(async () => {
-      this.packetCount =
-        (await this.state.storage.get("packetCount")) || 0;
+    this.queue =
+      Promise.resolve();
 
-      this.lastPacketAt =
-        (await this.state.storage.get("lastPacketAt")) || null;
+    this.lastPacketAt =
+      null;
 
-      this.connectedAt =
-        (await this.state.storage.get("connectedAt")) || null;
+    this.packetCount =
+      0;
 
-      this.lastError =
-        (await this.state.storage.get("lastError")) || null;
+    state.blockConcurrencyWhile(
+      async () => {
+        this.lastPacketAt =
+          await state.storage.get(
+            "lastPacketAt"
+          ) || null;
 
-      const alarm =
-        await this.state.storage.getAlarm();
+        this.packetCount =
+          await state.storage.get(
+            "packetCount"
+          ) || 0;
 
-      if (alarm === null) {
-        await this.state.storage.setAlarm(
-          Date.now() + 60 * 1000
-        );
+        if (
+          await state.storage.getAlarm() ===
+          null
+        ) {
+          await state.storage.setAlarm(
+            Date.now() + 60000
+          );
+        }
       }
-    });
+    );
   }
 
   async fetch(request) {
-    const url = new URL(request.url);
+    const pathname =
+      new URL(
+        request.url
+      ).pathname;
 
-    if (url.pathname === "/start") {
-      await this.ensureConnected();
+    if (
+      pathname ===
+      "/start"
+    ) {
+      await this.connect();
 
-      return json({
-        ok: true,
-        collector: await this.status()
-      });
+      return json(
+        await this.status()
+      );
     }
 
-    if (url.pathname === "/reconnect") {
+    if (
+      pathname ===
+      "/status"
+    ) {
+      return json(
+        await this.status()
+      );
+    }
+
+    if (
+      pathname ===
+      "/reconnect"
+    ) {
       try {
-        this.ws?.close(1000, "manual reconnect");
+        this.ws?.close(
+          1000,
+          "reconnect"
+        );
       } catch {}
 
-      this.ws = null;
+      this.ws =
+        null;
 
-      await this.ensureConnected();
+      await this.connect();
 
-      return json({
-        ok: true,
-        collector: await this.status()
-      });
+      return json(
+        await this.status()
+      );
     }
 
-    if (url.pathname === "/status") {
-      return json(await this.status());
-    }
-
-    return new Response("Not found", {
-      status: 404
-    });
+    return new Response(
+      "Not found",
+      {
+        status: 404
+      }
+    );
   }
 
   async status() {
     return {
-      race_id: this.raceId,
+      race_id:
+        this.rid,
 
       connected:
-        this.ws !== null &&
-        this.ws.readyState === WebSocket.OPEN,
+        !!this.ws &&
+        this.ws.readyState ===
+          WebSocket.OPEN,
 
       connecting:
         this.connecting,
@@ -250,627 +469,1139 @@ export class ApexCollector {
       packet_count:
         this.packetCount,
 
-      connected_at:
-        this.connectedAt,
-
       last_packet_at:
-        this.lastPacketAt,
-
-      last_error:
-        this.lastError,
-
-      apex_ws:
-        this.env.APEX_WS_URL ||
-        "wss://live-data.apex-timing.com:8913/"
+        this.lastPacketAt
     };
   }
 
   async alarm() {
-    try {
-      const stale =
-        !this.lastPacketAt ||
-        Date.now() -
-          Date.parse(this.lastPacketAt) >
-          2 * 60 * 1000;
+    const stale =
+      !this.lastPacketAt ||
+      Date.now() -
+        Date.parse(
+          this.lastPacketAt
+        ) >
+        120000;
 
-      if (
-        !this.ws ||
-        this.ws.readyState !== WebSocket.OPEN ||
-        stale
-      ) {
-        try {
-          this.ws?.close(
-            1000,
-            "collector watchdog reconnect"
-          );
-        } catch {}
+    if (
+      !this.ws ||
+      this.ws.readyState !==
+        WebSocket.OPEN ||
+      stale
+    ) {
+      try {
+        this.ws?.close();
+      } catch {}
 
-        this.ws = null;
+      this.ws =
+        null;
 
-        await this.ensureConnected();
-      }
-    } catch (error) {
-      await this.recordError(
-        `ALARM: ${error?.message || String(error)}`
-      );
-    } finally {
-      await this.state.storage.setAlarm(
-        Date.now() + 60 * 1000
-      );
+      await this.connect();
     }
+
+    await this.state.storage.setAlarm(
+      Date.now() + 60000
+    );
   }
 
-  async ensureConnected() {
+  async connect() {
     if (
-      this.ws &&
+      this.connecting ||
       (
-        this.ws.readyState === WebSocket.OPEN ||
-        this.ws.readyState === WebSocket.CONNECTING
+        this.ws &&
+        [
+          WebSocket.OPEN,
+          WebSocket.CONNECTING
+        ].includes(
+          this.ws.readyState
+        )
       )
     ) {
       return;
     }
 
-    if (this.connecting) {
-      return;
-    }
-
-    this.connecting = true;
-
-    const apexUrl =
-      this.env.APEX_WS_URL ||
-      "wss://live-data.apex-timing.com:8913/";
+    this.connecting =
+      true;
 
     try {
-      console.log(
-        "APEX COLLECTOR CONNECTING:",
-        apexUrl
-      );
-
       const ws =
-        new WebSocket(apexUrl);
-
-      this.ws = ws;
-
-      ws.addEventListener("open", () => {
-        this.connectedAt =
-          new Date().toISOString();
-
-        this.lastError = null;
-        this.connecting = false;
-
-        this.state.storage.put(
-          "connectedAt",
-          this.connectedAt
+        new WebSocket(
+          this.env.APEX_WS_URL ||
+          "wss://live-data.apex-timing.com:8913/"
         );
 
-        this.state.storage.put(
-          "lastError",
-          null
-        );
+      this.ws =
+        ws;
 
-        console.log(
-          "APEX COLLECTOR CONNECTED:",
-          apexUrl
-        );
-      });
+      ws.addEventListener(
+        "open",
+        () => {
+          this.connecting =
+            false;
+        }
+      );
 
-      ws.addEventListener("message", event => {
-        const payload =
-          typeof event.data === "string"
-            ? event.data
-            : new TextDecoder().decode(event.data);
+      ws.addEventListener(
+        "message",
+        event => {
+          const payload =
+            typeof event.data ===
+            "string"
+              ? event.data
+              : new TextDecoder()
+                  .decode(
+                    event.data
+                  );
 
-        /*
-         * IMPORTANT:
-         *
-         * Messages are serialized deliberately.
-         *
-         * We do NOT allow 100 Apex packets to mutate the same
-         * apex_entries rows concurrently.
-         */
-        this.queue = this.queue
-          .then(() => this.processPacket(payload))
-          .catch(async error => {
-            await this.recordError(
-              `PACKET: ${
-                error?.message || String(error)
-              }`
+          this.queue =
+            this.queue
+              .then(
+                () =>
+                  this.packet(
+                    payload
+                  )
+              )
+              .catch(
+                console.error
+              );
+        }
+      );
+
+      ws.addEventListener(
+        "close",
+        () => {
+          this.ws =
+            null;
+
+          this.connecting =
+            false;
+
+          this.state.storage
+            .setAlarm(
+              Date.now() +
+              5000
             );
-          });
-      });
+        }
+      );
 
-      ws.addEventListener("close", event => {
-        console.log(
-          "APEX COLLECTOR CLOSED:",
-          event.code,
-          event.reason
-        );
+      ws.addEventListener(
+        "error",
+        () => {
+          this.ws =
+            null;
 
-        this.ws = null;
-        this.connecting = false;
+          this.connecting =
+            false;
 
-        this.state.storage.setAlarm(
-          Date.now() + 5000
-        );
-      });
-
-      ws.addEventListener("error", () => {
-        console.error(
-          "APEX COLLECTOR WEBSOCKET ERROR"
-        );
-
-        this.ws = null;
-        this.connecting = false;
-
-        this.state.storage.setAlarm(
-          Date.now() + 5000
-        );
-      });
-
+          this.state.storage
+            .setAlarm(
+              Date.now() +
+              5000
+            );
+        }
+      );
     } catch (error) {
-      this.ws = null;
-      this.connecting = false;
+      this.ws =
+        null;
 
-      await this.recordError(
-        `CONNECT: ${error?.message || String(error)}`
-      );
+      this.connecting =
+        false;
 
-      await this.state.storage.setAlarm(
-        Date.now() + 5000
-      );
+      await this.state.storage
+        .setAlarm(
+          Date.now() +
+          5000
+        );
+
+      throw error;
     }
   }
 
-  async recordError(message) {
-    this.lastError = message;
+  async packet(payload) {
+    this.packetCount +=
+      1;
 
-    console.error(message);
+    this.lastPacketAt =
+      new Date()
+        .toISOString();
 
-    await this.state.storage.put(
-      "lastError",
-      message
-    );
-  }
-
-  async processPacket(payload) {
-    const now =
-      new Date().toISOString();
-
-    this.packetCount += 1;
-    this.lastPacketAt = now;
-
-    /*
-     * First preserve the ORIGINAL Apex packet.
-     *
-     * Nothing in this stage modifies the payload.
-     */
-    await supabaseInsert(
+    await sbInsert(
       this.env,
       "apex_raw_packets",
       {
-        race_id: this.raceId,
+        race_id:
+          this.rid,
+
         payload
       }
     );
 
-    /*
-     * Then update current operational state.
-     */
-    await this.parseAndSave(payload, now);
+    await this.parseAndSave(
+      payload
+    );
 
     if (
-      this.packetCount % 25 === 0
+      this.packetCount %
+        20 ===
+      0
     ) {
       await this.state.storage.put({
-        packetCount: this.packetCount,
-        lastPacketAt: this.lastPacketAt
+        packetCount:
+          this.packetCount,
+
+        lastPacketAt:
+          this.lastPacketAt
       });
     }
   }
 
-  async parseAndSave(payload, now) {
-    const lines =
-      payload.split("\n");
+  async entry(apexId) {
+    const rows =
+      await sbGet(
+        this.env,
+        "apex_entries",
+        {
+          select:
+            "*",
 
-    for (const rawLine of lines) {
-      const line =
-        rawLine.trim();
+          race_id:
+            `eq.${this.rid}`,
 
-      if (!line) continue;
+          apex_id:
+            `eq.${apexId}`,
 
-      const parsed =
-        parseApexLine(line);
+          limit:
+            "1"
+        }
+      );
 
-      if (!parsed) continue;
+    return rows[0] || null;
+  }
 
-      const {
+  async upsertEntry(update) {
+    await sbUpsert(
+      this.env,
+      "apex_entries",
+      {
+        race_id:
+          this.rid,
+
+        ...update,
+
+        updated_at:
+          new Date()
+            .toISOString()
+      },
+      "race_id,apex_id"
+    );
+  }
+
+  async closeStint(stint) {
+    await sbInsert(
+      this.env,
+      "completed_stint_stats",
+      {
+        race_id:
+          this.rid,
+
+        apex_id:
+          String(
+            stint.apex_id
+          ),
+
+        team_name:
+          stint.team_name,
+
+        driver_name:
+          stint.driver_name,
+
+        start_lap_count:
+          stint.start_lap_count,
+
+        end_lap_count:
+          stint.current_lap_count,
+
+        total_laps:
+          stint.total_laps,
+
+        valid_laps:
+          stint.valid_laps,
+
+        avg_lap:
+          stint.avg_lap,
+
+        best_lap:
+          stint.best_lap,
+
+        best_lap_number:
+          stint.best_lap_number,
+
+        worst_lap:
+          stint.worst_lap,
+
+        worst_lap_number:
+          stint.worst_lap_number,
+
+        consistency:
+          stint.consistency,
+
+        stint_started_at:
+          stint.stint_started_at,
+
+        stint_ended_at:
+          new Date()
+            .toISOString()
+      }
+    );
+
+    await sbDelete(
+      this.env,
+      "live_stint_stats",
+      {
+        race_id:
+          `eq.${this.rid}`,
+
+        apex_id:
+          `eq.${stint.apex_id}`
+      }
+    );
+  }
+
+  async driverChange(
+    apexId,
+    driverName
+  ) {
+    if (!driverName) {
+      return;
+    }
+
+    const before =
+      await this.entry(
+        apexId
+      );
+
+    const live =
+      await sbGet(
+        this.env,
+        "live_stint_stats",
+        {
+          select:
+            "*",
+
+          race_id:
+            `eq.${this.rid}`,
+
+          apex_id:
+            `eq.${apexId}`,
+
+          limit:
+            "1"
+        }
+      );
+
+    if (
+      live[0] &&
+      live[0].driver_name &&
+      live[0].driver_name !==
+        driverName
+    ) {
+      await this.closeStint(
+        live[0]
+      );
+    }
+
+    await this.upsertEntry({
+      apex_id:
         apexId,
-        field,
-        value,
-        column
-      } = parsed;
 
-      /*
-       * TEAM NAME
-       */
-      if (field === "dr") {
+      current_driver:
+        driverName
+    });
+
+    if (
+      before?.lap_count
+    ) {
+      await this.fetchDetails(
+        apexId,
+        before.team_name
+      );
+    }
+  }
+
+  async processLap(
+    apexId,
+    lapNumber
+  ) {
+    const entry =
+      await this.entry(
+        apexId
+      );
+
+    if (!entry) {
+      return;
+    }
+
+    const lapTime =
+      Number(
+        entry.last_lap
+      );
+
+    if (
+      !Number.isFinite(
+        lapTime
+      )
+    ) {
+      return;
+    }
+
+    await sbUpsert(
+      this.env,
+      "apex_lap_events",
+      {
+        race_id:
+          this.rid,
+
+        apex_id:
+          String(apexId),
+
+        lap_number:
+          Number(
+            lapNumber
+          ),
+
+        lap_time:
+          lapTime,
+
+        received_at:
+          new Date()
+            .toISOString()
+      },
+      "race_id,apex_id,lap_number"
+    );
+
+    await this.liveStats(
+      apexId,
+      Number(lapNumber),
+      lapTime,
+      entry.team_name,
+      entry.current_driver
+    );
+  }
+
+  async liveStats(
+    apexId,
+    lapNumber,
+    lapTime,
+    teamName,
+    driverName
+  ) {
+    if (!driverName) {
+      return;
+    }
+
+    const rows =
+      await sbGet(
+        this.env,
+        "live_stint_stats",
+        {
+          select:
+            "*",
+
+          race_id:
+            `eq.${this.rid}`,
+
+          apex_id:
+            `eq.${apexId}`,
+
+          limit:
+            "1"
+        }
+      );
+
+    const current =
+      rows[0];
+
+    const now =
+      new Date()
+        .toISOString();
+
+    if (
+      !current ||
+      current.driver_name !==
+        driverName
+    ) {
+      if (current) {
+        await this.closeStint(
+          current
+        );
+      }
+
+      await sbUpsert(
+        this.env,
+        "live_stint_stats",
+        {
+          race_id:
+            this.rid,
+
+          apex_id:
+            String(apexId),
+
+          team_name:
+            teamName,
+
+          driver_name:
+            driverName,
+
+          start_lap_count:
+            lapNumber,
+
+          current_lap_count:
+            lapNumber,
+
+          total_laps:
+            1,
+
+          valid_laps:
+            1,
+
+          lap_sum:
+            lapTime,
+
+          lap_sum_squares:
+            lapTime *
+            lapTime,
+
+          last_lap:
+            lapTime,
+
+          avg_lap:
+            lapTime,
+
+          best_lap:
+            lapTime,
+
+          best_lap_number:
+            lapNumber,
+
+          worst_lap:
+            lapTime,
+
+          worst_lap_number:
+            lapNumber,
+
+          consistency:
+            0,
+
+          stint_started_at:
+            now,
+
+          updated_at:
+            now
+        },
+        "race_id,apex_id"
+      );
+
+      return;
+    }
+
+    if (
+      current.current_lap_count !==
+        null &&
+      lapNumber <=
+        Number(
+          current.current_lap_count
+        )
+    ) {
+      return;
+    }
+
+    const validLaps =
+      Number(
+        current.valid_laps ||
+        0
+      ) + 1;
+
+    const totalLaps =
+      Number(
+        current.total_laps ||
+        0
+      ) + 1;
+
+    const sum =
+      Number(
+        current.lap_sum ||
+        0
+      ) +
+      lapTime;
+
+    const sumSquares =
+      Number(
+        current.lap_sum_squares ||
+        0
+      ) +
+      lapTime *
+        lapTime;
+
+    const average =
+      sum /
+      validLaps;
+
+    const consistency =
+      Math.sqrt(
+        Math.max(
+          0,
+          sumSquares /
+            validLaps -
+            average *
+              average
+        )
+      );
+
+    const isBest =
+      current.best_lap ===
+        null ||
+      lapTime <
+        Number(
+          current.best_lap
+        );
+
+    const isWorst =
+      current.worst_lap ===
+        null ||
+      lapTime >
+        Number(
+          current.worst_lap
+        );
+
+    await sbPatch(
+      this.env,
+      "live_stint_stats",
+      {
+        team_name:
+          teamName,
+
+        driver_name:
+          driverName,
+
+        current_lap_count:
+          lapNumber,
+
+        total_laps:
+          totalLaps,
+
+        valid_laps:
+          validLaps,
+
+        lap_sum:
+          sum,
+
+        lap_sum_squares:
+          sumSquares,
+
+        last_lap:
+          lapTime,
+
+        avg_lap:
+          average,
+
+        best_lap:
+          isBest
+            ? lapTime
+            : current.best_lap,
+
+        best_lap_number:
+          isBest
+            ? lapNumber
+            : current.best_lap_number,
+
+        worst_lap:
+          isWorst
+            ? lapTime
+            : current.worst_lap,
+
+        worst_lap_number:
+          isWorst
+            ? lapNumber
+            : current.worst_lap_number,
+
+        consistency,
+
+        updated_at:
+          now
+      },
+      {
+        race_id:
+          `eq.${this.rid}`,
+
+        apex_id:
+          `eq.${apexId}`
+      }
+    );
+  }
+
+  async fetchDetails(
+    apexId,
+    teamName
+  ) {
+    const entry =
+      await this.entry(
+        apexId
+      );
+
+    const lapCount =
+      Number(
+        entry?.lap_count ||
+        0
+      );
+
+    if (!lapCount) {
+      return;
+    }
+
+    const request =
+      `D#-${lapCount}` +
+      `#D${apexId}.L#-${lapCount}` +
+      `#D${apexId}.P#-999` +
+      `#D${apexId}.B#1` +
+      `#D${apexId}.INF`;
+
+    const response =
+      await fetch(
+        "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php",
+        {
+          method:
+            "POST",
+
+          headers: {
+            "content-type":
+              "application/x-www-form-urlencoded; charset=UTF-8"
+          },
+
+          body:
+            new URLSearchParams({
+              port:
+                this.env
+                  .APEX_DETAIL_PORT ||
+                "8910",
+
+              request
+            })
+        }
+      );
+
+    if (!response.ok) {
+      throw new Error(
+        `Apex detail ${response.status}`
+      );
+    }
+
+    const raw =
+      await response.text();
+
+    const laps =
+      parseLapRows(
+        raw,
+        this.rid
+      );
+
+    const pits =
+      parsePits(
+        raw,
+        teamName,
+        this.rid
+      );
+
+    if (
+      laps.length
+    ) {
+      await sbUpsert(
+        this.env,
+        "apex_lap_events",
+        laps,
+        "race_id,apex_id,lap_number"
+      );
+    }
+
+    if (
+      pits.length
+    ) {
+      await sbUpsert(
+        this.env,
+        "apex_pit_stints",
+        pits,
+        "race_id,apex_id,pit_number"
+      );
+    }
+  }
+
+  async parseAndSave(
+    payload
+  ) {
+    for (
+      const line
+      of payload.split("\n")
+    ) {
+      const packet =
+        parseApexLine(
+          line.trim()
+        );
+
+      if (!packet) {
+        continue;
+      }
+
+      if (
+        packet.field ===
+        "dr"
+      ) {
         await this.upsertEntry({
-          apex_id: apexId,
-          team_name: value,
-          updated_at: now
+          apex_id:
+            packet.apexId,
+
+          team_name:
+            packet.value
         });
 
         continue;
       }
 
-      /*
-       * CURRENT DRIVER
-       */
-      if (field === "drteam") {
+      if (
+        packet.field ===
+        "drteam"
+      ) {
         const driverName =
-          value
+          packet.value
             .replace(
               /\s*\[[^\]]+\]\s*$/,
-              ""
+              " "
             )
             .trim();
 
-        await this.upsertEntry({
-          apex_id: apexId,
-          current_driver:
-            driverName || null,
-          updated_at: now
-        });
+        await this.driverChange(
+          packet.apexId,
+          driverName
+        );
 
         continue;
       }
 
-      /*
-       * ENDURANCE LAST LAP
-       *
-       * Keep the already validated mapping:
-       * tn / c9.
-       */
       if (
-        field === "tn" &&
-        column === "9"
+        packet.field ===
+          "tn" &&
+        packet.column ===
+          "9"
       ) {
         const lapTime =
-          parseLapTime(value);
+          parseLapTime(
+            packet.value
+          );
 
-        if (lapTime !== null) {
+        if (
+          lapTime !==
+          null
+        ) {
           await this.upsertEntry({
-            apex_id: apexId,
-            last_lap: lapTime,
-            updated_at: now
+            apex_id:
+              packet.apexId,
+
+            last_lap:
+              lapTime
           });
         }
 
         continue;
       }
 
-      /*
-       * LAP COUNT
-       *
-       * Keep the already validated mapping:
-       * in / c13.
-       *
-       * IMPORTANT:
-       * We do NOT reject a lower lap count here.
-       *
-       * race_id=1 has historically been reused and an old
-       * apex_entries row can contain yesterday's final lap count.
-       * Rejecting today's smaller value would leave the dashboard
-       * stuck on yesterday forever.
-       */
       if (
-        field === "in" &&
-        column === "13" &&
-        /^\d+$/.test(value)
+        packet.field ===
+          "in" &&
+        packet.column ===
+          "13" &&
+        /^\d+$/.test(
+          packet.value
+        )
       ) {
+        const newLapCount =
+          Number(
+            packet.value
+          );
+
+        const before =
+          await this.entry(
+            packet.apexId
+          );
+
+        const oldLapCount =
+          Number(
+            before?.lap_count ??
+            -1
+          );
+
         await this.upsertEntry({
-          apex_id: apexId,
-          lap_count: Number(value),
-          updated_at: now
+          apex_id:
+            packet.apexId,
+
+          lap_count:
+            newLapCount
         });
 
-        continue;
+        if (
+          newLapCount >
+            oldLapCount ||
+          oldLapCount <
+            0
+        ) {
+          await this.processLap(
+            packet.apexId,
+            newLapCount
+          );
+        }
       }
     }
   }
-
-  async upsertEntry(update) {
-    await supabaseUpsert(
-      this.env,
-      "apex_entries",
-      {
-        race_id: this.raceId,
-        ...update
-      },
-      "race_id,apex_id"
-    );
-  }
 }
-
-
-// ============================================================
-// COLLECTOR ACCESS
-// ============================================================
 
 function collectorStub(env) {
   const id =
-    env.APEX_COLLECTOR.idFromName(
-      "primary"
-    );
+    env.APEX_COLLECTOR
+      .idFromName(
+        "primary"
+      );
 
-  return env.APEX_COLLECTOR.get(id);
+  return env.APEX_COLLECTOR
+    .get(id);
 }
 
-async function startCollector(env) {
-  const stub =
-    collectorStub(env);
-
+async function startCollector(
+  env
+) {
   const response =
-    await stub.fetch(
-      "https://collector.internal/start"
-    );
-
-  if (!response.ok) {
-    throw new Error(
-      `Collector start failed: ${response.status}`
-    );
-  }
+    await collectorStub(env)
+      .fetch(
+        "https://collector/start"
+      );
 
   return response.json();
 }
-
-async function collectorStatus(env) {
-  const stub =
-    collectorStub(env);
-
-  const response =
-    await stub.fetch(
-      "https://collector.internal/status"
-    );
-
-  if (!response.ok) {
-    throw new Error(
-      `Collector status failed: ${response.status}`
-    );
-  }
-
-  return response.json();
-}
-
-
-// ============================================================
-// LIVE PAYLOAD
-// ============================================================
 
 async function livePayload(
   env,
-  raceId
+  currentRaceId
 ) {
   const entries =
-    await supabase(
+    await sbGet(
       env,
       "apex_entries",
       {
-        select: "*",
-        race_id: `eq.${raceId}`,
-        order: "updated_at.desc"
+        select:
+          "*",
+
+        race_id:
+          `eq.${currentRaceId}`,
+
+        order:
+          "updated_at.desc"
       }
     );
-
-  const now =
-    Date.now();
 
   const newestTimestamp =
     entries.reduce(
-      (latest, entry) => {
-        const t =
+      (
+        latest,
+        entry
+      ) =>
+        Math.max(
+          latest,
           Date.parse(
-            entry.updated_at || ""
-          );
-
-        return Number.isFinite(t)
-          ? Math.max(latest, t)
-          : latest;
-      },
+            entry.updated_at ||
+            ""
+          ) || 0
+        ),
       0
     );
 
-  const LIVE_TIMEOUT_MS =
-    3 * 60 * 1000;
-
   if (
     !newestTimestamp ||
-    now - newestTimestamp >
-      LIVE_TIMEOUT_MS
+    Date.now() -
+      newestTimestamp >
+      180000
   ) {
     return {
       race_id:
-        Number(raceId),
+        Number(
+          currentRaceId
+        ),
 
       generated_at:
-        new Date().toISOString(),
+        new Date()
+          .toISOString(),
 
-      active: false,
-      current: [],
-      entries: []
+      active:
+        false,
+
+      current:
+        [],
+
+      entries:
+        []
     };
   }
 
-  const CURRENT_FIELD_WINDOW_MS =
-    3 * 60 * 1000;
-
   const activeEntries =
-    entries.filter(entry => {
-      const t =
-        Date.parse(
-          entry.updated_at || ""
-        );
-
-      if (!Number.isFinite(t)) {
-        return false;
-      }
-
-      return (
-        newestTimestamp - t <=
-        CURRENT_FIELD_WINDOW_MS
-      );
-    });
-
-  /*
-   * live_stint_stats is optional for the first phase of
-   * the cloud collector.
-   *
-   * The dashboard must still show Apex entries even when no
-   * live stint snapshot has been generated yet.
-   */
-  let liveStints = [];
-
-  try {
-    liveStints =
-      await supabase(
-        env,
-        "live_stint_stats",
-        {
-          select: "*",
-          race_id: `eq.${raceId}`,
-          order: "team_name.asc"
-        }
-      );
-  } catch (error) {
-    console.error(
-      "LIVE STINT READ ERROR:",
-      error
+    entries.filter(
+      entry =>
+        newestTimestamp -
+          (
+            Date.parse(
+              entry.updated_at ||
+              ""
+            ) || 0
+          ) <=
+        180000
     );
 
-    liveStints = [];
-  }
-
-  const activeApexIds =
+  const activeIds =
     new Set(
       activeEntries.map(
         entry =>
-          String(entry.apex_id)
+          String(
+            entry.apex_id
+          )
       )
-    );
-
-  const activeLiveStints =
-    liveStints.filter(
-      stint =>
-        activeApexIds.has(
-          String(stint.apex_id)
-        )
     );
 
   const entryMap =
     new Map(
       activeEntries.map(
         entry => [
-          String(entry.apex_id),
+          String(
+            entry.apex_id
+          ),
           entry
         ]
       )
     );
 
-  const current =
-    activeLiveStints.map(
-      stint => {
-        const entry =
-          entryMap.get(
-            String(stint.apex_id)
-          ) || {};
+  const liveStints =
+    await sbGet(
+      env,
+      "live_stint_stats",
+      {
+        select:
+          "*",
 
-        return {
-          race_id:
-            stint.race_id,
+        race_id:
+          `eq.${currentRaceId}`,
 
-          apex_id:
-            stint.apex_id,
-
-          team_name:
-            stint.team_name ??
-            entry.team_name ??
-            null,
-
-          driver_name:
-            stint.driver_name ??
-            entry.current_driver ??
-            null,
-
-          current_driver:
-            stint.driver_name ??
-            entry.current_driver ??
-            null,
-
-          start_lap_count:
-            stint.start_lap_count ??
-            null,
-
-          end_lap_count:
-            null,
-
-          lap_count:
-            stint.valid_laps ??
-            stint.total_laps ??
-            0,
-
-          avg_lap_time:
-            stint.avg_lap ??
-            null,
-
-          best_lap_time:
-            stint.best_lap ??
-            null,
-
-          best_lap_number:
-            stint.best_lap_number ??
-            null,
-
-          worst_lap_time:
-            stint.worst_lap ??
-            null,
-
-          worst_lap_number:
-            stint.worst_lap_number ??
-            null,
-
-          consistency:
-            stint.consistency ??
-            null,
-
-          live_last_lap:
-            entry.last_lap ??
-            stint.last_lap ??
-            null,
-
-          live_best_lap:
-            stint.best_lap ??
-            entry.best_lap ??
-            null,
-
-          live_lap_count:
-            entry.lap_count ??
-            stint.current_lap_count ??
-            null,
-
-          updated_at:
-            entry.updated_at ??
-            stint.updated_at ??
-            null
-        };
+        order:
+          "team_name.asc"
       }
     );
+
+  const current =
+    [];
+
+  for (
+    const stint
+    of liveStints.filter(
+      stint =>
+        activeIds.has(
+          String(
+            stint.apex_id
+          )
+        )
+    )
+  ) {
+    const entry =
+      entryMap.get(
+        String(
+          stint.apex_id
+        )
+      ) || {};
+
+    current.push({
+      race_id:
+        stint.race_id,
+
+      apex_id:
+        stint.apex_id,
+
+      team_name:
+        stint.team_name ??
+        entry.team_name,
+
+      driver_name:
+        stint.driver_name ??
+        entry.current_driver,
+
+      current_driver:
+        stint.driver_name ??
+        entry.current_driver,
+
+      start_lap_count:
+        stint.start_lap_count,
+
+      end_lap_count:
+        null,
+
+      lap_count:
+        stint.valid_laps ??
+        stint.total_laps ??
+        0,
+
+      avg_lap_time:
+        stint.avg_lap ??
+        null,
+
+      best_lap_time:
+        stint.best_lap ??
+        null,
+
+      best_lap_number:
+        stint.best_lap_number ??
+        null,
+
+      worst_lap_time:
+        stint.worst_lap ??
+        null,
+
+      worst_lap_number:
+        stint.worst_lap_number ??
+        null,
+
+      consistency:
+        stint.consistency ??
+        null,
+
+      live_last_lap:
+        entry.last_lap ??
+        stint.last_lap ??
+        null,
+
+      live_best_lap:
+        stint.best_lap ??
+        entry.best_lap ??
+        null,
+
+      live_lap_count:
+        entry.lap_count ??
+        stint.current_lap_count ??
+        null,
+
+      updated_at:
+        entry.updated_at ??
+        stint.updated_at ??
+        null
+    });
+  }
 
   const seen =
     new Set(
       current.map(
         row =>
-          String(row.apex_id)
+          String(
+            row.apex_id
+          )
       )
     );
 
@@ -880,7 +1611,9 @@ async function livePayload(
   ) {
     if (
       seen.has(
-        String(entry.apex_id)
+        String(
+          entry.apex_id
+        )
       )
     ) {
       continue;
@@ -894,16 +1627,13 @@ async function livePayload(
         entry.apex_id,
 
       team_name:
-        entry.team_name ??
-        null,
+        entry.team_name,
 
       driver_name:
-        entry.current_driver ??
-        null,
+        entry.current_driver,
 
       current_driver:
-        entry.current_driver ??
-        null,
+        entry.current_driver,
 
       start_lap_count:
         null,
@@ -933,31 +1663,44 @@ async function livePayload(
         null,
 
       live_last_lap:
-        entry.last_lap ??
-        null,
+        entry.last_lap,
 
       live_best_lap:
-        entry.best_lap ??
-        null,
+        entry.best_lap,
 
       live_lap_count:
-        entry.lap_count ??
-        null,
+        entry.lap_count,
 
       updated_at:
-        entry.updated_at ??
-        null
+        entry.updated_at
     });
   }
 
+  current.sort(
+    (a, b) =>
+      String(
+        a.team_name ||
+        ""
+      ).localeCompare(
+        String(
+          b.team_name ||
+          ""
+        )
+      )
+  );
+
   return {
     race_id:
-      Number(raceId),
+      Number(
+        currentRaceId
+      ),
 
     generated_at:
-      new Date().toISOString(),
+      new Date()
+        .toISOString(),
 
-    active: true,
+    active:
+      true,
 
     current,
 
@@ -966,11 +1709,6 @@ async function livePayload(
   };
 }
 
-
-// ============================================================
-// MAIN WORKER
-// ============================================================
-
 export default {
   async fetch(
     request,
@@ -978,259 +1716,272 @@ export default {
     ctx
   ) {
     const url =
-      new URL(request.url);
+      new URL(
+        request.url
+      );
 
     try {
-
-      // ======================================================
-      // HEALTH + COLLECTOR
-      // ======================================================
-
       if (
         url.pathname ===
         "/api/health"
       ) {
-        /*
-         * Calling health also makes sure the singleton
-         * collector has been started.
-         */
-        let collector = null;
-
-        try {
-          await startCollector(env);
-          collector =
-            await collectorStatus(env);
-        } catch (error) {
-          collector = {
-            connected: false,
-            error:
-              error?.message ||
-              String(error)
-          };
-        }
+        ctx.waitUntil(
+          startCollector(env)
+            .catch(
+              console.error
+            )
+        );
 
         return json({
-          ok: true,
+          ok:
+            true,
+
           service:
             "race-engineer",
+
           now:
-            new Date().toISOString(),
-          collector
+            new Date()
+              .toISOString()
         });
       }
-
 
       if (
         url.pathname ===
         "/api/collector/start"
       ) {
         return json(
-          await startCollector(env)
+          await startCollector(
+            env
+          )
         );
       }
-
 
       if (
         url.pathname ===
         "/api/collector/status"
       ) {
-        return json(
-          await collectorStatus(env)
-        );
-      }
-
-
-      if (
-        url.pathname ===
-        "/api/collector/reconnect"
-      ) {
-        const stub =
-          collectorStub(env);
-
         const response =
-          await stub.fetch(
-            "https://collector.internal/reconnect"
-          );
+          await collectorStub(env)
+            .fetch(
+              "https://collector/status"
+            );
 
         return new Response(
           await response.text(),
           {
-            status:
-              response.status,
-
             headers: {
               "content-type":
-                "application/json; charset=utf-8",
-              "cache-control":
-                "no-store"
+                "application/json"
             }
           }
         );
       }
 
+      if (
+        url.pathname ===
+        "/api/collector/reconnect"
+      ) {
+        const response =
+          await collectorStub(env)
+            .fetch(
+              "https://collector/reconnect"
+            );
 
-      const raceId =
-        safeRaceId(
-          url,
-          env
+        return new Response(
+          await response.text(),
+          {
+            headers: {
+              "content-type":
+                "application/json"
+            }
+          }
+        );
+      }
+
+      const explicitRaceId =
+        url.searchParams.get(
+          "race_id"
         );
 
-
-      // ======================================================
-      // LIVE
-      // ======================================================
+      const currentRaceId =
+        explicitRaceId &&
+        Number(explicitRaceId) >
+          0
+          ? String(
+              Math.trunc(
+                Number(
+                  explicitRaceId
+                )
+              )
+            )
+          : String(
+              raceId(env)
+            );
 
       if (
         url.pathname ===
         "/api/live"
       ) {
-        /*
-         * A request for LIVE also wakes/starts the collector.
-         * Do not wait for it before returning database state.
-         */
         ctx.waitUntil(
           startCollector(env)
-            .catch(error =>
-              console.error(
-                "COLLECTOR START ERROR:",
-                error
-              )
+            .catch(
+              console.error
             )
         );
 
         return json(
           await livePayload(
             env,
-            raceId
+            currentRaceId
           )
         );
       }
-
-
-      // ======================================================
-      // RACES
-      // ======================================================
-      //
-      // Keep this endpoint deliberately conservative for now.
-      //
-      // race_id has historically been reused as 1, so returning
-      // fake separate races from distinct race_id values would
-      // be incorrect.
-      //
-      // Real historical session separation will be based on
-      // Start/Finish timestamps from apex_raw_packets.
-      // ======================================================
 
       if (
         url.pathname ===
         "/api/races"
       ) {
         return json({
-          races: [],
-          warning:
-            "Historical session indexing is not enabled yet."
+          rows: []
         });
       }
-
-
-      // ======================================================
-      // STINTS
-      // ======================================================
 
       if (
         url.pathname ===
         "/api/stints"
       ) {
-        const rows =
-          await supabase(
+        const completed =
+          await sbGet(
             env,
             "completed_stint_stats",
             {
-              select: "*",
+              select:
+                "*",
+
               race_id:
-                `eq.${raceId}`,
+                `eq.${currentRaceId}`,
+
               order:
                 "stint_ended_at.asc"
             }
           );
 
+        const live =
+          await sbGet(
+            env,
+            "live_stint_stats",
+            {
+              select:
+                "*",
+
+              race_id:
+                `eq.${currentRaceId}`,
+
+              order:
+                "team_name.asc"
+            }
+          );
+
         return json({
           race_id:
-            Number(raceId),
-          rows
+            Number(
+              currentRaceId
+            ),
+
+          rows: [
+            ...completed,
+
+            ...live.map(
+              row => ({
+                ...row,
+
+                is_live:
+                  true,
+
+                end_lap_count:
+                  null,
+
+                avg_lap_time:
+                  row.avg_lap,
+
+                best_lap_time:
+                  row.best_lap,
+
+                worst_lap_time:
+                  row.worst_lap,
+
+                lap_count:
+                  row.valid_laps ??
+                  row.total_laps ??
+                  0
+              })
+            )
+          ]
         });
       }
-
-
-      // ======================================================
-      // DRIVERS
-      // ======================================================
 
       if (
         url.pathname ===
         "/api/drivers"
       ) {
-        const rows =
-          await supabase(
-            env,
-            "driver_lap_totals_clean",
-            {
-              select: "*",
-              race_id:
-                `eq.${raceId}`,
-              order:
-                "team_name.asc,driver_name.asc"
-            }
-          );
-
         return json({
           race_id:
-            Number(raceId),
-          rows
+            Number(
+              currentRaceId
+            ),
+
+          rows:
+            await sbGet(
+              env,
+              "driver_lap_totals_clean",
+              {
+                select:
+                  "*",
+
+                race_id:
+                  `eq.${currentRaceId}`,
+
+                order:
+                  "team_name.asc,driver_name.asc"
+              }
+            )
         });
       }
-
-
-      // ======================================================
-      // PITS
-      // ======================================================
 
       if (
         url.pathname ===
         "/api/pits"
       ) {
-        const rows =
-          await supabase(
-            env,
-            "apex_pit_stints",
-            {
-              select: "*",
-              race_id:
-                `eq.${raceId}`,
-              order:
-                "apex_id.asc,pit_number.asc"
-            }
-          );
-
         return json({
           race_id:
-            Number(raceId),
-          rows
+            Number(
+              currentRaceId
+            ),
+
+          rows:
+            await sbGet(
+              env,
+              "apex_pit_stints",
+              {
+                select:
+                  "*",
+
+                race_id:
+                  `eq.${currentRaceId}`,
+
+                order:
+                  "apex_id.asc,pit_number.asc"
+              }
+            )
         });
       }
-
-
-      // ======================================================
-      // STATIC UI
-      // ======================================================
 
       return env.ASSETS.fetch(
         request
       );
-
     } catch (error) {
       console.error(
-        "WORKER ERROR:",
+        "WORKER ERROR",
         error
       );
 
@@ -1245,11 +1996,6 @@ export default {
     }
   },
 
-
-  // ==========================================================
-  // CRON WATCHDOG
-  // ==========================================================
-
   async scheduled(
     controller,
     env,
@@ -1257,11 +2003,8 @@ export default {
   ) {
     ctx.waitUntil(
       startCollector(env)
-        .catch(error =>
-          console.error(
-            "SCHEDULED COLLECTOR ERROR:",
-            error
-          )
+        .catch(
+          console.error
         )
     );
   }
