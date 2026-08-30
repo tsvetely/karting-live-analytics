@@ -1426,6 +1426,33 @@ async function collectorSnapshot(env) {
     console.warn("DIRECT APEX GRID REFRESH:", error?.message || error);
   }
 
+  if (direct && currentFieldIds(direct).size > 0 && env?.APEX_COLLECTOR) {
+    // IMPORTANT: after a race has finished the Durable Object may no longer
+    // receive websocket grid messages. In that case its fieldApexIds/lapCounts
+    // can be empty or stale, so refreshAllFieldDetails() has nothing to fetch.
+    // Seed the collector from the final static Apex grid that we just read
+    // directly, then let the collector backfill every kart detail page.
+    try {
+      const seedPayload = {
+        fieldApexIds: [...currentFieldIds(direct)],
+        lapCounts: direct.lapCounts || {},
+        teamNames: direct.teamNames || {},
+        positions: direct.positions || {},
+        rawRows: direct.rawRows || {}
+      };
+      await collectorStub(env).fetch(
+        "https://collector/seed-final-field",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(seedPayload)
+        }
+      );
+    } catch (error) {
+      console.warn("FINAL FIELD SEED:", error?.message || error);
+    }
+  }
+
   if (!stored) return direct;
   if (!direct || currentFieldIds(direct).size === 0) return stored;
 
@@ -4338,6 +4365,53 @@ export class ApexCollector {
       return json(
         await this.snapshot()
       );
+    }
+
+
+    if (path === "/seed-final-field" && request.method === "POST") {
+      let payload = {};
+      try { payload = await request.json(); } catch {}
+
+      const ids = Array.isArray(payload.fieldApexIds)
+        ? payload.fieldApexIds.map(String).filter(validApexId)
+        : [];
+
+      for (const id of ids) this.fieldApexIds.add(id);
+
+      for (const [id, value] of Object.entries(payload.lapCounts || {})) {
+        const n = Number(value);
+        if (validApexId(id) && Number.isFinite(n) && n > 0) this.lapCounts.set(String(id), n);
+      }
+      for (const [id, value] of Object.entries(payload.teamNames || {})) {
+        if (validApexId(id) && value != null) this.teamNames.set(String(id), String(value));
+      }
+      for (const [id, value] of Object.entries(payload.positions || {})) {
+        const n = Number(value);
+        if (validApexId(id) && Number.isFinite(n)) this.positions.set(String(id), n);
+      }
+      for (const [id, value] of Object.entries(payload.rawRows || {})) {
+        if (validApexId(id) && value && typeof value === "object") {
+          this.rawRows.set(String(id), { ...(this.rawRows.get(String(id)) || {}), ...value });
+        }
+      }
+
+      await this.persist();
+
+      // Force exactly one complete final-grid detail repair for this version.
+      // This is independent of websocket activity and therefore also works
+      // after the race is over.
+      const repairKey = "finalStaticDetailRepairVersion";
+      const repairVersion = "v6.30-static-grid-seed";
+      const repaired = await this.state.storage.get(repairKey);
+      if (repaired !== repairVersion) {
+        await this.state.storage.put(repairKey, repairVersion);
+        this.state.waitUntil(
+          this.refreshAllFieldDetails(true)
+            .catch(e => console.error("FINAL STATIC DETAIL BACKFILL:", e))
+        );
+      }
+
+      return json({ ok: true, seeded: ids.length, repair_started: repaired !== repairVersion });
     }
 
 
