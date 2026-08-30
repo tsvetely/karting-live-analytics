@@ -3529,28 +3529,52 @@ async function ensureFinishedCurrentRaceArchived(env, currentRid, snapshot = nul
 }
 
 async function racesPayload(env, currentRid = raceId(env)) {
-  const rows = await sbGetAll(env, "apex_entries", {
-    select: "race_id,updated_at",
-    order: "updated_at.asc"
-  }).catch(() => []);
+  // HISTORY must reflect every persisted race, not only races that happen to
+  // still have apex_entries rows. Older sessions can legitimately exist only
+  // in lap/pit/raw-packet tables (for example after a partial/older ingest).
+  // Build the race index as a UNION of all persistent Apex history sources.
+  const sources = await Promise.all([
+    sbGetAll(env, "apex_entries", {
+      select: "race_id,updated_at",
+      order: "updated_at.asc"
+    }).catch(() => []),
+    sbGetAll(env, "apex_lap_events", {
+      select: "race_id,created_at",
+      order: "created_at.asc"
+    }).catch(() => []),
+    sbGetAll(env, "apex_pit_stints", {
+      select: "race_id,created_at",
+      order: "created_at.asc"
+    }).catch(() => []),
+    sbGetAll(env, "apex_raw_packets", {
+      select: "race_id,created_at",
+      order: "created_at.asc"
+    }).catch(() => [])
+  ]);
 
   const races = new Map();
-  for (const row of rows) {
-    const id = Number(row.race_id);
-    if (!Number.isFinite(id) || id === Number(currentRid)) continue;
 
-    const timestamp = Date.parse(row.updated_at || "");
+  const remember = (row) => {
+    const id = Number(row?.race_id);
+    if (!Number.isFinite(id) || id === Number(currentRid)) return;
+
+    const stampValue = row?.updated_at || row?.created_at || "";
+    const parsed = Date.parse(stampValue);
+    const timestamp = Number.isFinite(parsed) ? parsed : 0;
     const previous = races.get(id);
-    if (!previous || timestamp > previous.timestamp) {
-      races.set(id, {
-        timestamp: Number.isFinite(timestamp) ? timestamp : 0
-      });
+
+    if (!previous) {
+      races.set(id, { timestamp });
+      return;
     }
+
+    if (timestamp > previous.timestamp) previous.timestamp = timestamp;
+  };
+
+  for (const rows of sources) {
+    for (const row of rows || []) remember(row);
   }
 
-  // The database race_id is an internal storage key. History labels are a
-  // chronological user-facing sequence so the current race is never duplicated
-  // under HISTORY and old races remain stable in the selector.
   const chronological = [...races.entries()]
     .map(([id, value]) => ({ id, race_id: id, timestamp: value.timestamp }))
     .sort((a, b) => a.timestamp - b.timestamp || Number(a.race_id) - Number(b.race_id));
@@ -3567,10 +3591,8 @@ async function racesPayload(env, currentRid = raceId(env)) {
       : `Race ${index + 1}`;
   });
 
-  // Latest race first in the dropdown.
   return chronological.reverse();
 }
-
 
 async function rawApexPayload(env, rid, snapshot = null, limit = 200) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 2000));
