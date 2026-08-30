@@ -4340,7 +4340,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.29-final-detail-backfill";
+      const repairVersion = "v6.32-split-detail-requests";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4408,7 +4408,7 @@ export class ApexCollector {
       // This is independent of websocket activity and therefore also works
       // after the race is over.
       const repairKey = "finalStaticDetailRepairVersion";
-      const repairVersion = "v6.30-static-grid-seed";
+      const repairVersion = "v6.32-split-detail-requests";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4684,60 +4684,37 @@ export class ApexCollector {
     apexId,
     lapCount
   ) {
-    const count =
-      Math.max(
-        1,
-        Math.min(
-          Number(
-            lapCount
-          ) ||
-          1,
-          800
-        )
-      );
+    const count = Math.max(1, Math.min(Number(lapCount) || 1, 800));
+    const endpoint = "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php";
+    const port = this.env.APEX_DETAIL_PORT || "8910";
 
+    // IMPORTANT: do not mix a full lap-history request and a full pit-history
+    // request behind a global D# limit equal to the lap count. Apex can truncate
+    // the combined reply before the last pit rows. Request laps and pits
+    // separately, each with a generous global envelope, then merge the raw
+    // protocol lines before parsing/persisting them.
+    const requests = [
+      `D#-999#D${apexId}.L#-${count}#D${apexId}.B#1#D${apexId}.INF`,
+      `D#-999#D${apexId}.P#-999#D${apexId}.INF`
+    ];
 
-    const request =
-      `D#-${count}` +
-      `#D${apexId}.L#-${count}` +
-      `#D${apexId}.P#-999` +
-      `#D${apexId}.B#1` +
-      `#D${apexId}.INF`;
+    const bodies = [];
+    for (const request of requests) {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded; charset=UTF-8"
+        },
+        body: new URLSearchParams({ port, request })
+      });
 
-
-    const response =
-      await fetch(
-        "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php",
-        {
-          method:
-            "POST",
-
-          headers: {
-            "content-type":
-              "application/x-www-form-urlencoded; charset=UTF-8"
-          },
-
-          body:
-            new URLSearchParams({
-              port:
-                this.env
-                  .APEX_DETAIL_PORT ||
-                "8910",
-
-              request
-            })
-        }
-      );
-
-
-    if (!response.ok) {
-      throw new Error(
-        `Apex detail ${response.status}`
-      );
+      if (!response.ok) {
+        throw new Error(`Apex detail ${response.status}`);
+      }
+      bodies.push(await response.text());
     }
 
-
-    return response.text();
+    return bodies.filter(Boolean).join("\n");
   }
 
 
