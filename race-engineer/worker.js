@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.8-live-grid-best-authoritative";
+  "2026-08-30-race-datasets-v6.9-recover-stable-current-stint-best";
 
 const PAGE_SIZE = 1000;
 
@@ -2612,7 +2612,7 @@ async function livePayload(env, rid) {
       stint_number:number(live.stint_number)||pitCount+1,start_lap_count:number(live.start_lap_count)||0,
       stint_laps:number(live.total_laps)||0,total_stint_laps:number(live.total_laps)||0,
       valid_laps:number(live.valid_laps)||0,live_last_lap:number(entry.last_lap),
-      avg_lap_time:number(live.avg_lap_time),best_lap_time:number(live.best_lap_time)||best,
+      avg_lap_time:number(live.avg_lap_time),best_lap_time:number(live.best_lap_time),
       best_lap_number:number(live.best_lap_number),worst_lap_time:number(live.worst_lap_time),
       worst_lap_number:number(live.worst_lap_number),consistency:number(live.consistency),updated_at:entry.updated_at||null
     });
