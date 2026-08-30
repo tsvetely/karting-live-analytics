@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.13-apex-blp-authoritative";
+  "2026-08-30-race-datasets-v6.14-detail-best-recovery";
 
 const PAGE_SIZE = 1000;
 
@@ -4085,9 +4085,27 @@ export class ApexCollector {
       const pits=parsePitRows(raw,entry.team_name,this.rid).filter(r=>String(r.apex_id)===id && Number(r.pit_number)>0);
       const maxLap=laps.reduce((m,r)=>Math.max(m,Number(r.lap_number)||0),0);
 
+      // The detail reply contains the full current-session lap history for this kart.
+      // Use it to maintain the kart's race personal best. This is independent from
+      // current-stint BEST and does not depend on fragile live-grid column typing.
+      const detailBest = laps.reduce((best, row) => {
+        const t = Number(row.lap_time);
+        return Number.isFinite(t) && t > 0 && (best === null || t < best)
+          ? t
+          : best;
+      }, null);
+
       // Never destroy current data on an incomplete/failed Apex detail reply.
       if (!laps.length || maxLap < Math.max(1, lapCount - 2)) {
         throw new Error(`Incomplete Apex detail ${id}: ${laps.length} laps, max ${maxLap}, expected ${lapCount}`);
+      }
+
+      if (detailBest !== null) {
+        const previous = Number(this.bestLaps.get(id));
+        if (!Number.isFinite(previous) || previous <= 0 || detailBest < previous) {
+          this.bestLaps.set(id, detailBest);
+          await this.upsertEntry(id, {best_lap: detailBest});
+        }
       }
 
       // race_id=1 is reused. Once a complete CURRENT detail response is in hand,
@@ -4145,7 +4163,7 @@ export class ApexCollector {
     if(t==="llp"||c==="llp"||col==="9"){
       const v=parseLapTime(value);if(v!==null){this.lastLaps.set(id,v);await this.upsertEntry(id,{last_lap:v});}return;
     }
-    if(t==="blp"||c==="blp"){
+    if(t==="blp"||c==="blp"||col==="12"){
       const v=parseLapTime(value);
       if(v!==null&&v>0){
         const previous=Number(this.bestLaps.get(id));
