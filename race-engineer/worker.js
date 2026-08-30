@@ -4343,7 +4343,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.34-exact-pit-records";
+      const repairVersion = "v6.35-original-apex-detail-protocol";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4417,7 +4417,7 @@ export class ApexCollector {
       // This is independent of websocket activity and therefore also works
       // after the race is over.
       const repairKey = "finalStaticDetailRepairVersion";
-      const repairVersion = "v6.34-exact-pit-records";
+      const repairVersion = "v6.35-original-apex-detail-protocol";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4692,49 +4692,37 @@ export class ApexCollector {
   async requestDetail(apexId, lapCount, expectedPitCount = 0) {
     const id = String(apexId);
     const count = Math.max(1, Math.min(Number(lapCount) || 1, 800));
-    const expectedPits = Math.max(0, Math.min(Math.trunc(Number(expectedPitCount) || 0), 100));
-    const endpoint = "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php";
-    const port = this.env.APEX_DETAIL_PORT || "8910";
 
-    const postRequest = async (request) => {
-      const response = await fetch(endpoint, {
+    // IMPORTANT: use Apex's original detail protocol exactly as it was used
+    // by the project before the recent experimental patches.  P#-999 means
+    // "return the complete pit history"; D#-${count} and L#-${count} request
+    // the complete lap/detail block for this kart.  Do not replace this with
+    // guessed P1/P2/... keys or a positive P range: those requests are not the
+    // protocol used by Apex's detail response and were the reason v6.32-v6.34
+    // failed to add the missing late pit rows.
+    const request =
+      `D#-${count}` +
+      `#D${id}.L#-${count}` +
+      `#D${id}.P#-999` +
+      `#D${id}.B#1` +
+      `#D${id}.INF`;
+
+    const response = await fetch(
+      "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php",
+      {
         method: "POST",
         headers: {
           "content-type": "application/x-www-form-urlencoded; charset=UTF-8"
         },
-        body: new URLSearchParams({ port, request })
-      });
-      if (!response.ok) throw new Error(`Apex detail ${response.status}`);
-      return response.text();
-    };
-
-    // 1) Complete lap history.  Keep this separate from pits so one history
-    // cannot truncate the other in Apex's request protocol.
-    const bodies = [
-      await postRequest(`D#-999#D${id}.L#-${count}#D${id}.B#1#D${id}.INF`)
-    ];
-
-    // 2) Ask for the normal pit range as Apex's UI does.
-    bodies.push(
-      await postRequest(`D#-999#D${id}.P#-${Math.max(expectedPits, 20)}#D${id}.INF`)
+        body: new URLSearchParams({
+          port: this.env.APEX_DETAIL_PORT || "8910",
+          request
+        })
+      }
     );
 
-    // 3) IMPORTANT: the final grid tells us the exact number of real pit
-    // records.  If Apex says PITS=8, request P1..P8 explicitly as protocol
-    // keys as well.  This avoids relying on the range selector, which is the
-    // reason late pit records (e.g. P6/P7/P8) could be absent locally even
-    // while Apex's own detail page displayed them.
-    if (expectedPits > 0) {
-      const keys = [];
-      for (let n = 1; n <= expectedPits; n += 1) keys.push(`D${id}.P${n}`);
-      // Small chunks keep the request conservative even for very long races.
-      for (let i = 0; i < keys.length; i += 20) {
-        const chunk = keys.slice(i, i + 20);
-        bodies.push(await postRequest(`D#-999#${chunk.join("#")}#D${id}.INF`));
-      }
-    }
-
-    return bodies.filter(Boolean).join("\n");
+    if (!response.ok) throw new Error(`Apex detail ${response.status}`);
+    return response.text();
   }
 
 
