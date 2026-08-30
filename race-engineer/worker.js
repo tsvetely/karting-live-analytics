@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.10-current-race-raw-best";
+  "2026-08-30-race-datasets-v6.11-stable-grid-best-session-aware";
 
 const PAGE_SIZE = 1000;
 
@@ -2585,31 +2585,6 @@ async function livePayload(env, rid) {
 
   const entries=filterCurrentField(entriesRaw,fieldIds);
   const entryById=new Map(entries.map(r=>[String(r.apex_id),r]));
-
-  // Race-wide BEST LAP must come from the raw lap history of the CURRENT
-  // Apex field/current race only.  Do not use stint stats or the live-grid
-  // bestLaps map here: that map can be partial while the grid is updating.
-  const [raceLapRows, raceExclusionsRaw] = await Promise.all([
-    loadLapEventsForApexIds(env, rid, fieldIds),
-    loadExclusions(env, rid).catch(() => [])
-  ]);
-  const raceExclusions = manualExclusionSet(
-    filterCurrentField(raceExclusionsRaw, fieldIds)
-  );
-  let rawRaceBest = null;
-  for (const row of raceLapRows) {
-    const id = String(row.apex_id ?? "").trim();
-    const lapNumber = Number(row.lap_number);
-    const lapTime = Number(row.lap_time);
-    const currentLap = Number(snapshot?.lapCounts?.[id]);
-    if (!validApexId(id) || !fieldIds.has(id)) continue;
-    if (!Number.isFinite(lapNumber) || lapNumber <= 0) continue;
-    if (Number.isFinite(currentLap) && currentLap >= 0 && lapNumber > currentLap) continue;
-    if (!Number.isFinite(lapTime) || lapTime <= 0) continue;
-    if (raceExclusions.has(`${id}:${Math.trunc(lapNumber)}`)) continue;
-    if (rawRaceBest === null || lapTime < rawRaceBest) rawRaceBest = lapTime;
-  }
-
   const stints=await stintsPayload(env,rid,snapshot);
   const liveById=new Map(stints.filter(r=>r.is_live).map(r=>[String(r.apex_id),r]));
   const current=[];
@@ -2623,8 +2598,11 @@ async function livePayload(env, rid) {
     const sp=Number(snapshot?.pitCounts?.[id]);
     const pitCount=Number.isFinite(sp)?Math.max(0,Math.trunc(sp)):Math.max(0,(Number(live.stint_number)||1)-1);
     pitTotal+=pitCount;
-    // Per-team live/stint BEST is populated below from the current stint.
-    // The overview race BEST is calculated once from current raw race laps.
+    const sb=Number(snapshot?.bestLaps?.[id]);
+    // Overall BEST LAP is authoritative from the current live Apex grid.
+    // Never fall back to apex_entries here because race_id can be reused and
+    // an entry may still contain a best from an older session.
+    if (Number.isFinite(sb)&&sb>0&&(raceBest===null||sb<raceBest)) raceBest=sb;
     const pos=Number(snapshot?.positions?.[id]);
 
     current.push({
@@ -2644,7 +2622,6 @@ async function livePayload(env, rid) {
     if(Number.isFinite(a.position)&&Number.isFinite(b.position)&&a.position!==b.position)return a.position-b.position;
     if(Number.isFinite(a.position))return -1;if(Number.isFinite(b.position))return 1;return b.race_lap-a.race_lap;
   });
-  raceBest = rawRaceBest;
   const lastPacket=Date.parse(snapshot?.last_packet_at||"");
   const isLive=Number.isFinite(lastPacket)&&Date.now()-lastPacket<180000;
   return {race_id:Number(rid),session_name:"Apex Timing",active:current.length>0,data_available:current.length>0,
@@ -4169,7 +4146,18 @@ export class ApexCollector {
       const v=parseLapTime(value);if(v!==null){this.lastLaps.set(id,v);await this.upsertEntry(id,{last_lap:v});}return;
     }
     if(t==="blp"||c==="blp"||col==="12"){
-      const v=parseLapTime(value);if(v!==null){this.bestLaps.set(id,v);await this.upsertEntry(id,{best_lap:v});}return;
+      const v=parseLapTime(value);
+      if(v!==null&&v>0){
+        const previous=Number(this.bestLaps.get(id));
+        // A kart's race best can only improve during one session.  Some Apex
+        // full-grid packets are partial/transitional; never replace a known
+        // faster current-session best with a slower value from such a packet.
+        if(!Number.isFinite(previous)||previous<=0||v<previous){
+          this.bestLaps.set(id,v);
+        }
+        await this.upsertEntry(id,{best_lap:this.bestLaps.get(id)});
+      }
+      return;
     }
     if(t==="tlp"||c==="tlp"||col==="13"){
       const n=parseNumber(value);if(n!==null&&n>=0){
@@ -4231,13 +4219,35 @@ export class ApexCollector {
               grid.positions
             );
 
-          // A full Apex grid is authoritative for the current session.
-          // Rebuild these live metrics from this grid so values from a
-          // previous race that reused the same Apex IDs cannot survive.
-          this.pitCounts = new Map();
-          this.lapCounts = new Map();
-          this.bestLaps = new Map();
-          this.lastLaps = new Map();
+          // Detect an actual NEW SESSION before clearing cumulative live
+          // metrics.  Apex can emit partial/transitional full-grid packets
+          // during the same race; clearing bestLaps on every such packet was
+          // the reason the overall best jumped backwards (58.334 -> 58.712).
+          let incomingMaxLap = 0;
+          for (const fields of grid.rows.values()) {
+            for (const cell of Object.values(fields)) {
+              if (String(cell.column) === "13" || cell.type === "tlp") {
+                const n = parseNumber(cell.value);
+                if (n !== null && n >= 0) incomingMaxLap = Math.max(incomingMaxLap, Math.trunc(n));
+              }
+            }
+          }
+          let storedMaxLap = 0;
+          for (const value of this.lapCounts.values()) {
+            const n = Number(value);
+            if (Number.isFinite(n)) storedMaxLap = Math.max(storedMaxLap, n);
+          }
+          const newSession =
+            storedMaxLap >= 20 &&
+            incomingMaxLap >= 0 &&
+            incomingMaxLap + 15 < storedMaxLap;
+
+          if (newSession) {
+            this.pitCounts = new Map();
+            this.lapCounts = new Map();
+            this.bestLaps = new Map();
+            this.lastLaps = new Map();
+          }
 
 
           this.lastGridAt =
