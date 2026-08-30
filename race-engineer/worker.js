@@ -1449,11 +1449,16 @@ function snapshotFromGrid(grid) {
   const lastLaps = {};
   const teamNames = {};
   const drivers = {};
+  // Preserve the complete Apex grid row exactly as parsed.  The LIVE UI
+  // needs fields that are not part of our analytics model (kart, nation,
+  // sectors, gap, interval, on-track time, pit time, penalty, etc.).
+  const rawRows = {};
 
   for (const [rawId, fields] of grid?.rows || []) {
     const id = String(rawId);
     if (!validApexId(id)) continue;
     fieldApexIds.push(id);
+    rawRows[id] = fields || {};
 
     for (const cell of Object.values(fields || {})) {
       const type = String(cell?.type || "").toLowerCase();
@@ -1511,7 +1516,8 @@ function snapshotFromGrid(grid) {
     bestLaps,
     lastLaps,
     teamNames,
-    drivers
+    drivers,
+    rawRows
   };
 }
 
