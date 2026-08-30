@@ -1,5 +1,4 @@
-const VERSION =
-  "2026-08-30-race-datasets-v6.20-live-grid-authoritative";
+const VERSION = "2026-08-30-race-datasets-v6.21-current-session-rebuild";
 
 const PAGE_SIZE = 1000;
 
@@ -2747,7 +2746,10 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
 
   const entries=filterCurrentField(entriesRaw,fieldIds);
   const entryById=new Map(entries.map(r=>[String(r.apex_id),r]));
-  const stints=await stintsPayload(env,rid,snapshot);
+  const [stints, currentLapEvents] = await Promise.all([
+    stintsPayload(env,rid,snapshot),
+    loadLapEventsForApexIds(env,rid,[...fieldIds])
+  ]);
   const liveById=new Map(stints.filter(r=>r.is_live).map(r=>[String(r.apex_id),r]));
   const current=[];
   let raceLap=0,pitTotal=0,raceBest=null;
@@ -2763,11 +2765,8 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
     const sp=Number(snapshot?.pitCounts?.[id]);
     const pitCount=Number.isFinite(sp)?Math.max(0,Math.trunc(sp)):0;
     pitTotal+=pitCount;
-    const sb=Number(snapshot?.bestLaps?.[id]);
-    // Overall BEST LAP is authoritative from the current live Apex grid.
-    // Never fall back to apex_entries here because race_id can be reused and
-    // an entry may still contain a best from an older session.
-    if (Number.isFinite(sb)&&sb>0&&(raceBest===null||sb<raceBest)) raceBest=sb;
+    // Race-wide best is calculated below from the rebuilt CURRENT-session
+    // detail lap history. Do not use a stint best or a stale grid cache here.
     const pos=Number(snapshot?.positions?.[id]);
 
     current.push({
@@ -2783,6 +2782,20 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       worst_lap_number:number(live.worst_lap_number),consistency:number(live.consistency),updated_at:entry.updated_at||null
     });
   }
+  // Authoritative overall best: only raw laps belonging to the current 72-kart
+  // field and not beyond each kart's current Apex lap count. refreshDetail()
+  // replaces each kart's race_id=1 history with the complete current session.
+  for (const lapRow of currentLapEvents || []) {
+    const id = String(lapRow.apex_id ?? "").trim();
+    if (!fieldIds.has(id)) continue;
+    const lapNo = Number(lapRow.lap_number);
+    const currentCount = Number(snapshot?.lapCounts?.[id]);
+    if (!Number.isFinite(lapNo) || lapNo <= 0) continue;
+    if (Number.isFinite(currentCount) && currentCount >= 0 && lapNo > currentCount) continue;
+    const t = Number(lapRow.lap_time);
+    if (Number.isFinite(t) && t > 0 && (raceBest === null || t < raceBest)) raceBest = t;
+  }
+
   current.sort((a,b)=>{
     if(Number.isFinite(a.position)&&Number.isFinite(b.position)&&a.position!==b.position)return a.position-b.position;
     if(Number.isFinite(a.position))return -1;if(Number.isFinite(b.position))return 1;return b.race_lap-a.race_lap;
@@ -3893,7 +3906,19 @@ export class ApexCollector {
       path === "/start"
     ) {
       await this.connect();
-      this.state.waitUntil(this.refreshAllFieldDetails(false));
+
+      // One-time repair for this deployment. race_id=1 is reused between
+      // events, so rebuild all 72 current kart histories from Apex detail
+      // exactly once instead of continuing to display old-session rows.
+      const repairKey = "currentSessionRepairVersion";
+      const repairVersion = "v6.21";
+      const repaired = await this.state.storage.get(repairKey);
+      if (repaired !== repairVersion) {
+        await this.state.storage.put(repairKey, repairVersion);
+        this.state.waitUntil(this.refreshAllFieldDetails(true));
+      } else {
+        this.state.waitUntil(this.refreshAllFieldDetails(false));
+      }
 
       return json(
         await this.snapshot()
