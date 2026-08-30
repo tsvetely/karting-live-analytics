@@ -3629,6 +3629,65 @@ async function createRawApexTextResponse(env, rid) {
   }});
 }
 
+
+async function raceAnalyticsReportRows(env, rid, snapshot) {
+  const stints = await stintsPayload(env, rid, snapshot);
+  const drivers = driversFromStints(stints);
+  const teams = teamsFromStints(stints, snapshot);
+  const pits = await loadPits(env, rid);
+  return [
+    ...stints.map(row => ({ dataset: "stint", ...row })),
+    ...drivers.map(row => ({ dataset: "driver", ...row })),
+    ...teams.map(row => ({ dataset: "team", ...row })),
+    ...pits.map(row => ({ dataset: "pit", ...row }))
+  ];
+}
+
+function createRaceAnalyticsCsvResponse(rid, rows) {
+  const columns = [...new Set((rows || []).flatMap(row => Object.keys(row || {})))];
+  const body = rows.length
+    ? [
+        columns.map(csvEscape).join(","),
+        ...rows.map(row => columns.map(column => csvEscape(row?.[column])).join(","))
+      ].join("\n")
+    : "dataset\n";
+  const filename = safeFilename(`Race ${rid} - Race Analytics.csv`);
+  return new Response(body, { status: 200, headers: {
+    "content-type": "text/csv; charset=utf-8",
+    "content-disposition": `attachment; filename="${filename}"`,
+    "cache-control": "no-store, no-cache, must-revalidate",
+    "x-content-type-options": "nosniff"
+  }});
+}
+
+function wrapReportText(text, width = 100) {
+  const value = String(text ?? "");
+  if (!value) return [""];
+  const chunks = [];
+  for (let i = 0; i < value.length; i += width) chunks.push(value.slice(i, i + width));
+  return chunks;
+}
+
+function createRaceAnalyticsPdfResponse(rid, rows) {
+  const lines = [`Race ${rid} - Race Analytics`, ""];
+  for (const row of rows || []) {
+    const line = Object.entries(row || {})
+      .map(([key, value]) => `${key}=${value ?? ""}`)
+      .join(" | ");
+    lines.push(...wrapReportText(line, 100));
+  }
+  const pages = [];
+  for (let i = 0; i < lines.length; i += 72) pages.push(lines.slice(i, i + 72));
+  const bytes = buildTextPdf(pages);
+  const filename = safeFilename(`Race ${rid} - Race Analytics.pdf`);
+  return new Response(bytes, { status: 200, headers: {
+    "content-type": "application/pdf",
+    "content-disposition": `attachment; filename="${filename}"`,
+    "cache-control": "no-store, no-cache, must-revalidate",
+    "x-content-type-options": "nosniff"
+  }});
+}
+
 // ============================================================
 // REPORT - LAP RECORDS CSV
 // ============================================================
@@ -5375,6 +5434,10 @@ export default {
         url.pathname ===
           "/api/events" ||
         url.pathname ===
+          "/api/reports/race-analytics.csv" ||
+        url.pathname ===
+          "/api/reports/race-analytics.pdf" ||
+        url.pathname ===
           "/api/reports/lap-time-records.csv" ||
         url.pathname ===
           "/api/reports/lap-time-records.pdf" ||
@@ -5843,6 +5906,24 @@ export default {
               ok: true
             });
           }
+        }
+
+
+        if (
+          url.pathname ===
+          "/api/reports/race-analytics.csv"
+        ) {
+          const rows = await raceAnalyticsReportRows(env, rid, snapshot);
+          return createRaceAnalyticsCsvResponse(rid, rows);
+        }
+
+
+        if (
+          url.pathname ===
+          "/api/reports/race-analytics.pdf"
+        ) {
+          const rows = await raceAnalyticsReportRows(env, rid, snapshot);
+          return createRaceAnalyticsPdfResponse(rid, rows);
         }
 
 
