@@ -3341,6 +3341,41 @@ async function racesPayload(env) {
 }
 
 
+async function rawApexPayload(env, rid, snapshot = null, limit = 200) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 2000));
+  const [entries, laps, pits, packets] = await Promise.all([
+    sbGetAll(env, "apex_entries", {select:"*", race_id:`eq.${rid}`, order:"apex_id.asc"}),
+    sbGetAll(env, "apex_lap_events", {select:"*", race_id:`eq.${rid}`, order:"apex_id.asc,lap_number.asc"}),
+    sbGetAll(env, "apex_pit_stints", {select:"*", race_id:`eq.${rid}`, order:"apex_id.asc,pit_number.asc"}),
+    sbGet(env, "apex_raw_packets", {select:"*", race_id:`eq.${rid}`, order:"id.desc", limit:String(safeLimit)})
+  ]);
+  return {
+    race_id:Number(rid),
+    snapshot:snapshot || null,
+    counts:{entries:entries.length,laps:laps.length,pits:pits.length,raw_packets_returned:packets.length},
+    entries,laps,pits,raw_packets:packets
+  };
+}
+
+async function createRawApexJsonResponse(env, rid, snapshot) {
+  const data = await rawApexPayload(env, rid, snapshot, 2000);
+  return new Response(JSON.stringify(data, null, 2), {headers:{
+    "content-type":"application/json; charset=utf-8",
+    "content-disposition":`attachment; filename="race-${rid}-apex-raw.json"`,
+    "cache-control":"no-store"
+  }});
+}
+
+async function createRawApexTextResponse(env, rid) {
+  const packets = await sbGetAll(env, "apex_raw_packets", {select:"*", race_id:`eq.${rid}`, order:"id.asc"});
+  const body = packets.map(row => String(row.payload ?? "")).join("\n");
+  return new Response(body, {headers:{
+    "content-type":"text/plain; charset=utf-8",
+    "content-disposition":`attachment; filename="race-${rid}-apex-raw.txt"`,
+    "cache-control":"no-store"
+  }});
+}
+
 // ============================================================
 // REPORT - LAP RECORDS CSV
 // ============================================================
@@ -4139,7 +4174,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.25";
+      const repairVersion = "v6.27";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4501,28 +4536,14 @@ export class ApexCollector {
       const raw=await this.requestDetail(id,lapCount);
       const laps=parseLapRows(raw,this.rid).filter(r=>String(r.apex_id)===id);
       const pits=parsePitRows(raw,entry.team_name,this.rid).filter(r=>String(r.apex_id)===id && Number(r.pit_number)>0);
-      const maxLap=laps.reduce((m,r)=>Math.max(m,Number(r.lap_number)||0),0);
-
-      // Never destroy current data on an incomplete/failed Apex detail reply.
-      if (!laps.length || maxLap < Math.max(1, lapCount - 2)) {
-        throw new Error(`Incomplete Apex detail ${id}: ${laps.length} laps, max ${maxLap}, expected ${lapCount}`);
-      }
-
-      // Apex detail is authoritative for lap/time pairs. Merge the returned
-      // complete chain into persistence; never delete an already-recorded lap
-      // merely because a later response is shorter or temporarily inconsistent.
+      // PRESERVE-FIRST: never reject real Apex detail rows because our own
+      // expectation says the reply is "incomplete". Persist every lap/pit row
+      // Apex actually returned. Do not delete older rows before merging.
       for(let i=0;i<laps.length;i+=250){
         await sbUpsert(this.env,"apex_lap_events",laps.slice(i,i+250),"race_id,apex_id,lap_number");
       }
-
-      const expectedPits=Number(this.pitCounts.get(id));
-      const parsedPitNumbers=new Set(pits.map(p=>Number(p.pit_number)).filter(n=>Number.isFinite(n)&&n>0));
-      const pitChainComplete=!Number.isFinite(expectedPits)||expectedPits<=0||parsedPitNumbers.size>=Math.trunc(expectedPits);
-      if(pitChainComplete){
-        await sbDelete(this.env,"apex_pit_stints",{race_id:`eq.${this.rid}`,apex_id:`eq.${id}`});
-        if(pits.length) await sbUpsert(this.env,"apex_pit_stints",pits,"race_id,apex_id,pit_number");
-      } else {
-        console.warn(`Incomplete Apex pit detail ${id}: ${parsedPitNumbers.size} pits, expected ${expectedPits}; keeping existing pit chain and retrying`);
+      if(pits.length){
+        await sbUpsert(this.env,"apex_pit_stints",pits,"race_id,apex_id,pit_number");
       }
 
       await this.persist();
@@ -5000,6 +5021,20 @@ export default {
         });
       }
 
+
+      if (url.pathname === "/api/raw/apex") {
+        const rawSnapshot = Number(rid) === Number(raceId(env)) ? await collectorSnapshot(env).catch(() => null) : null;
+        return json(await rawApexPayload(env, rid, rawSnapshot, url.searchParams.get("limit") || 200));
+      }
+
+      if (url.pathname === "/api/reports/apex-raw.json") {
+        const rawSnapshot = Number(rid) === Number(raceId(env)) ? await collectorSnapshot(env).catch(() => null) : null;
+        return createRawApexJsonResponse(env, rid, rawSnapshot);
+      }
+
+      if (url.pathname === "/api/reports/apex-raw.txt") {
+        return createRawApexTextResponse(env, rid);
+      }
 
       if (
         url.pathname ===

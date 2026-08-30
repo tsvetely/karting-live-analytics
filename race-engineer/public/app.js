@@ -4449,7 +4449,10 @@ function renderReports() {
     "organiserReport1Csv",
     "organiserReport1Pdf",
     "organiserReport2Csv",
-    "organiserReport2Pdf"
+    "organiserReport2Pdf",
+    "viewRawApex",
+    "downloadRawApexJson",
+    "downloadRawApexTxt"
   ]
     .forEach(
       id => {
@@ -4520,6 +4523,48 @@ function setReportButtonBusy(
 
 
 function initReports() {
+  $("viewRawApex")
+    ?.addEventListener("click", () => {
+      const params = new URLSearchParams();
+      if (S.raceId) params.set("race_id", String(S.raceId));
+      params.set("limit", "500");
+      window.open(`/api/raw/apex?${params.toString()}`, "_blank", "noopener");
+    });
+
+  $("downloadRawApexJson")
+    ?.addEventListener("click", async event => {
+      const button = event.currentTarget;
+      setReportButtonBusy(button, true, "JSON");
+      try {
+        await downloadFileFromEndpoint(
+          "/api/reports/apex-raw.json",
+          `${reportBaseName()} - Apex raw data.json`
+        );
+      } catch (error) {
+        alert(`Raw Apex JSON download failed:\n\n${error.message}`);
+      } finally {
+        setReportButtonBusy(button, false, "JSON");
+        renderReports();
+      }
+    });
+
+  $("downloadRawApexTxt")
+    ?.addEventListener("click", async event => {
+      const button = event.currentTarget;
+      setReportButtonBusy(button, true, "RAW TXT");
+      try {
+        await downloadFileFromEndpoint(
+          "/api/reports/apex-raw.txt",
+          `${reportBaseName()} - Apex raw packets.txt`
+        );
+      } catch (error) {
+        alert(`Raw Apex TXT download failed:\n\n${error.message}`);
+      } finally {
+        setReportButtonBusy(button, false, "RAW TXT");
+        renderReports();
+      }
+    });
+
   $("downloadRaceCsv")
     ?.addEventListener(
       "click",
