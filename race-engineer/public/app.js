@@ -1853,7 +1853,6 @@ function renderOverview() {
 
 <td>
   #${esc(row.stint_number ?? "—")}
-  ${row.data_complete === false ? `<span class="bad" title="Apex pits: ${esc(row.expected_pit_count ?? "?")}; stored: ${esc(row.stored_pit_count ?? "?")}; missing: ${esc(row.missing_pit_count ?? "?")}"> INCOMPLETE ${esc(row.stored_pit_count ?? "?")}/${esc(row.expected_pit_count ?? "?")}</span>` : ""}
 </td>
 
 <td>
