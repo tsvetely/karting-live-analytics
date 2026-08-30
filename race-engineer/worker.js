@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.9-recover-stable-current-stint-best";
+  "2026-08-30-race-datasets-v6.10-current-race-raw-best";
 
 const PAGE_SIZE = 1000;
 
@@ -2585,6 +2585,31 @@ async function livePayload(env, rid) {
 
   const entries=filterCurrentField(entriesRaw,fieldIds);
   const entryById=new Map(entries.map(r=>[String(r.apex_id),r]));
+
+  // Race-wide BEST LAP must come from the raw lap history of the CURRENT
+  // Apex field/current race only.  Do not use stint stats or the live-grid
+  // bestLaps map here: that map can be partial while the grid is updating.
+  const [raceLapRows, raceExclusionsRaw] = await Promise.all([
+    loadLapEventsForApexIds(env, rid, fieldIds),
+    loadExclusions(env, rid).catch(() => [])
+  ]);
+  const raceExclusions = manualExclusionSet(
+    filterCurrentField(raceExclusionsRaw, fieldIds)
+  );
+  let rawRaceBest = null;
+  for (const row of raceLapRows) {
+    const id = String(row.apex_id ?? "").trim();
+    const lapNumber = Number(row.lap_number);
+    const lapTime = Number(row.lap_time);
+    const currentLap = Number(snapshot?.lapCounts?.[id]);
+    if (!validApexId(id) || !fieldIds.has(id)) continue;
+    if (!Number.isFinite(lapNumber) || lapNumber <= 0) continue;
+    if (Number.isFinite(currentLap) && currentLap >= 0 && lapNumber > currentLap) continue;
+    if (!Number.isFinite(lapTime) || lapTime <= 0) continue;
+    if (raceExclusions.has(`${id}:${Math.trunc(lapNumber)}`)) continue;
+    if (rawRaceBest === null || lapTime < rawRaceBest) rawRaceBest = lapTime;
+  }
+
   const stints=await stintsPayload(env,rid,snapshot);
   const liveById=new Map(stints.filter(r=>r.is_live).map(r=>[String(r.apex_id),r]));
   const current=[];
@@ -2598,10 +2623,8 @@ async function livePayload(env, rid) {
     const sp=Number(snapshot?.pitCounts?.[id]);
     const pitCount=Number.isFinite(sp)?Math.max(0,Math.trunc(sp)):Math.max(0,(Number(live.stint_number)||1)-1);
     pitTotal+=pitCount;
-    const sb=Number(snapshot?.bestLaps?.[id]);
-    const eb=number(entry.best_lap);
-    const best=Number.isFinite(sb)&&sb>0?sb:eb;
-    if (Number.isFinite(best)&&best>0&&(raceBest===null||best<raceBest)) raceBest=best;
+    // Per-team live/stint BEST is populated below from the current stint.
+    // The overview race BEST is calculated once from current raw race laps.
     const pos=Number(snapshot?.positions?.[id]);
 
     current.push({
@@ -2621,6 +2644,7 @@ async function livePayload(env, rid) {
     if(Number.isFinite(a.position)&&Number.isFinite(b.position)&&a.position!==b.position)return a.position-b.position;
     if(Number.isFinite(a.position))return -1;if(Number.isFinite(b.position))return 1;return b.race_lap-a.race_lap;
   });
+  raceBest = rawRaceBest;
   const lastPacket=Date.parse(snapshot?.last_packet_at||"");
   const isLive=Number.isFinite(lastPacket)&&Date.now()-lastPacket<180000;
   return {race_id:Number(rid),session_name:"Apex Timing",active:current.length>0,data_available:current.length>0,
@@ -5054,4 +5078,3 @@ export default {
     );
   }
 };
-
