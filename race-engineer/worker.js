@@ -2205,13 +2205,12 @@ function currentPitChain(pits, snapshot) {
 
   const result = [];
   for (const [id, byNumber] of grouped) {
-    const currentCount = Number(counts[id]);
-    let rows = [...byNumber.entries()]
+    // PRESERVE-FIRST: never delete already collected Apex pit history
+    // because a later snapshot reports a lower/different pit count.
+    // Snapshot pitCounts are used only as an expected-count diagnostic.
+    const rows = [...byNumber.entries()]
+      .filter(([pitNumber]) => pitNumber >= 1)
       .sort((a,b) => a[0]-b[0]);
-    if (Number.isFinite(currentCount) && currentCount >= 0) {
-      const n = Math.trunc(currentCount);
-      rows = rows.filter(([pitNumber]) => pitNumber >= 1 && pitNumber <= n);
-    }
     result.push(...rows.map(([,row]) => row));
   }
   return result;
@@ -2518,6 +2517,11 @@ async function stintsPayload(env, rid, snapshot = null) {
     const entry=entriesById.get(id) || {};
     const teamPits=[...(pitsById.get(id)||[])].sort((a,b)=>Number(a.pit_number)-Number(b.pit_number));
     const laps=lapsById.get(id)||[];
+    const snapshotExpectedPitCount = isCurrentRace ? Number(realSnapshot?.pitCounts?.[id]) : teamPits.length;
+    const expectedPitCount = Number.isFinite(snapshotExpectedPitCount) ? Math.max(0, Math.trunc(snapshotExpectedPitCount)) : teamPits.length;
+    const storedPitCount = teamPits.length;
+    const missingPitCount = Math.max(0, expectedPitCount - storedPitCount);
+    const pitHistoryComplete = missingPitCount === 0;
     let start=0;
     let stintNumber=1;
 
@@ -2536,7 +2540,9 @@ async function stintsPayload(env, rid, snapshot = null) {
         current_lap_count:end, total_laps:end-start, ...stats,
         pit_hour:pit.pit_hour||null, on_track:pit.on_track||null,
         pit_time:pit.pit_time||null, total_time:pit.total_time||null,
-        is_live:false, status:"COMPLETED", direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
+        is_live:false, status:pitHistoryComplete?"COMPLETED":"INCOMPLETE_PIT_HISTORY",
+        data_complete:pitHistoryComplete, expected_pit_count:expectedPitCount, stored_pit_count:storedPitCount, missing_pit_count:missingPitCount,
+        direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
       start=end;
     }
@@ -2545,7 +2551,6 @@ async function stintsPayload(env, rid, snapshot = null) {
     const entryLap=Number(entry.lap_count);
     const lastRecordedLap = laps.reduce((max,row)=>Math.max(max,Number(row.lap_number)||0),0);
     const currentLap=isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap) ? entryLap : lastRecordedLap);
-    const expectedPitCount=isCurrentRace ? Number(realSnapshot?.pitCounts?.[id]) : teamPits.length;
     if (Number.isFinite(currentLap) && currentLap>=start) {
       const emptyStats={
         valid_laps:0, avg_lap_time:null, best_lap_time:null, best_lap_number:null,
@@ -2557,8 +2562,10 @@ async function stintsPayload(env, rid, snapshot = null) {
       const stats=currentLap>start
         ? (calculateRawStintStats(id,laps,start,currentLap,exclusions,{globalExcluded,splitRange:splitById.get(id),rainStartLap:rainStartById.get(id)}) || emptyStats)
         : emptyStats;
-      const liveStintNumber=isCurrentRace && Number.isFinite(expectedPitCount)
-        ? Math.max(1,Math.trunc(expectedPitCount)+1)
+      // Do not invent a later stint number from an expected pit count when
+      // the actual stored pit boundaries are incomplete.
+      const liveStintNumber=pitHistoryComplete
+        ? Math.max(1,storedPitCount+1)
         : stintNumber;
       result.push({
         race_id:Number(rid), apex_id:id,
@@ -2568,8 +2575,8 @@ async function stintsPayload(env, rid, snapshot = null) {
         end_lap_count:isCurrentRace?null:currentLap,
         current_lap_count:currentLap, total_laps:Math.max(0,currentLap-start), ...stats,
         pit_hour:null,on_track:null,pit_time:null,total_time:null,
-        is_live:isCurrentRace,status:isCurrentRace?"LIVE":"COMPLETED",
-        data_complete:true, expected_pit_count:Number.isFinite(expectedPitCount)?Math.trunc(expectedPitCount):null, stored_pit_count:teamPits.length,
+        is_live:isCurrentRace,status:pitHistoryComplete?(isCurrentRace?"LIVE":"COMPLETED"):"INCOMPLETE_PIT_HISTORY",
+        data_complete:pitHistoryComplete, expected_pit_count:expectedPitCount, stored_pit_count:storedPitCount, missing_pit_count:missingPitCount,
         direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
     }
@@ -3199,7 +3206,7 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       stint_number:number(stint.stint_number)||pitCount+1,start_lap_count:number(stint.start_lap_count)||0,
       stint_laps:number(stint.total_laps),total_stint_laps:number(stint.total_laps),
       valid_laps:number(stint.valid_laps) ?? 0,
-      stint_status:stint.status||null,data_complete:stint.data_complete!==false,expected_pit_count:number(stint.expected_pit_count),stored_pit_count:number(stint.stored_pit_count),
+      stint_status:stint.status||null,data_complete:stint.data_complete!==false,expected_pit_count:number(stint.expected_pit_count),stored_pit_count:number(stint.stored_pit_count),missing_pit_count:number(stint.missing_pit_count),
       live_last_lap:isCurrentRace?(number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap)):number(entry.last_lap),
       apex_best_lap:isCurrentRace?(number(snapshot?.bestLaps?.[id]) ?? number(entry.best_lap)):number(entry.best_lap),
       apex_fields:isCurrentRace?(snapshot?.rawRows?.[id] || null):null,
