@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.18-do-namespace-recovery";
+  "2026-08-30-race-datasets-v6.19-do-independent-recovery";
 
 const PAGE_SIZE = 1000;
 
@@ -1299,57 +1299,49 @@ function resolveTeam(
 // ============================================================
 
 function collectorStub(env) {
-  return env
-    .APEX_COLLECTOR
-    .get(
-      env
-        .APEX_COLLECTOR
-        .idFromName(
-          "primary"
-        )
-    );
+  if (!env?.APEX_COLLECTOR) {
+    return null;
+  }
+
+  return env.APEX_COLLECTOR.get(
+    env.APEX_COLLECTOR.idFromName("primary-recovery-20260830-v619")
+  );
 }
 
 
 async function collectorSnapshot(env) {
-  const response =
-    await collectorStub(
-      env
-    )
-      .fetch(
-        "https://collector/snapshot"
-      );
-
-
-  if (!response.ok) {
-    throw new Error(
-      "Collector snapshot failed"
-    );
+  const stub = collectorStub(env);
+  if (!stub) {
+    return null;
   }
 
-
-  return response.json();
+  try {
+    const response = await stub.fetch("https://collector/snapshot");
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.error("COLLECTOR SNAPSHOT ERROR", error);
+    return null;
+  }
 }
 
 
 async function startCollector(env) {
-  const response =
-    await collectorStub(
-      env
-    )
-      .fetch(
-        "https://collector/start"
-      );
-
-
-  if (!response.ok) {
-    throw new Error(
-      "Collector start failed"
-    );
+  const stub = collectorStub(env);
+  if (!stub) {
+    return { connected: false, available: false, fallback: true };
   }
 
-
-  return response.json();
+  try {
+    const response = await stub.fetch("https://collector/start");
+    if (!response.ok) {
+      return { connected: false, available: true, fallback: true };
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("COLLECTOR START ERROR", error);
+    return { connected: false, available: false, fallback: true };
+  }
 }
 
 
@@ -1427,6 +1419,53 @@ function currentFieldIds(
 
 
   return result;
+}
+
+
+function recentFieldIdsFromEntries(rows) {
+  const candidates = (rows || [])
+    .filter(row => validApexId(row?.apex_id))
+    .map(row => ({
+      id: String(row.apex_id).trim(),
+      ts: Date.parse(row.updated_at || "") || 0
+    }))
+    .sort((a, b) => b.ts - a.ts);
+
+  if (!candidates.length) return new Set();
+
+  const newest = candidates[0].ts;
+  if (!newest) {
+    return new Set(candidates.slice(0, 100).map(row => row.id));
+  }
+
+  // Current Apex grid rows are updated together.  Historical race_id=1
+  // rows are much older.  Stop at the first clear timestamp gap instead
+  // of depending on the Durable Object to define the live field.
+  let cut = candidates.length;
+  for (let i = 1; i < candidates.length; i++) {
+    const gap = candidates[i - 1].ts - candidates[i].ts;
+    if (i >= 10 && gap > 120000) {
+      cut = i;
+      break;
+    }
+  }
+
+  let current = candidates
+    .slice(0, cut)
+    .filter(row => newest - row.ts <= 15 * 60 * 1000);
+
+  // A normal event has far fewer than the historical 500+ ids.  If the
+  // timestamp cluster is still polluted, keep the newest coherent block.
+  if (current.length > 120) current = current.slice(0, 120);
+
+  return new Set(current.map(row => row.id));
+}
+
+
+function effectiveFieldIds(snapshot, entries) {
+  const live = currentFieldIds(snapshot);
+  if (live.size) return live;
+  return recentFieldIdsFromEntries(entries);
 }
 
 
@@ -1975,13 +2014,13 @@ function calculateRawStintStats(apexId, lapRows, startLap, endLap, exclusions) {
 // ============================================================
 
 async function stintsPayload(env, rid, snapshot = null) {
-  const realSnapshot = snapshot || await collectorSnapshot(env).catch(() => null);
-  const fieldIds = currentFieldIds(realSnapshot);
+  const realSnapshot = snapshot || await collectorSnapshot(env);
+  const entriesRaw = await loadEntries(env, rid).catch(() => []);
+  const fieldIds = effectiveFieldIds(realSnapshot, entriesRaw);
   if (!fieldIds.size) return [];
 
-  const [pitsRaw, entriesRaw, exclusionsRaw, lapRaw, teamMap] = await Promise.all([
+  const [pitsRaw, exclusionsRaw, lapRaw, teamMap] = await Promise.all([
     loadPits(env, rid),
-    loadEntries(env, rid),
     loadExclusions(env, rid),
     loadLapEventsForApexIds(env, rid, fieldIds),
     stableTeamNameMap(env, rid)
@@ -2575,9 +2614,9 @@ function teamsFromDrivers(
 
 async function livePayload(env, rid) {
   const [entriesRaw, snapshot, teamMap] = await Promise.all([
-    loadEntries(env, rid), collectorSnapshot(env).catch(() => null), stableTeamNameMap(env, rid)
+    loadEntries(env, rid).catch(() => []), collectorSnapshot(env), stableTeamNameMap(env, rid)
   ]);
-  const fieldIds=currentFieldIds(snapshot);
+  const fieldIds=effectiveFieldIds(snapshot, entriesRaw);
   if (!fieldIds.size) return {
     race_id:Number(rid), session_name:"Apex Timing", active:false, data_available:false,
     is_live:false, session_status:"WAITING FOR APEX GRID", team_count:0, race_lap:0, pit_count:0, best_lap:null, current:[]
@@ -2599,10 +2638,9 @@ async function livePayload(env, rid) {
     const pitCount=Number.isFinite(sp)?Math.max(0,Math.trunc(sp)):Math.max(0,(Number(live.stint_number)||1)-1);
     pitTotal+=pitCount;
     const sb=Number(snapshot?.bestLaps?.[id]);
-    // Overall BEST LAP is authoritative from the current live Apex grid.
-    // Never fall back to apex_entries here because race_id can be reused and
-    // an entry may still contain a best from an older session.
-    if (Number.isFinite(sb)&&sb>0&&(raceBest===null||sb<raceBest)) raceBest=sb;
+    const eb=Number(entry.best_lap);
+    const best = Number.isFinite(sb) && sb > 0 ? sb : (Number.isFinite(eb) && eb > 0 ? eb : null);
+    if (best !== null && (raceBest===null||best<raceBest)) raceBest=best;
     const pos=Number(snapshot?.positions?.[id]);
 
     current.push({
@@ -2623,7 +2661,9 @@ async function livePayload(env, rid) {
     if(Number.isFinite(a.position))return -1;if(Number.isFinite(b.position))return 1;return b.race_lap-a.race_lap;
   });
   const lastPacket=Date.parse(snapshot?.last_packet_at||"");
-  const isLive=Number.isFinite(lastPacket)&&Date.now()-lastPacket<180000;
+  const newestEntry=Math.max(0,...entries.map(row=>Date.parse(row.updated_at||"")||0));
+  const activityTime=Number.isFinite(lastPacket)&&lastPacket>0?lastPacket:newestEntry;
+  const isLive=activityTime>0&&Date.now()-activityTime<180000;
   return {race_id:Number(rid),session_name:"Apex Timing",active:current.length>0,data_available:current.length>0,
     is_live:isLive,session_status:isLive?"LIVE":"FINISHED",collector_connected:snapshot?.connected===true,
     team_count:current.length,race_lap:raceLap,pit_count:pitTotal,best_lap:raceBest,current};
@@ -4363,16 +4403,6 @@ export class ApexCollector {
 
 
 // ============================================================
-// FRESH DURABLE OBJECT NAMESPACE RECOVERY
-// ============================================================
-// The original ApexCollector class is intentionally kept so the old v1
-// migration remains valid. APEX_COLLECTOR is rebound to this fresh class
-// by wrangler.toml v2, which gives the collector a clean Durable Object
-// namespace without touching Supabase race history.
-export class ApexCollectorV2 extends ApexCollector {}
-
-
-// ============================================================
 // WORKER ROUTER
 // ============================================================
 
@@ -4444,11 +4474,18 @@ export default {
         url.pathname ===
         "/api/collector/status"
       ) {
-        return json(
-          await collectorSnapshot(
-            env
-          )
-        );
+        const snapshot = await collectorSnapshot(env);
+        if (snapshot) return json(snapshot);
+
+        const entries = await loadEntries(env, raceId(env)).catch(() => []);
+        const fieldIds = recentFieldIdsFromEntries(entries);
+        return json({
+          connected: false,
+          available: false,
+          fallback: true,
+          field_count: fieldIds.size,
+          fieldApexIds: [...fieldIds]
+        });
       }
 
 
@@ -4456,27 +4493,20 @@ export default {
         url.pathname ===
         "/api/collector/reconnect"
       ) {
-        const response =
-          await collectorStub(
-            env
-          )
-            .fetch(
-              "https://collector/reconnect"
-            );
-
-
-        return new Response(
-          await response.text(),
-          {
-            status:
-              response.status,
-
-            headers: {
-              "content-type":
-                "application/json"
-            }
-          }
-        );
+        const stub = collectorStub(env);
+        if (!stub) {
+          return json({ connected:false, available:false, fallback:true });
+        }
+        try {
+          const response = await stub.fetch("https://collector/reconnect");
+          return new Response(await response.text(), {
+            status: response.status,
+            headers: { "content-type": "application/json" }
+          });
+        } catch (error) {
+          console.error("COLLECTOR RECONNECT ERROR", error);
+          return json({ connected:false, available:false, fallback:true });
+        }
       }
 
 
@@ -4557,19 +4587,9 @@ export default {
           "/api/reports/pit-stops.html"
       ) {
 
-        const snapshot =
-          await collectorSnapshot(
-            env
-          )
-            .catch(
-              () => null
-            );
-
-
-        const fieldIds =
-          currentFieldIds(
-            snapshot
-          );
+        const snapshot = await collectorSnapshot(env);
+        const scopeEntries = await loadEntries(env, rid).catch(() => []);
+        const fieldIds = effectiveFieldIds(snapshot, scopeEntries);
 
 
         if (
