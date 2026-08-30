@@ -1956,32 +1956,31 @@ function renderOverviewSummary() {
       );
 
 
+  const liveSummary = isCurrentRaceSelected() ? S.liveMeta : null;
+  const authoritativeTeams = number(liveSummary?.team_count);
+  const authoritativeLap = number(liveSummary?.race_lap);
+  const authoritativePits = number(liveSummary?.pit_count);
+  const authoritativeBest = number(liveSummary?.race_best_lap ?? liveSummary?.best_lap);
+
   if ($("summaryTeams")) {
     $("summaryTeams").textContent =
-      rows.length || "—";
+      (authoritativeTeams ?? rows.length) || "—";
   }
-
 
   if ($("summaryRaceLap")) {
     $("summaryRaceLap").textContent =
-      raceLap || "—";
+      (authoritativeLap ?? raceLap) || "—";
   }
-
 
   if ($("summaryPits")) {
     $("summaryPits").textContent =
-      pitStops;
+      authoritativePits ?? pitStops;
   }
-
 
   if ($("summaryBestLap")) {
     $("summaryBestLap").textContent =
-      best.length
-        ? time(
-            Math.min(
-              ...best
-            )
-          )
+      authoritativeBest && authoritativeBest > 0
+        ? time(authoritativeBest)
         : "—";
   }
 }
@@ -4670,22 +4669,24 @@ async function loadCollectorStatus() {
 
 
     node.textContent =
-      data.connected
-        ? `Collector connected · field ${data.field_count ?? "—"}`
-        : "Collector disconnected";
+      data.direct_live
+        ? `Apex live grid · field ${data.field_count ?? "—"}`
+        : (data.connected
+            ? `Collector connected · field ${data.field_count ?? "—"}`
+            : "Collector disconnected");
 
 
     node.classList.toggle(
       "ok",
       data.connected ===
-      true
+      true || data.direct_live === true
     );
 
 
     node.classList.toggle(
       "bad",
       data.connected !==
-      true
+      true && data.direct_live !== true
     );
 
   } catch {
