@@ -915,158 +915,120 @@ function parseDrivers(raw) {
 }
 
 
-function parseLapRows(
-  raw,
-  rid
-) {
+function splitApexDetailRecords(raw) {
+  const text = String(raw || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/<br\s*\/?>/gi, "\n");
+
+  // Do not trust line breaks. Apex detail responses can contain multiple
+  // protocol records in one physical line. Split at every D{id}.<record># key
+  // and preserve the complete payload until the next protocol record.
+  const starts = [];
+  const re = /D\d+\.(?:L\d+|P\d*|B\d*|INF|DR\d*)#/g;
+  let m;
+  while ((m = re.exec(text)) !== null) starts.push(m.index);
+  if (!starts.length) return text.split("\n").map(v => v.trim()).filter(Boolean);
+
+  const records = [];
+  for (let i = 0; i < starts.length; i++) {
+    const a = starts[i];
+    const b = i + 1 < starts.length ? starts[i + 1] : text.length;
+    const chunk = text.slice(a, b).replace(/^\s+|\s+$/g, "");
+    if (chunk) records.push(chunk);
+  }
+  return records;
+}
+
+function parseLapRows(raw, rid) {
   const rows = [];
+  for (const record of splitApexDetailRecords(raw)) {
+    const match = /^D(\d+)\.L0*(\d+)#([^\n]*)/i.exec(record);
+    if (!match) continue;
+    const parts = String(match[3] || "").split("|");
 
-
-  for (
-    const line
-    of String(
-      raw || ""
-    ).split("\n")
-  ) {
-    const match =
-      /^D(\d+)\.L0*(\d+)#(.+)$/
-        .exec(
-          line.trim()
-        );
-
-
-    if (!match) {
-      continue;
-    }
-
-
-    const parts =
-      match[3]
-        .split("|");
-
-
-    const milliseconds =
-      Number(
-        parts[3]
-      );
-
-
-    if (
-      !Number.isFinite(
-        milliseconds
-      ) ||
-      milliseconds <= 0
-    ) {
-      continue;
-    }
-
+    // Standard Apex layout stores lap milliseconds at index 3. Keep a narrow
+    // fallback for layouts where a leading sequence field is absent.
+    const candidates = [parts[3], parts[2], parts[4]].map(Number);
+    const milliseconds = candidates.find(v => Number.isFinite(v) && v > 10000 && v < 600000);
+    if (!Number.isFinite(milliseconds)) continue;
 
     rows.push({
-      race_id:
-        rid,
-
-      apex_id:
-        String(
-          match[1]
-        ),
-
-      lap_number:
-        Number(
-          match[2]
-        ),
-
-      lap_time:
-        Number(
-          (
-            milliseconds /
-            1000
-          )
-            .toFixed(3)
-        ),
-
-      received_at:
-        new Date()
-          .toISOString()
+      race_id: rid,
+      apex_id: String(match[1]),
+      lap_number: Number(match[2]),
+      lap_time: Number((milliseconds / 1000).toFixed(3)),
+      received_at: new Date().toISOString()
     });
   }
-
-
   return rows;
 }
 
-
-function parsePitRows(
-  raw,
-  teamName,
-  rid
-) {
+function parsePitRows(raw, teamName, rid) {
   const drivers = parseDrivers(raw);
   const rows = [];
 
-  // Preserve-first parser for Apex detail pit records.
-  // Apex has used more than one P-record layout.  Never require one exact
-  // payload shape before we preserve a real D{id}.P... record.
-  for (const originalLine of String(raw || "").split("\n")) {
-    const line = originalLine.trim();
-    if (!line) continue;
-
-    // Accept all real Apex P record key variants:
-    //   D51.P6#...
-    //   D51.P#...
-    //   D51.P006#...
-    const match = /^D(\d+)\.P(\d*)#(.*)$/.exec(line);
+  for (const record of splitApexDetailRecords(raw)) {
+    const match = /^D(\d+)\.P(\d*)#([^\n]*)/i.exec(record);
     if (!match) continue;
 
     const apexId = String(match[1]);
     const keyPitNumber = match[2] ? Number(match[2]) : NaN;
-    const parts = String(match[3] ?? "").split("|");
+    const parts = String(match[3] || "").split("|");
+    const nums = parts.map(v => {
+      const n = Number(String(v ?? "").trim());
+      return Number.isFinite(n) ? n : NaN;
+    });
 
-    // Two Apex layouts are supported without rejecting either:
-    // A) P6#6|186|hour|...        -> pit no in payload + lap at index 1
-    // B) P6#186|hour|...          -> pit no in key + lap at index 0
-    // C) P#6|186|hour|...         -> pit no + lap both in payload
-    let pitNumber = NaN;
+    let pitNumber = Number.isFinite(keyPitNumber) && keyPitNumber > 0
+      ? Math.trunc(keyPitNumber)
+      : NaN;
     let pitLap = NaN;
-    let shift = 0;
+    let legacyOffset = 0;
 
-    const p0 = Number(parts[0]);
-    const p1 = Number(parts[1]);
-
-    if (Number.isFinite(keyPitNumber) && keyPitNumber > 0) {
-      pitNumber = Math.trunc(keyPitNumber);
-      if (Number.isFinite(p0) && Math.trunc(p0) === pitNumber && Number.isFinite(p1)) {
-        pitLap = Math.trunc(p1);       // layout A
-        shift = 0;
-      } else if (Number.isFinite(p0)) {
-        pitLap = Math.trunc(p0);       // layout B
-        shift = -1;
+    // Known layouts:
+    // P6#6|186|...   key and payload both include pit number
+    // P6#186|...     key includes pit number, payload starts with lap
+    // P#6|186|...    payload includes pit number + lap
+    if (Number.isFinite(pitNumber)) {
+      if (Number.isFinite(nums[0]) && Math.trunc(nums[0]) === pitNumber && Number.isFinite(nums[1])) {
+        pitLap = Math.trunc(nums[1]);
+        legacyOffset = 0;
+      } else if (Number.isFinite(nums[0])) {
+        pitLap = Math.trunc(nums[0]);
+        legacyOffset = -1;
       }
-    } else if (Number.isFinite(p0) && Number.isFinite(p1)) {
-      pitNumber = Math.trunc(p0);      // layout C / legacy
-      pitLap = Math.trunc(p1);
-      shift = 0;
+    } else if (Number.isFinite(nums[0]) && Number.isFinite(nums[1])) {
+      pitNumber = Math.trunc(nums[0]);
+      pitLap = Math.trunc(nums[1]);
+      legacyOffset = 0;
     }
 
-    // Last-resort preservation: if the key did not carry a pit number but the
-    // payload contains one, use it.  We still do NOT synthesize a pit lap.
-    if (!Number.isFinite(pitNumber) || pitNumber <= 0 || !Number.isFinite(pitLap) || pitLap <= 0) {
-      continue;
+    // Preserve real P records even if Apex shifted metadata columns. The pit
+    // number must be explicit (key/payload); the lap is selected only from the
+    // first small positive integer fields, never synthesized from timing data.
+    if (!Number.isFinite(pitLap) || pitLap <= 0 || pitLap > 5000) {
+      const startIndex = Number.isFinite(pitNumber) && Number.isFinite(nums[0]) && Math.trunc(nums[0]) === pitNumber ? 1 : 0;
+      for (let i = startIndex; i < Math.min(nums.length, 4); i++) {
+        const n = nums[i];
+        if (Number.isInteger(n) && n > 0 && n <= 5000) { pitLap = n; break; }
+      }
     }
 
-    const idx = (legacyIndex) => legacyIndex + shift;
-    const valueAt = (legacyIndex) => {
-      const i = idx(legacyIndex);
+    if (!Number.isFinite(pitNumber) || pitNumber <= 0 || !Number.isFinite(pitLap) || pitLap <= 0) continue;
+
+    const valueAt = legacyIndex => {
+      const i = legacyIndex + legacyOffset;
       return i >= 0 && i < parts.length ? parts[i] : null;
     };
-
     const driverIndex = Number(valueAt(7));
 
     rows.push({
       race_id: rid,
       apex_id: apexId,
       team_name: teamName || null,
-      pit_number: pitNumber,
-      pit_lap: pitLap,
+      pit_number: Math.trunc(pitNumber),
+      pit_lap: Math.trunc(pitLap),
       pit_hour: msToTime(valueAt(2)),
       pit_time: msToPitTime(valueAt(4)),
       on_track: msToTime(valueAt(5)),
@@ -2428,12 +2390,198 @@ function calculateRawStintStats(apexId, lapRows, startLap, endLap, exclusions, o
 }
 
 // ============================================================
+// RAW GRID PIT-HISTORY RECOVERY
+// ============================================================
+
+let rawPitRecoveryAt = 0;
+let rawPitRecoveryRunning = null;
+
+async function recoverMissingPitHistoryFromRawPackets(env, rid, snapshot) {
+  if (Number(rid) !== Number(raceId(env))) return { recovered: 0, reason: "not-current" };
+  const expectedCounts = snapshot?.pitCounts || {};
+  const expectedIds = Object.keys(expectedCounts).filter(validApexId);
+  if (!expectedIds.length) return { recovered: 0, reason: "no-expected-counts" };
+
+  const now = Date.now();
+  if (rawPitRecoveryRunning) return rawPitRecoveryRunning;
+  if (now - rawPitRecoveryAt < 60000) return { recovered: 0, reason: "throttled" };
+
+  rawPitRecoveryRunning = (async () => {
+    const existing = await loadPits(env, rid).catch(() => []);
+    const existingById = new Map();
+    for (const row of existing) {
+      const id = String(row.apex_id ?? "").trim();
+      const pn = Number(row.pit_number);
+      if (!validApexId(id) || !Number.isFinite(pn) || pn <= 0) continue;
+      if (!existingById.has(id)) existingById.set(id, new Map());
+      existingById.get(id).set(Math.trunc(pn), row);
+    }
+
+    let needsRecovery = false;
+    for (const id of expectedIds) {
+      const expected = Math.max(0, Math.trunc(Number(expectedCounts[id]) || 0));
+      const stored = existingById.get(id)?.size || 0;
+      if (stored < expected) { needsRecovery = true; break; }
+    }
+    if (!needsRecovery) return { recovered: 0, reason: "complete" };
+
+    // Replay exactly what this Worker persisted while Apex was live.  This is
+    // independent of the present-day Apex session/detail endpoint and therefore
+    // can recover late pit-count transitions after the event has finished.
+    const packets = await sbGetAll(env, "apex_raw_packets", {
+      select: "id,payload",
+      race_id: `eq.${rid}`,
+      order: "id.asc"
+    }).catch(() => []);
+
+    const columnTypes = new Map();
+    const stateById = new Map();
+    const recoveredByKey = new Map();
+
+    const stateFor = id => {
+      const key = String(id);
+      if (!stateById.has(key)) stateById.set(key, { lap: null, pits: null, driver: null, team: null });
+      return stateById.get(key);
+    };
+
+    const semanticType = (update, row) => {
+      const col = row?.column ? `c${row.column}` : null;
+      const mapped = String((col && columnTypes.get(col)) || update?.cls || "").toLowerCase();
+      if (mapped) return mapped;
+      // Same stable fallbacks already used by applyField() in this project.
+      if (String(row?.column || "") === "15") return "pit";
+      if (String(row?.column || "") === "13") return "tlp";
+      if (String(row?.column || "") === "9") return "llp";
+      if (String(row?.column || "") === "12") return "blp";
+      return "";
+    };
+
+    const applyValue = (id, type, value) => {
+      const st = stateFor(id);
+      if (type === "tlp") {
+        const n = parseNumber(value);
+        if (n !== null && n >= 0) st.lap = Math.trunc(n);
+      } else if (type === "pit") {
+        const n = parseNumber(value);
+        if (n !== null && n >= 0) st.pits = Math.trunc(n);
+      } else if (type === "drteam") {
+        const d = cleanDriver(value);
+        if (d) st.driver = d;
+      } else if (type === "dr") {
+        const t = stripHtml(value);
+        if (t) st.team = t;
+      }
+    };
+
+    for (const packet of packets) {
+      const payload = String(packet?.payload || "");
+      // v6.36+ also stores explicit DETAIL responses in this table. Those are
+      // parsed elsewhere; this recovery intentionally replays only live-grid
+      // packets so it can reconstruct what happened during the actual race.
+      if (!payload || payload.startsWith("DETAIL apex_id=")) continue;
+
+      const beforeById = new Map();
+      const touched = new Set();
+
+      for (const rawLine of payload.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const update = parseProtocolLine(line);
+        if (!update.id) continue;
+
+        if (update.id === "grid") {
+          const grid = parseGridData(update.value);
+          if (grid.columnTypes?.size) {
+            for (const [k,v] of grid.columnTypes) columnTypes.set(k,v);
+          }
+          // A full grid is a snapshot, not a pit event. Seed current state but
+          // never manufacture transitions from it.
+          for (const [id, fields] of grid.rows || []) {
+            const st = stateFor(id);
+            for (const cell of Object.values(fields || {})) {
+              const t = String(cell?.type || columnTypes.get(`c${cell?.column}`) || "").toLowerCase();
+              applyValue(id, t, cell?.value);
+            }
+          }
+          continue;
+        }
+
+        const row = parseRowId(update.id);
+        if (!row || !validApexId(row.apexId)) continue;
+        const id = String(row.apexId);
+        const st = stateFor(id);
+        if (!beforeById.has(id)) beforeById.set(id, { ...st });
+        touched.add(id);
+        applyValue(id, semanticType(update, row), update.value);
+      }
+
+      // Treat one persisted websocket packet as one atomic Apex update.  When
+      // the pit counter advances, use the lap count from the same packet after
+      // all of its cell updates have been applied. This preserves the exact
+      // race-lap boundary sent by Apex rather than guessing from stint length.
+      for (const id of touched) {
+        const before = beforeById.get(id) || {};
+        const after = stateFor(id);
+        const oldPits = Number(before.pits);
+        const newPits = Number(after.pits);
+        const lap = Number(after.lap);
+        if (!Number.isFinite(newPits) || !Number.isFinite(lap) || lap <= 0) continue;
+        if (!Number.isFinite(oldPits) || newPits <= oldPits) continue;
+
+        for (let pn = Math.trunc(oldPits) + 1; pn <= Math.trunc(newPits); pn++) {
+          const key = `${id}:${pn}`;
+          if (existingById.get(id)?.has(pn) || recoveredByKey.has(key)) continue;
+          recoveredByKey.set(key, {
+            race_id: Number(rid),
+            apex_id: id,
+            team_name: before.team || after.team || null,
+            pit_number: pn,
+            pit_lap: Math.trunc(lap),
+            pit_hour: null,
+            pit_time: null,
+            on_track: null,
+            // The driver before the atomic pit-count update is the outgoing
+            // stint driver. Do not replace an existing Apex detail row.
+            driver_name: before.driver || after.driver || null,
+            total_time: null,
+            updated_at: new Date().toISOString()
+          });
+        }
+      }
+    }
+
+    const rows = [...recoveredByKey.values()];
+    if (rows.length) {
+      for (let i = 0; i < rows.length; i += 200) {
+        await sbUpsert(env, "apex_pit_stints", rows.slice(i, i + 200), "race_id,apex_id,pit_number");
+      }
+    }
+
+    return { recovered: rows.length, packets: packets.length };
+  })().finally(() => {
+    rawPitRecoveryAt = Date.now();
+    rawPitRecoveryRunning = null;
+  });
+
+  return rawPitRecoveryRunning;
+}
+
+// ============================================================
 // STINT DATASET
 // ============================================================
 
 async function stintsPayload(env, rid, snapshot = null) {
   const isCurrentRace = Number(rid) === Number(raceId(env));
   const realSnapshot = isCurrentRace ? (snapshot || await collectorSnapshot(env).catch(() => null)) : null;
+
+  // Before building stints, recover missing P1..Pn boundaries from the exact
+  // websocket packets we stored during the race. This fixes finished events
+  // even when Apex's current detail endpoint has already moved to a new session.
+  if (isCurrentRace && realSnapshot) {
+    await recoverMissingPitHistoryFromRawPackets(env, rid, realSnapshot).catch(error =>
+      console.warn("RAW PIT HISTORY RECOVERY:", error?.message || error)
+    );
+  }
 
   const [pitsRaw, entriesRaw, exclusionsRaw, teamMap] = await Promise.all([
     loadPits(env, rid),
@@ -4310,7 +4458,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.36-raw-first-flexible-pit-parser";
+      const repairVersion = "v6.38-raw-grid-pit-recovery";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4384,7 +4532,7 @@ export class ApexCollector {
       // This is independent of websocket activity and therefore also works
       // after the race is over.
       const repairKey = "finalStaticDetailRepairVersion";
-      const repairVersion = "v6.36-raw-first-flexible-pit-parser";
+      const repairVersion = "v6.38-raw-grid-pit-recovery";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4659,37 +4807,51 @@ export class ApexCollector {
   async requestDetail(apexId, lapCount, expectedPitCount = 0) {
     const id = String(apexId);
     const count = Math.max(1, Math.min(Number(lapCount) || 1, 800));
+    const endpoint = "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php";
+    const port = this.env.APEX_DETAIL_PORT || "8910";
 
-    // IMPORTANT: use Apex's original detail protocol exactly as it was used
-    // by the project before the recent experimental patches.  P#-999 means
-    // "return the complete pit history"; D#-${count} and L#-${count} request
-    // the complete lap/detail block for this kart.  Do not replace this with
-    // guessed P1/P2/... keys or a positive P range: those requests are not the
-    // protocol used by Apex's detail response and were the reason v6.32-v6.34
-    // failed to add the missing late pit rows.
-    const request =
-      `D#-${count}` +
-      `#D${id}.L#-${count}` +
-      `#D${id}.P#-999` +
-      `#D${id}.B#1` +
-      `#D${id}.INF`;
+    const requests = [
+      // Original Apex detail request used by this project.
+      `D#-${count}#D${id}.L#-${count}#D${id}.P#-999#D${id}.B#1#D${id}.INF`,
+      // PIT-ONLY request. This is intentionally separate so a large lap block
+      // cannot consume/truncate the response before the last P records.
+      `D#-999#D${id}.P#-999#D${id}.INF`
+    ];
 
-    const response = await fetch(
-      "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php",
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded; charset=UTF-8"
-        },
-        body: new URLSearchParams({
-          port: this.env.APEX_DETAIL_PORT || "8910",
-          request
-        })
+    // When the final grid already tells us how many pits exist, also request a
+    // pit-only window larger than that count. This is still Apex data; nothing
+    // is inferred or fabricated locally.
+    const expected = Math.max(0, Math.trunc(Number(expectedPitCount) || 0));
+    if (expected > 0) {
+      const pitWindow = Math.max(32, expected + 8);
+      requests.push(`D#-${pitWindow}#D${id}.P#-${pitWindow}#D${id}.INF`);
+    }
+
+    const bodies = [];
+    for (const request of requests) {
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8" },
+          body: new URLSearchParams({ port, request })
+        });
+        if (!response.ok) {
+          console.warn(`Apex detail ${id}: ${response.status} for ${request}`);
+          continue;
+        }
+        const body = await response.text();
+        if (body) bodies.push(body);
+      } catch (error) {
+        console.warn(`Apex detail request ${id}:`, error?.message || error);
       }
-    );
+    }
 
-    if (!response.ok) throw new Error(`Apex detail ${response.status}`);
-    return response.text();
+    if (!bodies.length) throw new Error(`Apex detail returned no response for ${id}`);
+
+    // Keep every response. The record parser splits protocol records globally,
+    // so duplicate records are harmless and are later deduplicated by
+    // lap_number / pit_number before DB upsert.
+    return bodies.join("\n");
   }
 
 
