@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.16-stable-collector-race-best";
+  "2026-08-30-race-datasets-v6.11-stable-grid-best-session-aware";
 
 const PAGE_SIZE = 1000;
 
@@ -2626,7 +2626,7 @@ async function livePayload(env, rid) {
   const isLive=Number.isFinite(lastPacket)&&Date.now()-lastPacket<180000;
   return {race_id:Number(rid),session_name:"Apex Timing",active:current.length>0,data_available:current.length>0,
     is_live:isLive,session_status:isLive?"LIVE":"FINISHED",collector_connected:snapshot?.connected===true,
-    team_count:current.length,race_lap:raceLap,pit_count:pitTotal,best_lap:raceBest,race_best_lap:raceBest,current};
+    team_count:current.length,race_lap:raceLap,pit_count:pitTotal,best_lap:raceBest,current};
 }
 
 // ============================================================
@@ -4237,27 +4237,10 @@ export class ApexCollector {
             const n = Number(value);
             if (Number.isFinite(n)) storedMaxLap = Math.max(storedMaxLap, n);
           }
-          const previousGridAt = Date.parse(this.lastGridAt || "");
-          const gridGapMs = Number.isFinite(previousGridAt)
-            ? Date.now() - previousGridAt
-            : Number.POSITIVE_INFINITY;
-
-          // Reset cumulative live metrics only for a credible NEW race.
-          // A partial/transitional Apex grid during the same race must never
-          // wipe the already known race best.
-          const fullEnoughGrid = grid.rows.size >= 20;
-          const realLapDrop =
-            incomingMaxLap > 0 &&
-            storedMaxLap >= 30 &&
-            incomingMaxLap + 20 < storedMaxLap;
-          const credibleNewStart =
-            incomingMaxLap <= 10 ||
-            gridGapMs > 30 * 60 * 1000;
-
           const newSession =
-            fullEnoughGrid &&
-            realLapDrop &&
-            credibleNewStart;
+            storedMaxLap >= 20 &&
+            incomingMaxLap >= 0 &&
+            incomingMaxLap + 15 < storedMaxLap;
 
           if (newSession) {
             this.pitCounts = new Map();
