@@ -1898,7 +1898,7 @@ function renderOverviewSummary() {
     S.overview;
 
 
-  const raceLap =
+  const calculatedRaceLap =
     rows.reduce(
       (
         max,
@@ -1919,7 +1919,7 @@ function renderOverviewSummary() {
     );
 
 
-  const pitStops =
+  const calculatedPitStops =
     rows.reduce(
       (
         total,
@@ -1936,7 +1936,7 @@ function renderOverviewSummary() {
     );
 
 
-  const best =
+  const historicalBest =
     rows
       .map(
         row =>
@@ -1956,35 +1956,90 @@ function renderOverviewSummary() {
       );
 
 
+  /*
+   * LIVE summary values are already calculated by /api/live.
+   * In particular, data.best_lap is the current-race overall Apex best.
+   * Do NOT recalculate the BEST LAP card from current[].best_lap_time:
+   * that field is intentionally the best lap of the CURRENT STINT.
+   */
+  const liveTeams =
+    isLiveRace()
+      ? number(
+          S.liveMeta?.team_count
+        )
+      : null;
+
+  const liveRaceLap =
+    isLiveRace()
+      ? number(
+          S.liveMeta?.race_lap
+        )
+      : null;
+
+  const livePitStops =
+    isLiveRace()
+      ? number(
+          S.liveMeta?.pit_count
+        )
+      : null;
+
+  const liveRaceBest =
+    isLiveRace()
+      ? number(
+          S.liveMeta?.race_best_lap ??
+          S.liveMeta?.best_lap
+        )
+      : null;
+
+
   if ($("summaryTeams")) {
     $("summaryTeams").textContent =
-      rows.length || "—";
+      (
+        liveTeams !== null
+          ? liveTeams
+          : rows.length
+      ) || "—";
   }
 
 
   if ($("summaryRaceLap")) {
     $("summaryRaceLap").textContent =
-      raceLap || "—";
+      (
+        liveRaceLap !== null
+          ? liveRaceLap
+          : calculatedRaceLap
+      ) || "—";
   }
 
 
   if ($("summaryPits")) {
     $("summaryPits").textContent =
-      pitStops;
+      livePitStops !== null
+        ? livePitStops
+        : calculatedPitStops;
   }
 
 
   if ($("summaryBestLap")) {
+    const best =
+      liveRaceBest !== null &&
+      liveRaceBest > 0
+        ? liveRaceBest
+        : (
+            historicalBest.length
+              ? Math.min(
+                  ...historicalBest
+                )
+              : null
+          );
+
     $("summaryBestLap").textContent =
-      best.length
-        ? time(
-            Math.min(
-              ...best
-            )
-          )
+      best !== null
+        ? time(best)
         : "—";
   }
 }
+
 
 
 // ============================================================
