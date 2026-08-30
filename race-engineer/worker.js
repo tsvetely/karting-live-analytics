@@ -1,4 +1,4 @@
-const VERSION = "2026-08-30-race-engineer-v8-current-session-scope";
+const VERSION = "2026-08-30-race-engineer-v8.1-live-field-authoritative";
 const PAGE_SIZE = 1000;
 const BACKFILL_BATCH = 2;
 const LIVE_PACKET_TTL_MS = 180000;
@@ -1240,43 +1240,28 @@ function currentScopeIds(
   entries,
   snapshot
 ) {
-  const recent =
-    recentEntryIds(
-      entries
-    );
-
   const live =
     currentFieldIds(
       snapshot
     );
 
-  if (
-    recent.size &&
-    live.size
-  ) {
-    /*
-     * A stale Durable Object could still contain hundreds of IDs
-     * from older sessions that shared race_id=1.  Recent database
-     * entries identify the field currently receiving live updates.
-     * When the live set is of comparable size, keep any legitimate
-     * live IDs that have not updated in the last few minutes yet.
-     */
-    if (
-      live.size <=
-      recent.size * 1.5 + 10
-    ) {
-      return new Set([
-        ...recent,
-        ...live
-      ]);
-    }
-
-    return recent;
+  /*
+   * The live Apex grid / collector snapshot is authoritative for the
+   * current field.  Do not shrink a complete live field to only the
+   * subset of apex_entries that happened to receive an update inside
+   * an arbitrary recent-time window.
+   */
+  if (live.size) {
+    return live;
   }
 
-  return recent.size
-    ? recent
-    : live;
+  /*
+   * Database recency is only a restart/fallback path for the short
+   * period before the collector has rebuilt its live grid snapshot.
+   */
+  return recentEntryIds(
+    entries
+  );
 }
 
 function apexIdsFilter(ids) {
@@ -3606,6 +3591,38 @@ async function livePayload(
   let bestLap =
     null;
 
+  /*
+   * Apex entry.best_lap is the organiser's current-race best for that
+   * kart and is available immediately for the whole live field.  Use
+   * it for the Overview global best; stint/raw analytics remain the
+   * fallback when the entry value is not available.
+   */
+  for (
+    const [id, entry]
+    of entries
+  ) {
+    if (!fieldIds.has(id)) {
+      continue;
+    }
+
+    const candidate =
+      Number(
+        entry.best_lap
+      );
+
+    if (
+      Number.isFinite(candidate) &&
+      candidate > 0 &&
+      (
+        bestLap === null ||
+        candidate < bestLap
+      )
+    ) {
+      bestLap =
+        candidate;
+    }
+  }
+
   for (
     const row
     of stintData.rows
@@ -4802,18 +4819,13 @@ export class ApexCollector {
 
         } else {
           /*
-           * A new worker version must not inherit a polluted live
-           * field from an older race/session that reused race_id=1.
-           * Database history is kept; only Durable Object live scope
-           * and backfill progress are reset.
+           * A Worker code version change invalidates only backfill
+           * progress.  The already-established live Apex field and
+           * live positions remain authoritative and must survive the
+           * deployment; clearing them here temporarily reduced a
+           * 72-team field to the few rows recently updated in DB.
            */
           this.backfilledLapCount =
-            new Map();
-
-          this.fieldApexIds =
-            new Set();
-
-          this.positions =
             new Map();
 
           await state.storage.put({
@@ -4821,12 +4833,6 @@ export class ApexCollector {
               VERSION,
 
             backfilledLapCount:
-              {},
-
-            fieldApexIds:
-              [],
-
-            positions:
               {}
           });
         }
