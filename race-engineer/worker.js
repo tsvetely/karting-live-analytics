@@ -1,4 +1,4 @@
-const VERSION = "2026-08-30-race-engineer-v8.2-apex-field-pits-best-backfill";
+const VERSION = "2026-08-30-race-engineer-v8.3-authoritative-detail-rebuild";
 const PAGE_SIZE = 1000;
 const BACKFILL_BATCH = 6;
 const LIVE_PACKET_TTL_MS = 180000;
@@ -687,6 +687,7 @@ function parsePitRows(
       !Number.isFinite(
         pitNumber
       ) ||
+      pitNumber <= 0 ||
       !Number.isFinite(
         pitLap
       )
@@ -1447,7 +1448,8 @@ function uniquePits(rows) {
       !validApexId(id) ||
       !Number.isFinite(
         pitNumber
-      )
+      ) ||
+      pitNumber <= 0
     ) {
       continue;
     }
@@ -6218,6 +6220,42 @@ export class ApexCollector {
         );
 
     /*
+     * Never mark a kart as backfilled when Apex returned no parseable
+     * lap history.  That was leaving the lower half of the 72-kart
+     * field permanently at VALID=0 after a transient/partial response.
+     */
+    if (!lapRows.length) {
+      throw new Error(
+        `Apex detail ${id}: no lap rows in full-history response`
+      );
+    }
+
+    /*
+     * Refresh the race-best value from the authoritative full raw lap
+     * history.  This also replaces stale best_lap values left in
+     * apex_entries by an older session using the same race_id/apex_id.
+     */
+    const raceBest =
+      lapRows.reduce(
+        (best, row) =>
+          best === null ||
+          Number(row.lap_time) < best
+            ? Number(row.lap_time)
+            : best,
+        null
+      );
+
+    if (
+      Number.isFinite(raceBest) &&
+      raceBest > 0
+    ) {
+      await this.upsertEntry(
+        id,
+        { best_lap: raceBest }
+      );
+    }
+
+    /*
      * RAW laps are never analytically filtered before storage.
      * Current detail data overwrites laps 1..lapCount.  Anything above
      * the current lap can only be stale data from an older session that
@@ -6254,6 +6292,21 @@ export class ApexCollector {
      * stale pit numbers left behind by an older session before keeping
      * the authoritative current chain.
      */
+    await sbDelete(
+      this.env,
+      "apex_pit_stints",
+      {
+        race_id:
+          `eq.${this.rid}`,
+
+        apex_id:
+          `eq.${id}`,
+
+        pit_number:
+          "eq.0"
+      }
+    );
+
     const currentPitMax =
       pitRows.reduce(
         (max, row) =>
