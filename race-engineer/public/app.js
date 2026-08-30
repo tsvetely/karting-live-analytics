@@ -2025,7 +2025,7 @@ function renderOverviewSummary() {
       );
 
 
-  const liveSummary = isCurrentRaceSelected() ? S.liveMeta : null;
+  const liveSummary = isLiveRace() ? S.liveMeta : null;
   const authoritativeTeams = number(liveSummary?.team_count);
   const authoritativeLap = number(liveSummary?.race_lap);
   const authoritativePits = number(liveSummary?.pit_count);
@@ -2047,9 +2047,14 @@ function renderOverviewSummary() {
   }
 
   if ($("summaryBestLap")) {
+    const fallbackBest = best.length ? Math.min(...best) : null;
+    const value = authoritativeBest !== null && authoritativeBest > 0
+      ? authoritativeBest
+      : fallbackBest;
+
     $("summaryBestLap").textContent =
-      authoritativeBest && authoritativeBest > 0
-        ? time(authoritativeBest)
+      value !== null && value > 0
+        ? time(value)
         : "—";
   }
 }
