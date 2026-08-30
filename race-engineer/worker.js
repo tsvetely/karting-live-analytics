@@ -1436,6 +1436,7 @@ async function collectorSnapshot(env) {
       const seedPayload = {
         fieldApexIds: [...currentFieldIds(direct)],
         lapCounts: direct.lapCounts || {},
+        pitCounts: direct.pitCounts || {},
         teamNames: direct.teamNames || {},
         positions: direct.positions || {},
         rawRows: direct.rawRows || {}
@@ -4342,7 +4343,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.32-split-detail-requests";
+      const repairVersion = "v6.34-exact-pit-records";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4391,6 +4392,12 @@ export class ApexCollector {
         const n = Number(value);
         if (validApexId(id) && Number.isFinite(n) && n > 0) this.lapCounts.set(String(id), n);
       }
+      // The final Apex grid pit count is authoritative and is needed by the
+      // detail repair to know exactly which P1..Pn records must exist.
+      for (const [id, value] of Object.entries(payload.pitCounts || {})) {
+        const n = Number(value);
+        if (validApexId(id) && Number.isFinite(n) && n >= 0) this.pitCounts.set(String(id), Math.trunc(n));
+      }
       for (const [id, value] of Object.entries(payload.teamNames || {})) {
         if (validApexId(id) && value != null) this.teamNames.set(String(id), String(value));
       }
@@ -4410,7 +4417,7 @@ export class ApexCollector {
       // This is independent of websocket activity and therefore also works
       // after the race is over.
       const repairKey = "finalStaticDetailRepairVersion";
-      const repairVersion = "v6.32-split-detail-requests";
+      const repairVersion = "v6.34-exact-pit-records";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4682,26 +4689,14 @@ export class ApexCollector {
   }
 
 
-  async requestDetail(
-    apexId,
-    lapCount
-  ) {
+  async requestDetail(apexId, lapCount, expectedPitCount = 0) {
+    const id = String(apexId);
     const count = Math.max(1, Math.min(Number(lapCount) || 1, 800));
+    const expectedPits = Math.max(0, Math.min(Math.trunc(Number(expectedPitCount) || 0), 100));
     const endpoint = "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php";
     const port = this.env.APEX_DETAIL_PORT || "8910";
 
-    // IMPORTANT: do not mix a full lap-history request and a full pit-history
-    // request behind a global D# limit equal to the lap count. Apex can truncate
-    // the combined reply before the last pit rows. Request laps and pits
-    // separately, each with a generous global envelope, then merge the raw
-    // protocol lines before parsing/persisting them.
-    const requests = [
-      `D#-999#D${apexId}.L#-${count}#D${apexId}.B#1#D${apexId}.INF`,
-      `D#-999#D${apexId}.P#-999#D${apexId}.INF`
-    ];
-
-    const bodies = [];
-    for (const request of requests) {
+    const postRequest = async (request) => {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
@@ -4709,11 +4704,34 @@ export class ApexCollector {
         },
         body: new URLSearchParams({ port, request })
       });
+      if (!response.ok) throw new Error(`Apex detail ${response.status}`);
+      return response.text();
+    };
 
-      if (!response.ok) {
-        throw new Error(`Apex detail ${response.status}`);
+    // 1) Complete lap history.  Keep this separate from pits so one history
+    // cannot truncate the other in Apex's request protocol.
+    const bodies = [
+      await postRequest(`D#-999#D${id}.L#-${count}#D${id}.B#1#D${id}.INF`)
+    ];
+
+    // 2) Ask for the normal pit range as Apex's UI does.
+    bodies.push(
+      await postRequest(`D#-999#D${id}.P#-${Math.max(expectedPits, 20)}#D${id}.INF`)
+    );
+
+    // 3) IMPORTANT: the final grid tells us the exact number of real pit
+    // records.  If Apex says PITS=8, request P1..P8 explicitly as protocol
+    // keys as well.  This avoids relying on the range selector, which is the
+    // reason late pit records (e.g. P6/P7/P8) could be absent locally even
+    // while Apex's own detail page displayed them.
+    if (expectedPits > 0) {
+      const keys = [];
+      for (let n = 1; n <= expectedPits; n += 1) keys.push(`D${id}.P${n}`);
+      // Small chunks keep the request conservative even for very long races.
+      for (let i = 0; i < keys.length; i += 20) {
+        const chunk = keys.slice(i, i + 20);
+        bodies.push(await postRequest(`D#-999#${chunk.join("#")}#D${id}.INF`));
       }
-      bodies.push(await response.text());
     }
 
     return bodies.filter(Boolean).join("\n");
@@ -4730,17 +4748,28 @@ export class ApexCollector {
     const entry=await this.getEntry(id);
     const snapshotLap=Number(this.lapCounts.get(id));
     const lapCount=Number.isFinite(snapshotLap)?snapshotLap:Number(entry?.lap_count);
+    const snapshotPitCount=Number(this.pitCounts.get(id));
+    const expectedPitCount=Number.isFinite(snapshotPitCount)?Math.max(0,Math.trunc(snapshotPitCount)):0;
     if(!entry||!Number.isFinite(lapCount)||lapCount<=0)return;
 
     this.lastDetailFetch.set(id,now);
     this.detailRunning.add(id);
     try {
-      const raw=await this.requestDetail(id,lapCount);
+      const raw=await this.requestDetail(id,lapCount,expectedPitCount);
       const laps=parseLapRows(raw,this.rid).filter(r=>String(r.apex_id)===id);
-      const pits=parsePitRows(raw,entry.team_name,this.rid).filter(r=>String(r.apex_id)===id && Number(r.pit_number)>0);
-      // PRESERVE-FIRST: never reject real Apex detail rows because our own
-      // expectation says the reply is "incomplete". Persist every lap/pit row
-      // Apex actually returned. Do not delete older rows before merging.
+
+      // Deduplicate by the real Apex pit number.  Never infer, synthesize or
+      // discard a pit because of stint duration, driver changes or analytics.
+      // Apex P1..Pn is the source of truth.
+      const pitByNumber=new Map();
+      for(const row of parsePitRows(raw,entry.team_name,this.rid)){
+        if(String(row.apex_id)!==id)continue;
+        const n=Number(row.pit_number);
+        if(!Number.isFinite(n)||n<=0)continue;
+        pitByNumber.set(Math.trunc(n),row);
+      }
+      const pits=[...pitByNumber.values()].sort((a,b)=>Number(a.pit_number)-Number(b.pit_number));
+
       for(let i=0;i<laps.length;i+=250){
         await sbUpsert(this.env,"apex_lap_events",laps.slice(i,i+250),"race_id,apex_id,lap_number");
       }
@@ -4748,11 +4777,19 @@ export class ApexCollector {
         await sbUpsert(this.env,"apex_pit_stints",pits,"race_id,apex_id,pit_number");
       }
 
+      // Do not manufacture missing records.  Keep retrying on later status
+      // refreshes until the locally stored P1..Pn set matches the authoritative
+      // final/current Apex grid count.
+      if(expectedPitCount>0 && pits.length<expectedPitCount){
+        console.warn(`APEX PIT BACKFILL ${id}: received ${pits.length}/${expectedPitCount}; will retry`);
+      }
+
       await this.persist();
     } finally {
       this.detailRunning.delete(id);
     }
   }
+
 
   async refreshAllFieldDetails(force = false) {
     const now=Date.now();
