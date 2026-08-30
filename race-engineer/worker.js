@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.7-current-grid-authoritative-rehydrate";
+  "2026-08-30-race-datasets-v6.8-live-grid-best-authoritative";
 
 const PAGE_SIZE = 1000;
 
@@ -3648,10 +3648,6 @@ export class ApexCollector {
 
       lapCounts: Object.fromEntries(this.lapCounts),
       bestLaps: Object.fromEntries(this.bestLaps),
-      lastLaps: Object.fromEntries(this.lastLaps),
-
-      lapCounts: Object.fromEntries(this.lapCounts),
-      bestLaps: Object.fromEntries(this.bestLaps),
       lastLaps: Object.fromEntries(this.lastLaps)
     });
   }
@@ -3700,6 +3696,21 @@ export class ApexCollector {
       pitCounts:
         Object.fromEntries(
           this.pitCounts
+        ),
+
+      lapCounts:
+        Object.fromEntries(
+          this.lapCounts
+        ),
+
+      bestLaps:
+        Object.fromEntries(
+          this.bestLaps
+        ),
+
+      lastLaps:
+        Object.fromEntries(
+          this.lastLaps
         )
     };
   }
@@ -4195,6 +4206,14 @@ export class ApexCollector {
             new Map(
               grid.positions
             );
+
+          // A full Apex grid is authoritative for the current session.
+          // Rebuild these live metrics from this grid so values from a
+          // previous race that reused the same Apex IDs cannot survive.
+          this.pitCounts = new Map();
+          this.lapCounts = new Map();
+          this.bestLaps = new Map();
+          this.lastLaps = new Map();
 
 
           this.lastGridAt =
