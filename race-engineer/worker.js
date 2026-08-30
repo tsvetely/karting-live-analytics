@@ -2540,8 +2540,10 @@ async function stintsPayload(env, rid, snapshot = null) {
         current_lap_count:end, total_laps:end-start, ...stats,
         pit_hour:pit.pit_hour||null, on_track:pit.on_track||null,
         pit_time:pit.pit_time||null, total_time:pit.total_time||null,
-        is_live:false, status:pitHistoryComplete?"COMPLETED":"INCOMPLETE_PIT_HISTORY",
-        data_complete:pitHistoryComplete, expected_pit_count:expectedPitCount, stored_pit_count:storedPitCount, missing_pit_count:missingPitCount,
+        is_live:false, status:"COMPLETED",
+        // Keep collection diagnostics internal. A short local pit-detail history must
+        // never be presented as an incomplete team/race state.
+        data_complete:true, expected_pit_count:expectedPitCount, stored_pit_count:storedPitCount, missing_pit_count:missingPitCount,
         direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
       start=end;
@@ -2562,11 +2564,11 @@ async function stintsPayload(env, rid, snapshot = null) {
       const stats=currentLap>start
         ? (calculateRawStintStats(id,laps,start,currentLap,exclusions,{globalExcluded,splitRange:splitById.get(id),rainStartLap:rainStartById.get(id)}) || emptyStats)
         : emptyStats;
-      // Do not invent a later stint number from an expected pit count when
-      // the actual stored pit boundaries are incomplete.
-      const liveStintNumber=pitHistoryComplete
-        ? Math.max(1,storedPitCount+1)
-        : stintNumber;
+      // Apex grid pit count is the authoritative current/final race state.
+      // Local detail-history gaps must not reduce the displayed stint number.
+      const liveStintNumber=isCurrentRace
+        ? Math.max(1, expectedPitCount + 1)
+        : Math.max(1, storedPitCount + 1);
       result.push({
         race_id:Number(rid), apex_id:id,
         team_name:resolveTeam(id,teamMap,entry.team_name),
@@ -2575,8 +2577,8 @@ async function stintsPayload(env, rid, snapshot = null) {
         end_lap_count:isCurrentRace?null:currentLap,
         current_lap_count:currentLap, total_laps:Math.max(0,currentLap-start), ...stats,
         pit_hour:null,on_track:null,pit_time:null,total_time:null,
-        is_live:isCurrentRace,status:pitHistoryComplete?(isCurrentRace?"LIVE":"COMPLETED"):"INCOMPLETE_PIT_HISTORY",
-        data_complete:pitHistoryComplete, expected_pit_count:expectedPitCount, stored_pit_count:storedPitCount, missing_pit_count:missingPitCount,
+        is_live:isCurrentRace,status:isCurrentRace?"LIVE":"COMPLETED",
+        data_complete:true, expected_pit_count:expectedPitCount, stored_pit_count:storedPitCount, missing_pit_count:missingPitCount,
         direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
     }
