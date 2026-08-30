@@ -1724,23 +1724,20 @@ function updateRaceContext() {
 // Read a value from the unmodified Apex grid row. Prefer Apex semantic
 // data-type names and use the current grid column only as a compatibility
 // fallback. This is display-only: no analytics are reconstructed here.
-function apexField(row, types = [], fallbackColumns = []) {
+function apexField(row, types = []) {
   const fields = row?.apex_fields;
   if (!fields || typeof fields !== "object") return null;
 
   const wanted = new Set(types.map(value => String(value || "").toLowerCase()));
   for (const cell of Object.values(fields)) {
     const type = String(cell?.type || "").toLowerCase();
-    if (wanted.has(type)) {
-      const value = cell?.value;
-      if (value !== null && value !== undefined && String(value).trim() !== "") return value;
-    }
-  }
+    if (!wanted.has(type)) continue;
 
-  for (const column of fallbackColumns) {
-    const cell = fields[`c${column}`];
     const value = cell?.value;
     if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+
+    const alt = cell?.image_alt;
+    if (alt !== null && alt !== undefined && String(alt).trim() !== "") return alt;
   }
 
   return null;
@@ -1785,11 +1782,11 @@ function renderOverview() {
 </td>
 
 <td>
-  ${esc(apexField(row, ["kart", "no", "num", "number", "kartnumber"], [2]) ?? "—")}
+  ${esc(apexField(row, ["no", "kart", "num", "number", "kartnumber"]) ?? "—")}
 </td>
 
 <td>
-  ${esc(apexField(row, ["nation", "nat", "country", "flag"], [3]) ?? "—")}
+  ${esc(apexField(row, ["nat", "nation", "country", "flag"]) ?? "—")}
 </td>
 
 <td class="team">
@@ -1808,23 +1805,23 @@ function renderOverview() {
 </td>
 
 <td>
-  ${esc(apexField(row, ["s1", "sector1", "sector_1"], [5]) ?? "—")}
+  ${esc(apexField(row, ["s1", "sector1", "sector_1"]) ?? "—")}
 </td>
 
 <td>
-  ${esc(apexField(row, ["s2", "sector2", "sector_2"], [6]) ?? "—")}
+  ${esc(apexField(row, ["s2", "sector2", "sector_2"]) ?? "—")}
 </td>
 
 <td>
-  ${esc(apexField(row, ["s3", "sector3", "sector_3"], [7]) ?? "—")}
+  ${esc(apexField(row, ["s3", "sector3", "sector_3"]) ?? "—")}
 </td>
 
 <td>
-  ${esc(apexField(row, ["gap", "gapleader", "gap_leader"], [10]) ?? "—")}
+  ${esc(apexField(row, ["gap", "gapleader", "gap_leader"]) ?? "—")}
 </td>
 
 <td>
-  ${esc(apexField(row, ["interval", "interv", "gapnext", "gap_next"], [11]) ?? "—")}
+  ${esc(apexField(row, ["interval", "interv", "int", "gapnext", "gap_next"]) ?? "—")}
 </td>
 
 <td>
@@ -1839,7 +1836,7 @@ function renderOverview() {
 </td>
 
 <td>
-  ${esc(apexField(row, ["ontrack", "on_track", "tracktime", "trk"], [14]) ?? "—")}
+  ${esc(apexField(row, ["otr", "ontrack", "on_track", "tracktime", "trk"]) ?? "—")}
 </td>
 
 <td>
@@ -1847,11 +1844,11 @@ function renderOverview() {
 </td>
 
 <td>
-  ${esc(apexField(row, ["pittime", "pit_time", "pt"], [16]) ?? "—")}
+  ${esc(apexField(row, ["pittime", "pit_time", "pt"]) ?? "—")}
 </td>
 
 <td>
-  ${esc(apexField(row, ["penalty", "pen", "penaltime"], [17]) ?? "—")}
+  ${esc(apexField(row, ["penalty", "pen", "penaltime"]) ?? "—")}
 </td>
 
 <td>
