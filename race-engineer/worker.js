@@ -4135,7 +4135,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.24";
+      const repairVersion = "v6.25";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4504,10 +4504,9 @@ export class ApexCollector {
         throw new Error(`Incomplete Apex detail ${id}: ${laps.length} laps, max ${maxLap}, expected ${lapCount}`);
       }
 
-      // Replace lap history only after Apex returned a complete lap chain.
-      // This removes stale rows from the previous organiser session while never
-      // deleting good current data on a partial response.
-      await sbDelete(this.env,"apex_lap_events",{race_id:`eq.${this.rid}`,apex_id:`eq.${id}`});
+      // Apex detail is authoritative for lap/time pairs. Merge the returned
+      // complete chain into persistence; never delete an already-recorded lap
+      // merely because a later response is shorter or temporarily inconsistent.
       for(let i=0;i<laps.length;i+=250){
         await sbUpsert(this.env,"apex_lap_events",laps.slice(i,i+250),"race_id,apex_id,lap_number");
       }
@@ -4596,33 +4595,15 @@ export class ApexCollector {
       const n=parseNumber(value);if(n!==null&&n>=0){
         const lapNumber=Math.trunc(n);
         const previousLap=Number(this.lapCounts.get(id));
-        // New organiser session can start minutes after the previous one. A
-        // clear lap counter reset is a stronger boundary than a 6-hour silence.
-        if(Number.isFinite(previousLap)&&previousLap>=10&&lapNumber>=0&&lapNumber+5<previousLap&&!this.sessionResetting){
-          this.sessionResetting=true;
-          try{
-            const archivedRid=await archiveCurrentRace(this.env,this.rid);
-            if(archivedRid) await this.state.storage.put("lastArchivedRaceId",archivedRid);
-            await clearCurrentRaceData(this.env,this.rid);
-            this.positions.clear();this.fieldApexIds.clear();this.pitCounts.clear();this.lapCounts.clear();this.bestLaps.clear();this.lastLaps.clear();
-            this.lastDetailFetch.clear();
-          }catch(error){console.error("LAP RESET ARCHIVE:",error);}finally{this.sessionResetting=false;}
-        }
+        // Do not archive/clear an entire race from one kart's lap reset.
+        // A single transient Apex field update is not a safe session boundary.
         this.lapCounts.set(id,lapNumber);
         await this.upsertEntry(id,{lap_count:lapNumber});
 
-        // Persist the just-finished lap immediately from the live grid.
-        // The full Apex detail refresh still follows and remains authoritative,
-        // but /api/live no longer has a window where the race lap advanced while
-        // apex_lap_events still had zero data for the current stint.
-        const lastLap=Number(this.lastLaps.get(id));
-        if(lapNumber>0&&Number.isFinite(lastLap)&&lastLap>0){
-          await sbUpsert(this.env,"apex_lap_events",[{
-            race_id:this.rid,apex_id:id,lap_number:lapNumber,lap_time:Number(lastLap.toFixed(3)),received_at:new Date().toISOString()
-          }],"race_id,apex_id,lap_number").catch(e=>console.error(`LIVE LAP UPSERT ${id}/${lapNumber}:`,e));
-        }
-
-        this.state.waitUntil(this.refreshDetail(id));
+        // Do not manufacture a lap/time pair by combining independent live-grid
+        // fields (TLP + the last cached LLP). Their update order is not guaranteed.
+        // Fetch the kart detail and persist the exact lap-number/time pairs Apex returns.
+        this.state.waitUntil(this.refreshDetail(id,true).catch(e=>console.error(`LAP DETAIL REFRESH ${id}:`,e)));
       }
     }
   }
