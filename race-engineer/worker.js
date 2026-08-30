@@ -1,6 +1,6 @@
-const VERSION = "2026-08-30-race-engineer-v7.1-current-session-clean";
+const VERSION = "2026-08-30-race-engineer-v7.2-authoritative-current-rebuild";
 const PAGE_SIZE = 1000;
-const BACKFILL_BATCH = 2;
+const BACKFILL_BATCH = 8;
 const LIVE_PACKET_TTL_MS = 180000;
 
 function json(data, status = 200) {
@@ -3257,32 +3257,9 @@ async function livePayload(
         )
     ]);
 
-  const isCurrentRace =
-    Number(rid) ===
-    Number(
-      raceId(env)
-    );
-
-  const snapshotIds =
-    isCurrentRace
-      ? currentFieldIds(
-          snapshot
-        )
-      : new Set();
-
-  const fieldIds =
-    snapshotIds.size
-      ? snapshotIds
-      : idsFromEntries(
-          entriesRaw
-        );
-
   const entries =
     newestEntryMap(
-      filterByIds(
-        entriesRaw,
-        fieldIds
-      )
+      entriesRaw
     );
 
   const latestStint =
@@ -3342,16 +3319,26 @@ async function livePayload(
     );
   }
 
-  const ids =
-    new Set(
-      [
-        ...fieldIds
-      ]
-        .map(String)
-        .filter(
-          validApexId
-        )
+  const isCurrentRace =
+    Number(rid) ===
+    Number(
+      raceId(env)
     );
+
+  const snapshotIds =
+    isCurrentRace
+      ? currentFieldIds(
+          snapshot
+        )
+      : new Set();
+
+  const ids =
+    snapshotIds.size
+      ? snapshotIds
+      : new Set([
+          ...entries.keys(),
+          ...latestStint.keys()
+        ]);
 
   const current = [];
 
@@ -4674,6 +4661,8 @@ export class ApexCollector {
 
       await this.scanAndQueueBackfill();
 
+      await this.processBackfillBatch();
+
       return json(
         this.snapshot()
       );
@@ -4725,6 +4714,8 @@ export class ApexCollector {
       await this.scanAndQueueBackfill(
         true
       );
+
+      await this.processBackfillBatch();
 
       await this.state.storage.setAlarm(
         Date.now() +
@@ -4783,7 +4774,7 @@ export class ApexCollector {
     } finally {
       const delay =
         this.backfillQueue.length
-          ? 1000
+          ? 250
           : 60000;
 
       await this.state.storage.setAlarm(
@@ -5831,9 +5822,9 @@ export class ApexCollector {
         );
 
     /*
-     * The detail response is authoritative for the CURRENT Apex session
-     * for this kart.  race_id is reused, so remove rows that can only
-     * belong to an older session before storing the current history.
+     * Apex detail is authoritative for the CURRENT kart/session.
+     * Remove stale rows left by an older session that reused the same
+     * race_id/apex_id before keeping the current full history.
      */
     await sbDelete(
       this.env,
@@ -5850,10 +5841,6 @@ export class ApexCollector {
       }
     );
 
-    /*
-     * RAW laps are never analytically filtered before storage.
-     * Long pit / safety-car / transition laps remain available.
-     */
     if (
       lapRows.length
     ) {
@@ -5865,73 +5852,48 @@ export class ApexCollector {
       );
     }
 
-    /*
-     * Full authoritative CURRENT-session pit history.  The same apex_id
-     * can exist in older sessions under race_id=1, so delete pit numbers
-     * that are not present in the current detail response.
-     */
-    const currentPitNumbers =
-      new Set(
-        pitRows
-          .map(
-            row =>
-              Number(
-                row.pit_number
-              )
-          )
-          .filter(
-            Number.isFinite
-          )
-          .map(
-            value =>
-              Math.trunc(value)
-          )
+    const currentPitMax =
+      pitRows.reduce(
+        (max, row) =>
+          Math.max(
+            max,
+            Number(
+              row.pit_number
+            ) ||
+            0
+          ),
+        0
       );
 
-    const existingPits =
-      await loadPits(
-        this.env,
-        this.rid,
-        id
-      )
-        .catch(
-          () => []
-        );
-
-    for (
-      const oldPit
-      of existingPits
+    if (
+      currentPitMax > 0
     ) {
-      const pitNumber =
-        Math.trunc(
-          Number(
-            oldPit.pit_number
-          )
-        );
+      await sbDelete(
+        this.env,
+        "apex_pit_stints",
+        {
+          race_id:
+            `eq.${this.rid}`,
 
-      if (
-        Number.isFinite(
-          pitNumber
-        ) &&
-        !currentPitNumbers.has(
-          pitNumber
-        )
-      ) {
-        await sbDelete(
-          this.env,
-          "apex_pit_stints",
-          {
-            race_id:
-              `eq.${this.rid}`,
+          apex_id:
+            `eq.${id}`,
 
-            apex_id:
-              `eq.${id}`,
+          pit_number:
+            `gt.${currentPitMax}`
+        }
+      );
+    } else {
+      await sbDelete(
+        this.env,
+        "apex_pit_stints",
+        {
+          race_id:
+            `eq.${this.rid}`,
 
-            pit_number:
-              `eq.${pitNumber}`
-          }
-        );
-      }
+          apex_id:
+            `eq.${id}`
+        }
+      );
     }
 
     if (
@@ -5942,6 +5904,14 @@ export class ApexCollector {
         "apex_pit_stints",
         pitRows,
         "race_id,apex_id,pit_number"
+      );
+    }
+
+    if (
+      !lapRows.length
+    ) {
+      throw new Error(
+        `Apex detail ${id}: no lap rows parsed`
       );
     }
 
