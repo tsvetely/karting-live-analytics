@@ -3042,6 +3042,8 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       : pits.filter(row=>String(row.apex_id)===id).reduce((max,row)=>Math.max(max,Number(row.pit_number)||0),0);
     raceLap=Math.max(raceLap,Number(lap)||0);
     pitTotal+=pitCount;
+    const apexBest = isCurrentRace ? number(snapshot?.bestLaps?.[id]) : number(entry.best_lap);
+    if (apexBest !== null && apexBest > 0 && (raceBest === null || apexBest < raceBest)) raceBest = apexBest;
     const pos=Number(snapshot?.positions?.[id]);
 
     current.push({
@@ -3055,13 +3057,15 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       valid_laps:number(stint.valid_laps) ?? 0,
       stint_status:stint.status||null,data_complete:stint.data_complete!==false,expected_pit_count:number(stint.expected_pit_count),stored_pit_count:number(stint.stored_pit_count),
       live_last_lap:isCurrentRace?(number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap)):number(entry.last_lap),
+      apex_best_lap:isCurrentRace?(number(snapshot?.bestLaps?.[id]) ?? number(entry.best_lap)):number(entry.best_lap),
+      apex_fields:isCurrentRace?(snapshot?.rawRows?.[id] || null):null,
       avg_lap_time:number(stint.avg_lap_time),best_lap_time:number(stint.best_lap_time),
       best_lap_number:number(stint.best_lap_number),worst_lap_time:number(stint.worst_lap_time),
       worst_lap_number:number(stint.worst_lap_number),consistency:number(stint.consistency),updated_at:entry.updated_at||null
     });
   }
 
-  for (const lapRow of lapEvents || []) {
+  if (raceBest === null) for (const lapRow of lapEvents || []) {
     const id = String(lapRow.apex_id ?? "").trim();
     if (!fieldIds.has(id)) continue;
     const lapNo = Number(lapRow.lap_number);
@@ -3951,6 +3955,10 @@ export class ApexCollector {
     this.lastLaps =
       new Map();
 
+    // Exact latest Apex grid cells, kept for direct/raw display.
+    // No completeness/freshness/analytics rules are applied to this map.
+    this.rawRows = new Map();
+
     this.fullDetailRefreshRunning = false;
     this.lastFullDetailRefreshAt = 0;
     this.sessionResetting = false;
@@ -4030,6 +4038,7 @@ export class ApexCollector {
         this.lapCounts = new Map(Object.entries(await state.storage.get("lapCounts") || {}));
         this.bestLaps = new Map(Object.entries(await state.storage.get("bestLaps") || {}));
         this.lastLaps = new Map(Object.entries(await state.storage.get("lastLaps") || {}));
+        this.rawRows = new Map(Object.entries(await state.storage.get("rawRows") || {}));
 
 
         if (
@@ -4090,7 +4099,8 @@ export class ApexCollector {
 
       lapCounts: Object.fromEntries(this.lapCounts),
       bestLaps: Object.fromEntries(this.bestLaps),
-      lastLaps: Object.fromEntries(this.lastLaps)
+      lastLaps: Object.fromEntries(this.lastLaps),
+      rawRows: Object.fromEntries(this.rawRows)
     });
   }
 
@@ -4153,6 +4163,11 @@ export class ApexCollector {
       lastLaps:
         Object.fromEntries(
           this.lastLaps
+        ),
+
+      rawRows:
+        Object.fromEntries(
+          this.rawRows
         )
     };
   }
@@ -4576,6 +4591,12 @@ export class ApexCollector {
     const c=String(cls||"").toLowerCase();
     const col=String(column||"");
 
+    // Preserve the exact latest Apex cell before doing any interpretation.
+    const raw = { ...(this.rawRows.get(id) || {}) };
+    const rawKey = col || t || c || `field_${Object.keys(raw).length}`;
+    raw[rawKey] = { column: col || null, type: t || c || null, cls: c || null, value };
+    this.rawRows.set(id, raw);
+
     if(c==="drteam"||t==="drteam"){
       const driver=cleanDriver(value);if(driver)await this.upsertEntry(id,{current_driver:driver});return;
     }
@@ -4605,14 +4626,9 @@ export class ApexCollector {
     if(t==="blp"||c==="blp"||col==="12"){
       const v=parseLapTime(value);
       if(v!==null&&v>0){
-        const previous=Number(this.bestLaps.get(id));
-        // A kart's race best can only improve during one session.  Some Apex
-        // full-grid packets are partial/transitional; never replace a known
-        // faster current-session best with a slower value from such a packet.
-        if(!Number.isFinite(previous)||previous<=0||v<previous){
-          this.bestLaps.set(id,v);
-        }
-        await this.upsertEntry(id,{best_lap:this.bestLaps.get(id)});
+        // Apex is the source of truth: store exactly the latest BLP it sends.
+        this.bestLaps.set(id,v);
+        await this.upsertEntry(id,{best_lap:v});
       }
       return;
     }
@@ -4684,35 +4700,8 @@ export class ApexCollector {
               grid.positions
             );
 
-          // Detect an actual NEW SESSION before clearing cumulative live
-          // metrics.  Apex can emit partial/transitional full-grid packets
-          // during the same race; clearing bestLaps on every such packet was
-          // the reason the overall best jumped backwards (58.334 -> 58.712).
-          let incomingMaxLap = 0;
-          for (const fields of grid.rows.values()) {
-            for (const cell of Object.values(fields)) {
-              if (String(cell.column) === "13" || cell.type === "tlp") {
-                const n = parseNumber(cell.value);
-                if (n !== null && n >= 0) incomingMaxLap = Math.max(incomingMaxLap, Math.trunc(n));
-              }
-            }
-          }
-          let storedMaxLap = 0;
-          for (const value of this.lapCounts.values()) {
-            const n = Number(value);
-            if (Number.isFinite(n)) storedMaxLap = Math.max(storedMaxLap, n);
-          }
-          const newSession =
-            storedMaxLap >= 20 &&
-            incomingMaxLap >= 0 &&
-            incomingMaxLap + 15 < storedMaxLap;
-
-          if (newSession) {
-            this.pitCounts = new Map();
-            this.lapCounts = new Map();
-            this.bestLaps = new Map();
-            this.lastLaps = new Map();
-          }
+          // Do not infer or clear a session from grid values here.
+          // The grid is display data and is preserved exactly as received.
 
 
           this.lastGridAt =

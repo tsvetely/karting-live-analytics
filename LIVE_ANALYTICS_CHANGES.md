@@ -29,3 +29,13 @@ This build fixes the current LIVE screen using stale/incomplete Apex detail hist
 - Snapshot age now affects only `is_live` / session status; it does not erase teams, race laps, pit counts, drivers, last laps or the field itself.
 - Direct Apex reconnect is now only a fallback when there is genuinely no collected field.
 - This removes the path that turned an ended/paused race with real Apex data into `—` summary values.
+
+## v6.28 — raw Apex field is authoritative
+- Preserve every latest Apex grid cell per kart in collector `rawRows` before any parsing/analytics.
+- Expose `rawRows` in collector snapshots and `apex_fields` per `/api/live` row.
+- Store exactly the latest Apex BLP value; removed the inferred monotonic-best rule.
+- Removed inferred full-grid session reset/clearing from collector grid parsing.
+- `/api/live` now exposes `apex_best_lap` separately from derived stint `best_lap_time`.
+- Race BEST summary uses current Apex BLP values first; recorded lap events are only a fallback.
+- Overview now shows an explicit APEX BEST column so raw Apex race best is never confused with current-stint best.
+- Overview summary cards no longer let a stale/empty `0` liveMeta overwrite the non-empty 72-row field already displayed.

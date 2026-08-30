@@ -1818,6 +1818,10 @@ function renderOverview() {
   )}
 </td>
 
+<td class="good">
+  ${time(row.apex_best_lap)}
+</td>
+
 <td>
   ${time(
     pick(
@@ -1881,7 +1885,7 @@ function renderOverview() {
       .join("") ||
     `
 <tr class="empty">
-  <td colspan="16">
+  <td colspan="17">
     ${
       isLiveRace()
         ? "Waiting for current Apex race data."
@@ -1963,18 +1967,18 @@ function renderOverviewSummary() {
   const authoritativeBest = number(liveSummary?.race_best_lap ?? liveSummary?.best_lap);
 
   if ($("summaryTeams")) {
-    $("summaryTeams").textContent =
-      (authoritativeTeams ?? rows.length) || "—";
+    const value = authoritativeTeams !== null && authoritativeTeams > 0 ? authoritativeTeams : rows.length;
+    $("summaryTeams").textContent = value > 0 ? value : "—";
   }
 
   if ($("summaryRaceLap")) {
-    $("summaryRaceLap").textContent =
-      (authoritativeLap ?? raceLap) || "—";
+    const value = authoritativeLap !== null && authoritativeLap > 0 ? authoritativeLap : raceLap;
+    $("summaryRaceLap").textContent = value > 0 ? value : "—";
   }
 
   if ($("summaryPits")) {
-    $("summaryPits").textContent =
-      authoritativePits ?? pitStops;
+    const value = authoritativePits !== null && authoritativePits > 0 ? authoritativePits : pitStops;
+    $("summaryPits").textContent = value > 0 ? value : (rows.length ? 0 : "—");
   }
 
   if ($("summaryBestLap")) {
