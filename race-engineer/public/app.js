@@ -376,140 +376,18 @@ function apiUrl(path) {
 // the browser download.
 // ============================================================
 
-async function downloadFileFromEndpoint(
+function downloadFileFromEndpoint(
   path,
-  fallbackFilename =
-    "download"
+  fallbackFilename = "download"
 ) {
-  const response =
-    await fetch(
-      apiUrl(path),
-      {
-        method: "GET",
-        cache: "no-store"
-      }
-    );
-
-
-  if (!response.ok) {
-    let message = "";
-
-    try {
-      message =
-        await response.text();
-    } catch {
-      message = "";
-    }
-
-    throw new Error(
-      message ||
-      `Download failed: HTTP ${response.status}`
-    );
-  }
-
-
-  const blob =
-    await response.blob();
-
-
-  if (
-    !blob ||
-    blob.size === 0
-  ) {
-    throw new Error(
-      "The server returned an empty file."
-    );
-  }
-
-
-  const disposition =
-    response.headers.get(
-      "content-disposition"
-    ) || "";
-
-
-  let filename =
-    fallbackFilename;
-
-
-  const utf8Match =
-    /filename\*=UTF-8''([^;]+)/i
-      .exec(disposition);
-
-
-  const normalMatch =
-    /filename="([^"]+)"/i
-      .exec(disposition);
-
-
-  if (
-    utf8Match?.[1]
-  ) {
-    try {
-      filename =
-        decodeURIComponent(
-          utf8Match[1]
-        );
-    } catch {
-      filename =
-        utf8Match[1];
-    }
-
-  } else if (
-    normalMatch?.[1]
-  ) {
-    filename =
-      normalMatch[1];
-  }
-
-
-  const objectUrl =
-    URL.createObjectURL(
-      blob
-    );
-
-
-  try {
-    const link =
-      document.createElement(
-        "a"
-      );
-
-    link.href =
-      objectUrl;
-
-    link.download =
-      filename;
-
-    link.style.display =
-      "none";
-
-
-    document.body
-      .appendChild(
-        link
-      );
-
-
-    link.click();
-    link.remove();
-
-  } finally {
-    window.setTimeout(
-      () =>
-        URL.revokeObjectURL(
-          objectUrl
-        ),
-      1000
-    );
-  }
-
-
-  return {
-    filename,
-    size:
-      blob.size
-  };
+  const link = document.createElement("a");
+  link.href = apiUrl(path);
+  link.style.display = "none";
+  link.setAttribute("aria-hidden", "true");
+  document.body.appendChild(link);
+  link.click();
+  window.setTimeout(() => link.remove(), 1000);
+  return { filename: fallbackFilename, url: link.href };
 }
 
 
@@ -3088,6 +2966,7 @@ async function loadCurrentView(
       break;
 
     case "reports":
+      await loadReportData(force);
       renderReports();
       break;
   }
@@ -3157,6 +3036,11 @@ async function switchView(view) {
     );
 
   } else {
+    try {
+      await loadReportData(false);
+    } catch (error) {
+      console.error("Report data load failed:", error);
+    }
     renderReports();
   }
 }
@@ -4504,6 +4388,18 @@ window.onload = () => window.print();
 // REPORTS
 // ============================================================
 
+async function loadReportData(force = false) {
+  const results = await Promise.allSettled([
+    loadStints(force),
+    loadDrivers(force),
+    loadTeams(force),
+    loadPits(force)
+  ]);
+  const failed = results.find(result => result.status === "rejected");
+  if (failed) throw failed.reason;
+}
+
+
 function renderReports() {
   const hasRace =
     raceHasData() ||
@@ -4636,39 +4532,37 @@ function initReports() {
     });
 
   $("downloadRaceCsv")
-    ?.addEventListener(
-      "click",
-      () => {
-        try {
-          downloadText(
-            `${reportBaseName()} - Race Analytics.csv`,
-            buildRaceAnalyticsCsv(),
-            "text/csv;charset=utf-8"
-          );
-
-        } catch (error) {
-          alert(
-            error.message
-          );
-        }
+    ?.addEventListener("click", event => {
+      const button = event.currentTarget;
+      setReportButtonBusy(button, true, "CSV");
+      try {
+        downloadFileFromEndpoint(
+          "/api/reports/race-analytics.csv",
+          `${reportBaseName()} - Race Analytics.csv`
+        );
+      } catch (error) {
+        alert(`Race Analytics CSV download failed:\n\n${error.message}`);
+      } finally {
+        window.setTimeout(() => setReportButtonBusy(button, false, "CSV"), 300);
       }
-    );
+    });
 
 
   $("downloadRacePdf")
-    ?.addEventListener(
-      "click",
-      () => {
-        try {
-          openAnalyticsPdf();
-
-        } catch (error) {
-          alert(
-            error.message
-          );
-        }
+    ?.addEventListener("click", event => {
+      const button = event.currentTarget;
+      setReportButtonBusy(button, true, "PDF");
+      try {
+        downloadFileFromEndpoint(
+          "/api/reports/race-analytics.pdf",
+          `${reportBaseName()} - Race Analytics.pdf`
+        );
+      } catch (error) {
+        alert(`Race Analytics PDF download failed:\n\n${error.message}`);
+      } finally {
+        window.setTimeout(() => setReportButtonBusy(button, false, "PDF"), 300);
       }
-    );
+    });
 
 
   /*
