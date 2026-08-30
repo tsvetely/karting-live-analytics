@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.11-stable-grid-best-session-aware";
+  "2026-08-30-race-datasets-v6.18-do-namespace-recovery";
 
 const PAGE_SIZE = 1000;
 
@@ -4360,6 +4360,16 @@ export class ApexCollector {
     }
   }
 }
+
+
+// ============================================================
+// FRESH DURABLE OBJECT NAMESPACE RECOVERY
+// ============================================================
+// The original ApexCollector class is intentionally kept so the old v1
+// migration remains valid. APEX_COLLECTOR is rebound to this fresh class
+// by wrangler.toml v2, which gives the collector a clean Durable Object
+// namespace without touching Supabase race history.
+export class ApexCollectorV2 extends ApexCollector {}
 
 
 // ============================================================
