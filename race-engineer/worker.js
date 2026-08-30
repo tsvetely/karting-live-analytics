@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.12-ui-race-best-authoritative";
+  "2026-08-30-race-datasets-v6.13-apex-blp-authoritative";
 
 const PAGE_SIZE = 1000;
 
@@ -4145,7 +4145,7 @@ export class ApexCollector {
     if(t==="llp"||c==="llp"||col==="9"){
       const v=parseLapTime(value);if(v!==null){this.lastLaps.set(id,v);await this.upsertEntry(id,{last_lap:v});}return;
     }
-    if(t==="blp"||c==="blp"||col==="12"){
+    if(t==="blp"||c==="blp"){
       const v=parseLapTime(value);
       if(v!==null&&v>0){
         const previous=Number(this.bestLaps.get(id));
