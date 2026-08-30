@@ -4447,6 +4447,8 @@ function renderReports() {
     "downloadRaceCsv",
     "downloadRacePdf",
     "organiserReport1Csv",
+    "organiserReport1Pdf",
+    "organiserReport2Csv",
     "organiserReport2Pdf"
   ]
     .forEach(
@@ -4461,24 +4463,6 @@ function renderReports() {
       }
     );
 
-
-  const report1Pdf =
-    $("organiserReport1Pdf");
-
-  const report2Csv =
-    $("organiserReport2Csv");
-
-
-  if (report1Pdf) {
-    report1Pdf.style.display =
-      "none";
-  }
-
-
-  if (report2Csv) {
-    report2Csv.style.display =
-      "none";
-  }
 
 
   const note =
@@ -4627,6 +4611,50 @@ function initReports() {
           );
 
 
+          renderReports();
+        }
+      }
+    );
+
+
+  $("organiserReport1Pdf")
+    ?.addEventListener(
+      "click",
+      async event => {
+        const button = event.currentTarget;
+        setReportButtonBusy(button, true, "PDF");
+        try {
+          await downloadFileFromEndpoint(
+            "/api/reports/lap-time-records.pdf",
+            `${reportBaseName()} - Lap time records.pdf`
+          );
+        } catch (error) {
+          console.error("LAP PDF DOWNLOAD ERROR", error);
+          alert(`Lap Time Records PDF download failed:\n\n${error.message}`);
+        } finally {
+          setReportButtonBusy(button, false, "PDF");
+          renderReports();
+        }
+      }
+    );
+
+
+  $("organiserReport2Csv")
+    ?.addEventListener(
+      "click",
+      async event => {
+        const button = event.currentTarget;
+        setReportButtonBusy(button, true, "CSV");
+        try {
+          await downloadFileFromEndpoint(
+            "/api/reports/pit-stops.csv",
+            `${reportBaseName()} - Pit stops.csv`
+          );
+        } catch (error) {
+          console.error("PIT CSV DOWNLOAD ERROR", error);
+          alert(`Pit Stops CSV download failed:\n\n${error.message}`);
+        } finally {
+          setReportButtonBusy(button, false, "CSV");
           renderReports();
         }
       }

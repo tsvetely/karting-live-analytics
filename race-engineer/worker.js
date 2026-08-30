@@ -1,4 +1,4 @@
-const VERSION = "2026-08-30-race-datasets-v6.21-current-session-rebuild";
+const VERSION = "2026-08-30-race-datasets-v6.22-history-and-downloads";
 
 const PAGE_SIZE = 1000;
 
@@ -2317,20 +2317,27 @@ function calculateRawStintStats(apexId, lapRows, startLap, endLap, exclusions, o
 // ============================================================
 
 async function stintsPayload(env, rid, snapshot = null) {
-  const realSnapshot = snapshot || await collectorSnapshot(env).catch(() => null);
-  const fieldIds = currentFieldIds(realSnapshot);
-  if (!fieldIds.size) return [];
+  const isCurrentRace = Number(rid) === Number(raceId(env));
+  const realSnapshot = isCurrentRace ? (snapshot || await collectorSnapshot(env).catch(() => null)) : null;
 
-  const [pitsRaw, entriesRaw, exclusionsRaw, lapRaw, teamMap] = await Promise.all([
+  const [pitsRaw, entriesRaw, exclusionsRaw, teamMap] = await Promise.all([
     loadPits(env, rid),
     loadEntries(env, rid),
     loadExclusions(env, rid),
-    loadLapEventsForApexIds(env, rid, fieldIds),
     stableTeamNameMap(env, rid)
   ]);
 
+  const fieldIds = isCurrentRace
+    ? currentFieldIds(realSnapshot)
+    : new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+
+  if (!fieldIds.size) return [];
+
+  const lapRaw = await loadLapEventsForApexIds(env, rid, [...fieldIds]);
   const entries = filterCurrentField(entriesRaw, fieldIds);
-  const pits = currentPitChain(filterCurrentField(pitsRaw, fieldIds), realSnapshot);
+  const pits = isCurrentRace
+    ? currentPitChain(filterCurrentField(pitsRaw, fieldIds), realSnapshot)
+    : filterCurrentField(pitsRaw, fieldIds);
   const exclusions = manualExclusionSet(filterCurrentField(exclusionsRaw, fieldIds));
 
   const entriesById = new Map(entries.map(r => [String(r.apex_id), r]));
@@ -2348,8 +2355,6 @@ async function stintsPayload(env, rid, snapshot = null) {
     lapsById.get(id).push(row);
   }
 
-  // Build the same race-wide analytical context used by KartingNumbersXlsx.
-  // It is reconstructed from persisted raw lap events, so browser refreshes do not lose state.
   const globalExcluded = detectGlobalDisruptionLaps(lapsById);
   const directionSplitLap = automaticDirectionSplitLapFromPits(pits);
   const globalRainTransitionLap = detectGlobalRainTransitionLap(lapsById, globalExcluded);
@@ -2390,7 +2395,8 @@ async function stintsPayload(env, rid, snapshot = null) {
 
     const snapshotLap=Number(realSnapshot?.lapCounts?.[id]);
     const entryLap=Number(entry.lap_count);
-    const currentLap=Number.isFinite(snapshotLap) ? snapshotLap : entryLap;
+    const lastRecordedLap = laps.reduce((max,row)=>Math.max(max,Number(row.lap_number)||0),0);
+    const currentLap=isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap) ? entryLap : lastRecordedLap);
     if (Number.isFinite(currentLap) && currentLap>=start) {
       const stats=currentLap>start ? (calculateRawStintStats(id,laps,start,currentLap,exclusions,{globalExcluded,splitRange:splitById.get(id),rainStartLap:rainStartById.get(id)}) || {
         valid_laps:0, avg_lap_time:null, best_lap_time:null, best_lap_number:null,
@@ -2403,19 +2409,23 @@ async function stintsPayload(env, rid, snapshot = null) {
         race_id:Number(rid), apex_id:id,
         team_name:resolveTeam(id,teamMap,entry.team_name),
         driver_name:entry.current_driver||null,
-        stint_number:stintNumber, start_lap_count:start, end_lap_count:null,
+        stint_number:stintNumber, start_lap_count:start,
+        end_lap_count:isCurrentRace?null:currentLap,
         current_lap_count:currentLap, total_laps:Math.max(0,currentLap-start), ...stats,
         pit_hour:null,on_track:null,pit_time:null,total_time:null,
-        is_live:true,status:"LIVE", direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
+        is_live:isCurrentRace,status:isCurrentRace?"LIVE":"COMPLETED",
+        direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
     }
   }
 
   result.sort((a,b)=>{
-    const pa=Number(realSnapshot?.positions?.[String(a.apex_id)]), pb=Number(realSnapshot?.positions?.[String(b.apex_id)]);
-    if (Number.isFinite(pa)&&Number.isFinite(pb)&&pa!==pb) return pa-pb;
-    if (Number.isFinite(pa)) return -1;
-    if (Number.isFinite(pb)) return 1;
+    if (isCurrentRace) {
+      const pa=Number(realSnapshot?.positions?.[String(a.apex_id)]), pb=Number(realSnapshot?.positions?.[String(b.apex_id)]);
+      if (Number.isFinite(pa)&&Number.isFinite(pb)&&pa!==pb) return pa-pb;
+      if (Number.isFinite(pa)) return -1;
+      if (Number.isFinite(pb)) return 1;
+    }
     const c=Number(a.apex_id)-Number(b.apex_id);
     return c || Number(a.stint_number)-Number(b.stint_number);
   });
@@ -2975,61 +2985,74 @@ function teamsFromDrivers(
 // ============================================================
 
 async function livePayload(env, rid, suppliedSnapshot = null) {
+  const isCurrentRace = Number(rid) === Number(raceId(env));
   const [entriesRaw, snapshot, teamMap] = await Promise.all([
-    loadEntries(env, rid), suppliedSnapshot ? Promise.resolve(suppliedSnapshot) : collectorSnapshot(env).catch(() => null), stableTeamNameMap(env, rid)
+    loadEntries(env, rid),
+    isCurrentRace ? (suppliedSnapshot ? Promise.resolve(suppliedSnapshot) : collectorSnapshot(env).catch(() => null)) : Promise.resolve(null),
+    stableTeamNameMap(env, rid)
   ]);
-  const fieldIds=currentFieldIds(snapshot);
+
+  const fieldIds = isCurrentRace
+    ? currentFieldIds(snapshot)
+    : new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+
   if (!fieldIds.size) return {
     race_id:Number(rid), session_name:"Apex Timing", active:false, data_available:false,
-    is_live:false, session_status:"WAITING FOR APEX GRID", team_count:0, race_lap:0, pit_count:0, best_lap:null, current:[]
+    is_live:false, session_status:isCurrentRace?"WAITING FOR APEX GRID":"FINISHED", team_count:0, race_lap:0, pit_count:0, best_lap:null, current:[]
   };
 
   const entries=filterCurrentField(entriesRaw,fieldIds);
   const entryById=new Map(entries.map(r=>[String(r.apex_id),r]));
-  const [stints, currentLapEvents] = await Promise.all([
+  const [stints, lapEvents, pits] = await Promise.all([
     stintsPayload(env,rid,snapshot),
-    loadLapEventsForApexIds(env,rid,[...fieldIds])
+    loadLapEventsForApexIds(env,rid,[...fieldIds]),
+    loadPits(env,rid)
   ]);
-  const liveById=new Map(stints.filter(r=>r.is_live).map(r=>[String(r.apex_id),r]));
+
+  const finalStintById=new Map();
+  for (const stint of stints) {
+    const id=String(stint.apex_id);
+    const previous=finalStintById.get(id);
+    if (!previous || Number(stint.stint_number)>Number(previous.stint_number)) finalStintById.set(id,stint);
+  }
   const current=[];
   let raceLap=0,pitTotal=0,raceBest=null;
 
   for (const value of fieldIds) {
-    const id=String(value), entry=entryById.get(id)||{}, liveCandidate=liveById.get(id)||{};
-    const sl=Number(snapshot?.lapCounts?.[id]);
-    // A live row never falls back to an old race_id=1 lap count.
-    const lap=Number.isFinite(sl)?sl:0;
-    const expectedStint=(Number(snapshot?.pitCounts?.[id])||0)+1;
-    const live=(Number(liveCandidate.stint_number)===expectedStint && Number(liveCandidate.current_lap_count)===lap) ? liveCandidate : {};
-    raceLap=Math.max(raceLap,lap);
-    const sp=Number(snapshot?.pitCounts?.[id]);
-    const pitCount=Number.isFinite(sp)?Math.max(0,Math.trunc(sp)):0;
+    const id=String(value), entry=entryById.get(id)||{}, stint=finalStintById.get(id)||{};
+    const snapshotLap=Number(snapshot?.lapCounts?.[id]);
+    const entryLap=Number(entry.lap_count);
+    const recordedLap=lapEvents.filter(row=>String(row.apex_id)===id).reduce((max,row)=>Math.max(max,Number(row.lap_number)||0),0);
+    const lap=isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap)?entryLap:recordedLap);
+    const snapshotPits=Number(snapshot?.pitCounts?.[id]);
+    const pitCount=isCurrentRace && Number.isFinite(snapshotPits)
+      ? Math.max(0,Math.trunc(snapshotPits))
+      : pits.filter(row=>String(row.apex_id)===id).reduce((max,row)=>Math.max(max,Number(row.pit_number)||0),0);
+    raceLap=Math.max(raceLap,Number(lap)||0);
     pitTotal+=pitCount;
-    // Race-wide best is calculated below from the rebuilt CURRENT-session
-    // detail lap history. Do not use a stint best or a stale grid cache here.
     const pos=Number(snapshot?.positions?.[id]);
 
     current.push({
-      race_id:Number(rid),apex_id:id,position:Number.isFinite(pos)?pos:null,
-      team_name:resolveTeam(id,teamMap,snapshot?.teamNames?.[id],entry.team_name,live.team_name),
-      driver_name:snapshot?.drivers?.[id]||live.driver_name||entry.current_driver||null,current_driver:snapshot?.drivers?.[id]||live.driver_name||entry.current_driver||null,
-      race_lap:lap,live_lap_count:lap,pit_count:pitCount,
-      stint_number:number(live.stint_number)||pitCount+1,start_lap_count:number(live.start_lap_count)||0,
-      stint_laps:number(live.total_laps)||0,total_stint_laps:number(live.total_laps)||0,
-      valid_laps:number(live.valid_laps)||0,live_last_lap:number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap),
-      avg_lap_time:number(live.avg_lap_time),best_lap_time:number(live.best_lap_time),
-      best_lap_number:number(live.best_lap_number),worst_lap_time:number(live.worst_lap_time),
-      worst_lap_number:number(live.worst_lap_number),consistency:number(live.consistency),updated_at:entry.updated_at||null
+      race_id:Number(rid),apex_id:id,position:isCurrentRace&&Number.isFinite(pos)?pos:null,
+      team_name:resolveTeam(id,teamMap,entry.team_name,stint.team_name),
+      driver_name:(isCurrentRace?snapshot?.drivers?.[id]:null)||stint.driver_name||entry.current_driver||null,
+      current_driver:(isCurrentRace?snapshot?.drivers?.[id]:null)||stint.driver_name||entry.current_driver||null,
+      race_lap:Number(lap)||0,live_lap_count:Number(lap)||0,pit_count:pitCount,
+      stint_number:number(stint.stint_number)||pitCount+1,start_lap_count:number(stint.start_lap_count)||0,
+      stint_laps:number(stint.total_laps)||0,total_stint_laps:number(stint.total_laps)||0,
+      valid_laps:number(stint.valid_laps)||0,
+      live_last_lap:isCurrentRace?(number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap)):number(entry.last_lap),
+      avg_lap_time:number(stint.avg_lap_time),best_lap_time:number(stint.best_lap_time),
+      best_lap_number:number(stint.best_lap_number),worst_lap_time:number(stint.worst_lap_time),
+      worst_lap_number:number(stint.worst_lap_number),consistency:number(stint.consistency),updated_at:entry.updated_at||null
     });
   }
-  // Authoritative overall best: only raw laps belonging to the current 72-kart
-  // field and not beyond each kart's current Apex lap count. refreshDetail()
-  // replaces each kart's race_id=1 history with the complete current session.
-  for (const lapRow of currentLapEvents || []) {
+
+  for (const lapRow of lapEvents || []) {
     const id = String(lapRow.apex_id ?? "").trim();
     if (!fieldIds.has(id)) continue;
     const lapNo = Number(lapRow.lap_number);
-    const currentCount = Number(snapshot?.lapCounts?.[id]);
+    const currentCount = isCurrentRace ? Number(snapshot?.lapCounts?.[id]) : Infinity;
     if (!Number.isFinite(lapNo) || lapNo <= 0) continue;
     if (Number.isFinite(currentCount) && currentCount >= 0 && lapNo > currentCount) continue;
     const t = Number(lapRow.lap_time);
@@ -3037,13 +3060,16 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
   }
 
   current.sort((a,b)=>{
-    if(Number.isFinite(a.position)&&Number.isFinite(b.position)&&a.position!==b.position)return a.position-b.position;
-    if(Number.isFinite(a.position))return -1;if(Number.isFinite(b.position))return 1;return b.race_lap-a.race_lap;
+    if(isCurrentRace&&Number.isFinite(a.position)&&Number.isFinite(b.position)&&a.position!==b.position)return a.position-b.position;
+    if(isCurrentRace&&Number.isFinite(a.position))return -1;
+    if(isCurrentRace&&Number.isFinite(b.position))return 1;
+    return b.race_lap-a.race_lap || Number(a.apex_id)-Number(b.apex_id);
   });
+
   const lastPacket=Date.parse(snapshot?.last_packet_at||"");
-  const isLive=Number.isFinite(lastPacket)&&Date.now()-lastPacket<180000;
-  return {race_id:Number(rid),session_name:"Apex Timing",active:current.length>0,data_available:current.length>0,
-    is_live:isLive,session_status:isLive?"LIVE":"FINISHED",collector_connected:snapshot?.connected===true,
+  const isLive=isCurrentRace&&Number.isFinite(lastPacket)&&Date.now()-lastPacket<180000;
+  return {race_id:Number(rid),session_name:`Race ${rid}`,active:current.length>0,data_available:current.length>0,
+    is_live:isLive,session_status:isLive?"LIVE":"FINISHED",collector_connected:isCurrentRace&&snapshot?.connected===true,
     team_count:current.length,race_lap:raceLap,pit_count:pitTotal,best_lap:raceBest,race_best_lap:raceBest,current};
 }
 
@@ -3095,6 +3121,77 @@ async function eventsPayload(
     );
 }
 
+
+// ============================================================
+// SESSION ARCHIVE
+// ============================================================
+
+function stripDatabaseIdentity(row, targetRaceId) {
+  const copy = { ...row, race_id: targetRaceId };
+  delete copy.id;
+  return copy;
+}
+
+async function nextArchiveRaceId(env, currentRid) {
+  const rows = await sbGetAll(env, "apex_entries", {
+    select: "race_id",
+    order: "race_id.desc"
+  }).catch(() => []);
+
+  let maxId = Number(currentRid) || 1;
+  for (const row of rows) {
+    const id = Number(row.race_id);
+    if (Number.isFinite(id)) maxId = Math.max(maxId, Math.trunc(id));
+  }
+  return maxId + 1;
+}
+
+async function archiveCurrentRace(env, sourceRid) {
+  const entries = await loadEntries(env, sourceRid).catch(() => []);
+  const laps = await sbGetAll(env, "apex_lap_events", {
+    select: "*",
+    race_id: `eq.${sourceRid}`,
+    order: "apex_id.asc,lap_number.asc"
+  }).catch(() => []);
+  const pits = await loadPits(env, sourceRid).catch(() => []);
+
+  // Do not create empty history entries.
+  if (!entries.length && !laps.length && !pits.length) return null;
+
+  const targetRid = await nextArchiveRaceId(env, sourceRid);
+
+  if (entries.length) {
+    const rows = entries.map(row => stripDatabaseIdentity(row, targetRid));
+    for (let i = 0; i < rows.length; i += 250) {
+      await sbUpsert(env, "apex_entries", rows.slice(i, i + 250), "race_id,apex_id");
+    }
+  }
+
+  if (laps.length) {
+    const rows = laps.map(row => stripDatabaseIdentity(row, targetRid));
+    for (let i = 0; i < rows.length; i += 250) {
+      await sbUpsert(env, "apex_lap_events", rows.slice(i, i + 250), "race_id,apex_id,lap_number");
+    }
+  }
+
+  if (pits.length) {
+    const rows = pits.map(row => stripDatabaseIdentity(row, targetRid));
+    for (let i = 0; i < rows.length; i += 250) {
+      await sbUpsert(env, "apex_pit_stints", rows.slice(i, i + 250), "race_id,apex_id,pit_number");
+    }
+  }
+
+  return targetRid;
+}
+
+async function clearCurrentRaceData(env, rid) {
+  // Raw packet history is intentionally retained for diagnostics/recovery.
+  await Promise.all([
+    sbDelete(env, "apex_lap_events", { race_id: `eq.${rid}` }),
+    sbDelete(env, "apex_pit_stints", { race_id: `eq.${rid}` }),
+    sbDelete(env, "apex_entries", { race_id: `eq.${rid}` })
+  ]);
+}
 
 // ============================================================
 // RACES
@@ -3273,9 +3370,15 @@ function safeFilename(value) {
 }
 
 
+async function reportFieldIds(env, rid, snapshot) {
+  if (Number(rid) === Number(raceId(env))) return currentFieldIds(snapshot);
+  const entries = await loadEntries(env, rid).catch(() => []);
+  return new Set(entries.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+}
+
 async function createLapRecordsCsvResponse(env, rid, snapshot) {
-  const fieldIds=currentFieldIds(snapshot);
-  if(!fieldIds.size)return json({error:"No current Apex field."},404);
+  const fieldIds=await reportFieldIds(env,rid,snapshot);
+  if(!fieldIds.size)return json({error:`No Apex field found for race ${rid}.`},404);
 
   const teamMap=await stableTeamNameMap(env,rid);
   const rows=await loadLapEventsForApexIds(env,rid,[...fieldIds]);
@@ -3317,6 +3420,83 @@ async function createLapRecordsCsvResponse(env, rid, snapshot) {
     "content-type":"text/csv; charset=utf-8",
     "content-disposition":`attachment; filename="${filename}"`,
     "cache-control":"no-store, no-cache, must-revalidate",pragma:"no-cache",expires:"0","x-content-type-options":"nosniff"
+  }});
+}
+
+function createLapRecordsPdfResponse(env, rid, snapshot) {
+  return (async () => {
+    const fieldIds = await reportFieldIds(env, rid, snapshot);
+    if (!fieldIds.size) return json({ error: `No Apex field found for race ${rid}.` }, 404);
+
+    const teamMap = await stableTeamNameMap(env, rid);
+    const rows = await loadLapEventsForApexIds(env, rid, [...fieldIds]);
+    if (!rows.length) return json({ error: `No lap records found for race ${rid}.` }, 404);
+
+    const grouped = new Map();
+    for (const row of rows) {
+      const id = String(row.apex_id ?? "").trim();
+      const lap = Math.trunc(Number(row.lap_number));
+      const time = Number(row.lap_time);
+      if (!fieldIds.has(id) || !validApexId(id) || !Number.isFinite(lap) || lap <= 0 || !Number.isFinite(time) || time <= 0) continue;
+      if (!grouped.has(id)) grouped.set(id, []);
+      grouped.get(id).push({ lap, time });
+    }
+
+    const pages = [];
+    for (const id of [...grouped.keys()].sort((a, b) => Number(a) - Number(b))) {
+      const team = resolveTeam(id, teamMap) || `APEX ${id}`;
+      const values = grouped.get(id).sort((a, b) => a.lap - b.lap);
+      const lines = [`${id} - ${team}`, "Lap  Time"];
+      for (const value of values) lines.push(`${String(value.lap).padStart(4, " ")}  ${value.time.toFixed(3)}`);
+      for (let i = 0; i < lines.length; i += 65) pages.push(lines.slice(i, i + 65));
+    }
+
+    const bytes = buildTextPdf(pages);
+    const filename = safeFilename(`Race ${rid} - Lap time records.pdf`);
+    return new Response(bytes, { status: 200, headers: {
+      "content-type": "application/pdf",
+      "content-disposition": `attachment; filename="${filename}"`,
+      "cache-control": "no-store, no-cache, must-revalidate",
+      "x-content-type-options": "nosniff"
+    }});
+  })();
+}
+
+function createPitStopsCsvResponse(rid, stints) {
+  const rows = [
+    ["Apex ID","Team","Stint","Driver","Start lap","End lap","Total laps","Valid laps","Hour","On track","Pit time","Total","Average","Best","Best lap","Worst","Worst lap","Status"]
+  ];
+
+  for (const row of stints || []) {
+    rows.push([
+      row.apex_id,
+      row.team_name,
+      row.stint_number,
+      row.driver_name,
+      row.start_lap_count,
+      row.end_lap_count ?? "LIVE",
+      row.total_laps,
+      row.valid_laps,
+      row.pit_hour,
+      row.on_track,
+      row.pit_time,
+      row.total_time,
+      Number.isFinite(Number(row.avg_lap_time)) ? Number(row.avg_lap_time).toFixed(3) : "",
+      Number.isFinite(Number(row.best_lap_time)) ? Number(row.best_lap_time).toFixed(3) : "",
+      row.best_lap_number ?? "",
+      Number.isFinite(Number(row.worst_lap_time)) ? Number(row.worst_lap_time).toFixed(3) : "",
+      row.worst_lap_number ?? "",
+      row.status
+    ]);
+  }
+
+  const csv = "\uFEFF" + rows.map(row => row.map(csvEscape).join(",")).join("\r\n");
+  const filename = safeFilename(`Race ${rid} - Pit stops.csv`);
+  return new Response(csv, { status: 200, headers: {
+    "content-type": "text/csv; charset=utf-8",
+    "content-disposition": `attachment; filename="${filename}"`,
+    "cache-control": "no-store, no-cache, must-revalidate",
+    "x-content-type-options": "nosniff"
   }});
 }
 
@@ -4552,13 +4732,37 @@ export class ApexCollector {
 
 
   async handlePacket(payload) {
+    const now = new Date();
+    const previousPacketAt = this.lastPacketAt ? Date.parse(this.lastPacketAt) : NaN;
+    const maxPreviousLap = Math.max(0, ...[...this.lapCounts.values()].map(value => Number(value) || 0));
+
+    // A long timing silence followed by new packets is the reliable boundary
+    // between organiser sessions. Archive race_id=1 BEFORE current-session
+    // detail refresh starts replacing its rows. This keeps every finished race
+    // available in the HISTORY selector without requiring a new Supabase table.
+    if (Number.isFinite(previousPacketAt) && now.getTime() - previousPacketAt >= 6 * 60 * 60 * 1000 && maxPreviousLap >= 10) {
+      try {
+        const archivedRid = await archiveCurrentRace(this.env, this.rid);
+        if (archivedRid) {
+          await clearCurrentRaceData(this.env, this.rid);
+          this.positions.clear();
+          this.fieldApexIds.clear();
+          this.pitCounts.clear();
+          this.lapCounts.clear();
+          this.bestLaps.clear();
+          this.lastLaps.clear();
+          await this.state.storage.put("lastArchivedRaceId", archivedRid);
+        }
+      } catch (error) {
+        console.error("SESSION ARCHIVE:", error);
+      }
+    }
+
     this.packetCount +=
       1;
 
 
-    this.lastPacketAt =
-      new Date()
-        .toISOString();
+    this.lastPacketAt = now.toISOString();
 
 
     try {
@@ -4784,6 +4988,12 @@ export default {
           "/api/events" ||
         url.pathname ===
           "/api/reports/lap-time-records.csv" ||
+        url.pathname ===
+          "/api/reports/lap-time-records.pdf" ||
+        url.pathname ===
+          "/api/reports/pit-stops.csv" ||
+        url.pathname ===
+          "/api/reports/pit-stops.pdf" ||
         url.pathname ===
           "/api/reports/pit-stops.html"
       ) {
@@ -5257,6 +5467,23 @@ export default {
             rid,
             snapshot
           );
+        }
+
+
+        if (
+          url.pathname ===
+          "/api/reports/lap-time-records.pdf"
+        ) {
+          return await createLapRecordsPdfResponse(env, rid, snapshot);
+        }
+
+
+        if (
+          url.pathname ===
+          "/api/reports/pit-stops.csv"
+        ) {
+          const stints = await stintsPayload(env, rid, snapshot);
+          return createPitStopsCsvResponse(rid, stints);
         }
 
 
