@@ -1000,117 +1000,84 @@ function parsePitRows(
   teamName,
   rid
 ) {
-  const drivers =
-    parseDrivers(raw);
-
-
+  const drivers = parseDrivers(raw);
   const rows = [];
 
+  // Preserve-first parser for Apex detail pit records.
+  // Apex has used more than one P-record layout.  Never require one exact
+  // payload shape before we preserve a real D{id}.P... record.
+  for (const originalLine of String(raw || "").split("\n")) {
+    const line = originalLine.trim();
+    if (!line) continue;
 
-  for (
-    const line
-    of String(
-      raw || ""
-    ).split("\n")
-  ) {
-    const match =
-      /^D(\d+)\.P\d+#(.+)$/
-        .exec(
-          line.trim()
-        );
+    // Accept all real Apex P record key variants:
+    //   D51.P6#...
+    //   D51.P#...
+    //   D51.P006#...
+    const match = /^D(\d+)\.P(\d*)#(.*)$/.exec(line);
+    if (!match) continue;
 
+    const apexId = String(match[1]);
+    const keyPitNumber = match[2] ? Number(match[2]) : NaN;
+    const parts = String(match[3] ?? "").split("|");
 
-    if (!match) {
+    // Two Apex layouts are supported without rejecting either:
+    // A) P6#6|186|hour|...        -> pit no in payload + lap at index 1
+    // B) P6#186|hour|...          -> pit no in key + lap at index 0
+    // C) P#6|186|hour|...         -> pit no + lap both in payload
+    let pitNumber = NaN;
+    let pitLap = NaN;
+    let shift = 0;
+
+    const p0 = Number(parts[0]);
+    const p1 = Number(parts[1]);
+
+    if (Number.isFinite(keyPitNumber) && keyPitNumber > 0) {
+      pitNumber = Math.trunc(keyPitNumber);
+      if (Number.isFinite(p0) && Math.trunc(p0) === pitNumber && Number.isFinite(p1)) {
+        pitLap = Math.trunc(p1);       // layout A
+        shift = 0;
+      } else if (Number.isFinite(p0)) {
+        pitLap = Math.trunc(p0);       // layout B
+        shift = -1;
+      }
+    } else if (Number.isFinite(p0) && Number.isFinite(p1)) {
+      pitNumber = Math.trunc(p0);      // layout C / legacy
+      pitLap = Math.trunc(p1);
+      shift = 0;
+    }
+
+    // Last-resort preservation: if the key did not carry a pit number but the
+    // payload contains one, use it.  We still do NOT synthesize a pit lap.
+    if (!Number.isFinite(pitNumber) || pitNumber <= 0 || !Number.isFinite(pitLap) || pitLap <= 0) {
       continue;
     }
 
+    const idx = (legacyIndex) => legacyIndex + shift;
+    const valueAt = (legacyIndex) => {
+      const i = idx(legacyIndex);
+      return i >= 0 && i < parts.length ? parts[i] : null;
+    };
 
-    const parts =
-      match[2]
-        .split("|");
-
-
-    const pitNumber =
-      Number(
-        parts[0]
-      );
-
-
-    const pitLap =
-      Number(
-        parts[1]
-      );
-
-
-    if (
-      !Number.isFinite(
-        pitNumber
-      ) ||
-      !Number.isFinite(
-        pitLap
-      )
-    ) {
-      continue;
-    }
-
+    const driverIndex = Number(valueAt(7));
 
     rows.push({
-      race_id:
-        rid,
-
-      apex_id:
-        String(
-          match[1]
-        ),
-
-      team_name:
-        teamName ||
-        null,
-
-      pit_number:
-        pitNumber,
-
-      pit_lap:
-        pitLap,
-
-      pit_hour:
-        msToTime(
-          parts[2]
-        ),
-
-      pit_time:
-        msToPitTime(
-          parts[4]
-        ),
-
-      on_track:
-        msToTime(
-          parts[5]
-        ),
-
-      driver_name:
-        drivers.get(
-          Number(
-            parts[7]
-          )
-        ) ||
-        null,
-
-      total_time:
-        msToTime(
-          parts[8]
-        ),
-
-      updated_at:
-        new Date()
-          .toISOString()
+      race_id: rid,
+      apex_id: apexId,
+      team_name: teamName || null,
+      pit_number: pitNumber,
+      pit_lap: pitLap,
+      pit_hour: msToTime(valueAt(2)),
+      pit_time: msToPitTime(valueAt(4)),
+      on_track: msToTime(valueAt(5)),
+      driver_name: Number.isFinite(driverIndex) ? (drivers.get(driverIndex) || null) : null,
+      total_time: msToTime(valueAt(8)),
+      updated_at: new Date().toISOString()
     });
   }
 
-
   return rows;
 }
-
 
 // ============================================================
 // LOADERS
@@ -4343,7 +4310,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.35-original-apex-detail-protocol";
+      const repairVersion = "v6.36-raw-first-flexible-pit-parser";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4417,7 +4384,7 @@ export class ApexCollector {
       // This is independent of websocket activity and therefore also works
       // after the race is over.
       const repairKey = "finalStaticDetailRepairVersion";
-      const repairVersion = "v6.35-original-apex-detail-protocol";
+      const repairVersion = "v6.36-raw-first-flexible-pit-parser";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4744,6 +4711,20 @@ export class ApexCollector {
     this.detailRunning.add(id);
     try {
       const raw=await this.requestDetail(id,lapCount,expectedPitCount);
+
+      // RAW-FIRST: persist the exact Apex detail response BEFORE parsing it.
+      // If a future parser does not understand a record, the source data is
+      // still available and is never silently lost.  Reuse apex_raw_packets
+      // because that table already exists in this project.
+      try {
+        await sbInsert(this.env, "apex_raw_packets", {
+          race_id: this.rid,
+          payload: `DETAIL apex_id=${id}\n${raw}`
+        });
+      } catch (error) {
+        console.warn(`RAW DETAIL SAVE ${id}:`, error);
+      }
+
       const laps=parseLapRows(raw,this.rid).filter(r=>String(r.apex_id)===id);
 
       // Deduplicate by the real Apex pit number.  Never infer, synthesize or
