@@ -1315,17 +1315,19 @@ function collectorStub(env) {
 
 
 async function collectorSnapshot(env) {
-  // Use the durable collector only when its snapshot is fresh.  When the DO
-  // is unavailable/stale, obtain the current Apex full grid directly instead
-  // of inventing a field from old database rows.
+  // The collector snapshot is the last raw Apex field state we actually
+  // received.  Its age determines LIVE/FINISHED status, but it must NEVER
+  // invalidate the data itself.  When timing stops at the end of a race the
+  // last packet naturally becomes old; throwing that snapshot away was the
+  // reason the UI lost teams/laps/pits and replaced real Apex values with
+  // dashes.
   try {
     if (env?.APEX_COLLECTOR) {
       const response = await collectorStub(env).fetch("https://collector/snapshot");
       if (response.ok) {
         const snapshot = await response.json();
-        const last = Date.parse(snapshot?.last_packet_at || "") || 0;
         const ids = currentFieldIds(snapshot);
-        if (ids.size > 0 && last > 0 && Date.now() - last < 90000) {
+        if (ids.size > 0) {
           return snapshot;
         }
       }
@@ -1334,6 +1336,8 @@ async function collectorSnapshot(env) {
     console.warn("COLLECTOR SNAPSHOT FALLBACK:", error?.message || error);
   }
 
+  // Only reconnect directly to Apex when we genuinely have no collected
+  // field at all, not merely because the last valid packet is old.
   return directApexSnapshot(env);
 }
 

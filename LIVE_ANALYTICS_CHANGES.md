@@ -21,3 +21,11 @@ This build fixes the current LIVE screen using stale/incomplete Apex detail hist
 - Lap-number/time pairs now come only from Apex P/L detail parsing.
 - `refreshDetail()` no longer deletes the existing lap chain before writing a newer Apex detail response; it merges authoritative rows with upsert.
 - Deployment repair version bumped to `v6.25` so the current field is rebuilt from Apex detail once after deployment.
+
+
+## v6.26 — Preserve raw Apex snapshot after timing stops
+
+- Fixed `collectorSnapshot()` so a valid collected Apex field is not discarded only because `last_packet_at` is older than 90 seconds.
+- Snapshot age now affects only `is_live` / session status; it does not erase teams, race laps, pit counts, drivers, last laps or the field itself.
+- Direct Apex reconnect is now only a fallback when there is genuinely no collected field.
+- This removes the path that turned an ended/paused race with real Apex data into `—` summary values.
