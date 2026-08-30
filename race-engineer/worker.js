@@ -1,7 +1,11 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.19-do-independent-recovery";
+  "2026-08-30-race-datasets-v6.20-live-grid-authoritative";
 
 const PAGE_SIZE = 1000;
+
+let directSnapshotCache = null;
+let directSnapshotCacheAt = 0;
+let directSnapshotPending = null;
 
 
 // ============================================================
@@ -1299,49 +1303,60 @@ function resolveTeam(
 // ============================================================
 
 function collectorStub(env) {
-  if (!env?.APEX_COLLECTOR) {
-    return null;
-  }
-
-  return env.APEX_COLLECTOR.get(
-    env.APEX_COLLECTOR.idFromName("primary-recovery-20260830-v619")
-  );
+  return env
+    .APEX_COLLECTOR
+    .get(
+      env
+        .APEX_COLLECTOR
+        .idFromName(
+          "primary"
+        )
+    );
 }
 
 
 async function collectorSnapshot(env) {
-  const stub = collectorStub(env);
-  if (!stub) {
-    return null;
+  // Use the durable collector only when its snapshot is fresh.  When the DO
+  // is unavailable/stale, obtain the current Apex full grid directly instead
+  // of inventing a field from old database rows.
+  try {
+    if (env?.APEX_COLLECTOR) {
+      const response = await collectorStub(env).fetch("https://collector/snapshot");
+      if (response.ok) {
+        const snapshot = await response.json();
+        const last = Date.parse(snapshot?.last_packet_at || "") || 0;
+        const ids = currentFieldIds(snapshot);
+        if (ids.size > 0 && last > 0 && Date.now() - last < 90000) {
+          return snapshot;
+        }
+      }
+    }
+  } catch (error) {
+    console.warn("COLLECTOR SNAPSHOT FALLBACK:", error?.message || error);
   }
 
-  try {
-    const response = await stub.fetch("https://collector/snapshot");
-    if (!response.ok) return null;
-    return await response.json();
-  } catch (error) {
-    console.error("COLLECTOR SNAPSHOT ERROR", error);
-    return null;
-  }
+  return directApexSnapshot(env);
 }
 
 
 async function startCollector(env) {
-  const stub = collectorStub(env);
-  if (!stub) {
-    return { connected: false, available: false, fallback: true };
+  const response =
+    await collectorStub(
+      env
+    )
+      .fetch(
+        "https://collector/start"
+      );
+
+
+  if (!response.ok) {
+    throw new Error(
+      "Collector start failed"
+    );
   }
 
-  try {
-    const response = await stub.fetch("https://collector/start");
-    if (!response.ok) {
-      return { connected: false, available: true, fallback: true };
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("COLLECTOR START ERROR", error);
-    return { connected: false, available: false, fallback: true };
-  }
+
+  return response.json();
 }
 
 
@@ -1422,50 +1437,158 @@ function currentFieldIds(
 }
 
 
-function recentFieldIdsFromEntries(rows) {
-  const candidates = (rows || [])
-    .filter(row => validApexId(row?.apex_id))
-    .map(row => ({
-      id: String(row.apex_id).trim(),
-      ts: Date.parse(row.updated_at || "") || 0
-    }))
-    .sort((a, b) => b.ts - a.ts);
+function snapshotFromGrid(grid) {
+  const fieldApexIds = [];
+  const positions = Object.fromEntries(grid?.positions || []);
+  const pitCounts = {};
+  const lapCounts = {};
+  const bestLaps = {};
+  const lastLaps = {};
+  const teamNames = {};
+  const drivers = {};
 
-  if (!candidates.length) return new Set();
+  for (const [rawId, fields] of grid?.rows || []) {
+    const id = String(rawId);
+    if (!validApexId(id)) continue;
+    fieldApexIds.push(id);
 
-  const newest = candidates[0].ts;
-  if (!newest) {
-    return new Set(candidates.slice(0, 100).map(row => row.id));
-  }
+    for (const cell of Object.values(fields || {})) {
+      const type = String(cell?.type || "").toLowerCase();
+      const column = String(cell?.column || "");
+      const value = cell?.value;
 
-  // Current Apex grid rows are updated together.  Historical race_id=1
-  // rows are much older.  Stop at the first clear timestamp gap instead
-  // of depending on the Durable Object to define the live field.
-  let cut = candidates.length;
-  for (let i = 1; i < candidates.length; i++) {
-    const gap = candidates[i - 1].ts - candidates[i].ts;
-    if (i >= 10 && gap > 120000) {
-      cut = i;
-      break;
+      if (type === "drteam") {
+        const driver = cleanDriver(value);
+        if (driver) drivers[id] = driver;
+        continue;
+      }
+      if (type === "dr") {
+        const team = stripHtml(value);
+        if (team) teamNames[id] = team;
+        continue;
+      }
+      if (type === "pit" || (type === "" && column === "15")) {
+        const n = parseNumber(value);
+        if (n !== null && n >= 0) pitCounts[id] = Math.trunc(n);
+        continue;
+      }
+      if (type === "tlp" || (type === "" && column === "13")) {
+        const n = parseNumber(value);
+        if (n !== null && n >= 0) lapCounts[id] = Math.trunc(n);
+        continue;
+      }
+      if (type === "llp" || (type === "" && column === "9")) {
+        const n = parseLapTime(value);
+        if (n !== null && n > 0) lastLaps[id] = n;
+        continue;
+      }
+      // Overall race best is accepted only from Apex's semantic BLP field.
+      // No guessed column index and no current-stint best fallback.
+      if (type === "blp") {
+        const n = parseLapTime(value);
+        if (n !== null && n > 0) bestLaps[id] = n;
+      }
     }
   }
 
-  let current = candidates
-    .slice(0, cut)
-    .filter(row => newest - row.ts <= 15 * 60 * 1000);
-
-  // A normal event has far fewer than the historical 500+ ids.  If the
-  // timestamp cluster is still polluted, keep the newest coherent block.
-  if (current.length > 120) current = current.slice(0, 120);
-
-  return new Set(current.map(row => row.id));
+  const stamp = new Date().toISOString();
+  return {
+    connected: true,
+    direct_live: true,
+    data_source: "apex-live-grid",
+    packet_count: 1,
+    last_packet_at: stamp,
+    last_grid_at: stamp,
+    field_count: fieldApexIds.length,
+    fieldApexIds,
+    positions,
+    columnTypes: Object.fromEntries(grid?.columnTypes || []),
+    pitCounts,
+    lapCounts,
+    bestLaps,
+    lastLaps,
+    teamNames,
+    drivers
+  };
 }
 
+function gridFromApexPayload(payload) {
+  const text = String(payload || "");
+  let best = null;
 
-function effectiveFieldIds(snapshot, entries) {
-  const live = currentFieldIds(snapshot);
-  if (live.size) return live;
-  return recentFieldIdsFromEntries(entries);
+  if (text.includes("<tr") && text.includes("data-id=")) {
+    const grid = parseGridData(text);
+    if (grid.rows.size) best = grid;
+  }
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const update = parseProtocolLine(line);
+    if (update.id !== "grid") continue;
+    const grid = parseGridData(update.value);
+    if (!best || grid.rows.size > best.rows.size) best = grid;
+  }
+
+  return best;
+}
+
+async function directApexSnapshot(env) {
+  const now = Date.now();
+  if (directSnapshotCache && now - directSnapshotCacheAt < 2500) {
+    return directSnapshotCache;
+  }
+  if (directSnapshotPending) return directSnapshotPending;
+
+  directSnapshotPending = new Promise((resolve, reject) => {
+    let settled = false;
+    let ws = null;
+    let timer = null;
+
+    const finish = (error, snapshot) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      try { ws?.close(1000, "snapshot complete"); } catch {}
+      if (error) reject(error);
+      else resolve(snapshot);
+    };
+
+    timer = setTimeout(() => finish(new Error("Apex live grid timeout")), 7000);
+
+    try {
+      ws = new WebSocket(env.APEX_WS_URL || "wss://live-data.apex-timing.com:8913/");
+      ws.addEventListener("message", async event => {
+        try {
+          let payload;
+          if (typeof event.data === "string") payload = event.data;
+          else if (event.data && typeof event.data.text === "function") payload = await event.data.text();
+          else payload = new TextDecoder().decode(event.data);
+
+          const grid = gridFromApexPayload(payload);
+          if (!grid || grid.rows.size < 10) return;
+          const snapshot = snapshotFromGrid(grid);
+          if (!snapshot.field_count) return;
+
+          directSnapshotCache = snapshot;
+          directSnapshotCacheAt = Date.now();
+          finish(null, snapshot);
+        } catch (error) {
+          console.warn("DIRECT GRID PACKET:", error?.message || error);
+        }
+      });
+      ws.addEventListener("error", () => finish(new Error("Apex live websocket error")));
+      ws.addEventListener("close", () => {
+        if (!settled) finish(new Error("Apex live websocket closed before grid"));
+      });
+    } catch (error) {
+      finish(error);
+    }
+  }).finally(() => {
+    directSnapshotPending = null;
+  });
+
+  return directSnapshotPending;
 }
 
 
@@ -2014,13 +2137,13 @@ function calculateRawStintStats(apexId, lapRows, startLap, endLap, exclusions) {
 // ============================================================
 
 async function stintsPayload(env, rid, snapshot = null) {
-  const realSnapshot = snapshot || await collectorSnapshot(env);
-  const entriesRaw = await loadEntries(env, rid).catch(() => []);
-  const fieldIds = effectiveFieldIds(realSnapshot, entriesRaw);
+  const realSnapshot = snapshot || await collectorSnapshot(env).catch(() => null);
+  const fieldIds = currentFieldIds(realSnapshot);
   if (!fieldIds.size) return [];
 
-  const [pitsRaw, exclusionsRaw, lapRaw, teamMap] = await Promise.all([
+  const [pitsRaw, entriesRaw, exclusionsRaw, lapRaw, teamMap] = await Promise.all([
     loadPits(env, rid),
+    loadEntries(env, rid),
     loadExclusions(env, rid),
     loadLapEventsForApexIds(env, rid, fieldIds),
     stableTeamNameMap(env, rid)
@@ -2612,11 +2735,11 @@ function teamsFromDrivers(
 // LIVE OVERVIEW
 // ============================================================
 
-async function livePayload(env, rid) {
+async function livePayload(env, rid, suppliedSnapshot = null) {
   const [entriesRaw, snapshot, teamMap] = await Promise.all([
-    loadEntries(env, rid).catch(() => []), collectorSnapshot(env), stableTeamNameMap(env, rid)
+    loadEntries(env, rid), suppliedSnapshot ? Promise.resolve(suppliedSnapshot) : collectorSnapshot(env).catch(() => null), stableTeamNameMap(env, rid)
   ]);
-  const fieldIds=effectiveFieldIds(snapshot, entriesRaw);
+  const fieldIds=currentFieldIds(snapshot);
   if (!fieldIds.size) return {
     race_id:Number(rid), session_name:"Apex Timing", active:false, data_available:false,
     is_live:false, session_status:"WAITING FOR APEX GRID", team_count:0, race_lap:0, pit_count:0, best_lap:null, current:[]
@@ -2630,27 +2753,31 @@ async function livePayload(env, rid) {
   let raceLap=0,pitTotal=0,raceBest=null;
 
   for (const value of fieldIds) {
-    const id=String(value), entry=entryById.get(id)||{}, live=liveById.get(id)||{};
+    const id=String(value), entry=entryById.get(id)||{}, liveCandidate=liveById.get(id)||{};
     const sl=Number(snapshot?.lapCounts?.[id]);
-    const lap=Number.isFinite(sl)?sl:(Number(entry.lap_count)||0);
+    // A live row never falls back to an old race_id=1 lap count.
+    const lap=Number.isFinite(sl)?sl:0;
+    const expectedStint=(Number(snapshot?.pitCounts?.[id])||0)+1;
+    const live=(Number(liveCandidate.stint_number)===expectedStint && Number(liveCandidate.current_lap_count)===lap) ? liveCandidate : {};
     raceLap=Math.max(raceLap,lap);
     const sp=Number(snapshot?.pitCounts?.[id]);
-    const pitCount=Number.isFinite(sp)?Math.max(0,Math.trunc(sp)):Math.max(0,(Number(live.stint_number)||1)-1);
+    const pitCount=Number.isFinite(sp)?Math.max(0,Math.trunc(sp)):0;
     pitTotal+=pitCount;
     const sb=Number(snapshot?.bestLaps?.[id]);
-    const eb=Number(entry.best_lap);
-    const best = Number.isFinite(sb) && sb > 0 ? sb : (Number.isFinite(eb) && eb > 0 ? eb : null);
-    if (best !== null && (raceBest===null||best<raceBest)) raceBest=best;
+    // Overall BEST LAP is authoritative from the current live Apex grid.
+    // Never fall back to apex_entries here because race_id can be reused and
+    // an entry may still contain a best from an older session.
+    if (Number.isFinite(sb)&&sb>0&&(raceBest===null||sb<raceBest)) raceBest=sb;
     const pos=Number(snapshot?.positions?.[id]);
 
     current.push({
       race_id:Number(rid),apex_id:id,position:Number.isFinite(pos)?pos:null,
-      team_name:resolveTeam(id,teamMap,entry.team_name,live.team_name),
-      driver_name:live.driver_name||entry.current_driver||null,current_driver:live.driver_name||entry.current_driver||null,
+      team_name:resolveTeam(id,teamMap,snapshot?.teamNames?.[id],entry.team_name,live.team_name),
+      driver_name:snapshot?.drivers?.[id]||live.driver_name||entry.current_driver||null,current_driver:snapshot?.drivers?.[id]||live.driver_name||entry.current_driver||null,
       race_lap:lap,live_lap_count:lap,pit_count:pitCount,
       stint_number:number(live.stint_number)||pitCount+1,start_lap_count:number(live.start_lap_count)||0,
       stint_laps:number(live.total_laps)||0,total_stint_laps:number(live.total_laps)||0,
-      valid_laps:number(live.valid_laps)||0,live_last_lap:number(entry.last_lap),
+      valid_laps:number(live.valid_laps)||0,live_last_lap:number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap),
       avg_lap_time:number(live.avg_lap_time),best_lap_time:number(live.best_lap_time),
       best_lap_number:number(live.best_lap_number),worst_lap_time:number(live.worst_lap_time),
       worst_lap_number:number(live.worst_lap_number),consistency:number(live.consistency),updated_at:entry.updated_at||null
@@ -2661,12 +2788,10 @@ async function livePayload(env, rid) {
     if(Number.isFinite(a.position))return -1;if(Number.isFinite(b.position))return 1;return b.race_lap-a.race_lap;
   });
   const lastPacket=Date.parse(snapshot?.last_packet_at||"");
-  const newestEntry=Math.max(0,...entries.map(row=>Date.parse(row.updated_at||"")||0));
-  const activityTime=Number.isFinite(lastPacket)&&lastPacket>0?lastPacket:newestEntry;
-  const isLive=activityTime>0&&Date.now()-activityTime<180000;
+  const isLive=Number.isFinite(lastPacket)&&Date.now()-lastPacket<180000;
   return {race_id:Number(rid),session_name:"Apex Timing",active:current.length>0,data_available:current.length>0,
     is_live:isLive,session_status:isLive?"LIVE":"FINISHED",collector_connected:snapshot?.connected===true,
-    team_count:current.length,race_lap:raceLap,pit_count:pitTotal,best_lap:raceBest,current};
+    team_count:current.length,race_lap:raceLap,pit_count:pitTotal,best_lap:raceBest,race_best_lap:raceBest,current};
 }
 
 // ============================================================
@@ -4474,18 +4599,11 @@ export default {
         url.pathname ===
         "/api/collector/status"
       ) {
-        const snapshot = await collectorSnapshot(env);
-        if (snapshot) return json(snapshot);
-
-        const entries = await loadEntries(env, raceId(env)).catch(() => []);
-        const fieldIds = recentFieldIdsFromEntries(entries);
-        return json({
-          connected: false,
-          available: false,
-          fallback: true,
-          field_count: fieldIds.size,
-          fieldApexIds: [...fieldIds]
-        });
+        return json(
+          await collectorSnapshot(
+            env
+          )
+        );
       }
 
 
@@ -4493,20 +4611,27 @@ export default {
         url.pathname ===
         "/api/collector/reconnect"
       ) {
-        const stub = collectorStub(env);
-        if (!stub) {
-          return json({ connected:false, available:false, fallback:true });
-        }
-        try {
-          const response = await stub.fetch("https://collector/reconnect");
-          return new Response(await response.text(), {
-            status: response.status,
-            headers: { "content-type": "application/json" }
-          });
-        } catch (error) {
-          console.error("COLLECTOR RECONNECT ERROR", error);
-          return json({ connected:false, available:false, fallback:true });
-        }
+        const response =
+          await collectorStub(
+            env
+          )
+            .fetch(
+              "https://collector/reconnect"
+            );
+
+
+        return new Response(
+          await response.text(),
+          {
+            status:
+              response.status,
+
+            headers: {
+              "content-type":
+                "application/json"
+            }
+          }
+        );
       }
 
 
@@ -4540,10 +4665,12 @@ export default {
         );
 
 
+        const snapshot = await collectorSnapshot(env).catch(() => null);
         return json(
           await livePayload(
             env,
-            raceId(env)
+            raceId(env),
+            snapshot
           )
         );
       }
@@ -4553,10 +4680,12 @@ export default {
         url.pathname ===
         "/api/overview"
       ) {
+        const snapshot = await collectorSnapshot(env).catch(() => null);
         const payload =
           await livePayload(
             env,
-            rid
+            rid,
+            snapshot
           );
 
 
@@ -4587,9 +4716,19 @@ export default {
           "/api/reports/pit-stops.html"
       ) {
 
-        const snapshot = await collectorSnapshot(env);
-        const scopeEntries = await loadEntries(env, rid).catch(() => []);
-        const fieldIds = effectiveFieldIds(snapshot, scopeEntries);
+        const snapshot =
+          await collectorSnapshot(
+            env
+          )
+            .catch(
+              () => null
+            );
+
+
+        const fieldIds =
+          currentFieldIds(
+            snapshot
+          );
 
 
         if (
