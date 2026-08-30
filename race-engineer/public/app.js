@@ -1956,31 +1956,19 @@ function renderOverviewSummary() {
       );
 
 
-  /*
-   * LIVE summary values are already calculated by /api/live.
-   * In particular, data.best_lap is the current-race overall Apex best.
-   * Do NOT recalculate the BEST LAP card from current[].best_lap_time:
-   * that field is intentionally the best lap of the CURRENT STINT.
-   */
   const liveTeams =
     isLiveRace()
-      ? number(
-          S.liveMeta?.team_count
-        )
+      ? number(S.liveMeta?.team_count)
       : null;
 
   const liveRaceLap =
     isLiveRace()
-      ? number(
-          S.liveMeta?.race_lap
-        )
+      ? number(S.liveMeta?.race_lap)
       : null;
 
   const livePitStops =
     isLiveRace()
-      ? number(
-          S.liveMeta?.pit_count
-        )
+      ? number(S.liveMeta?.pit_count)
       : null;
 
   const liveRaceBest =
@@ -1994,21 +1982,13 @@ function renderOverviewSummary() {
 
   if ($("summaryTeams")) {
     $("summaryTeams").textContent =
-      (
-        liveTeams !== null
-          ? liveTeams
-          : rows.length
-      ) || "—";
+      (liveTeams !== null ? liveTeams : rows.length) || "—";
   }
 
 
   if ($("summaryRaceLap")) {
     $("summaryRaceLap").textContent =
-      (
-        liveRaceLap !== null
-          ? liveRaceLap
-          : calculatedRaceLap
-      ) || "—";
+      (liveRaceLap !== null ? liveRaceLap : calculatedRaceLap) || "—";
   }
 
 
@@ -2022,16 +2002,9 @@ function renderOverviewSummary() {
 
   if ($("summaryBestLap")) {
     const best =
-      liveRaceBest !== null &&
-      liveRaceBest > 0
+      liveRaceBest !== null && liveRaceBest > 0
         ? liveRaceBest
-        : (
-            historicalBest.length
-              ? Math.min(
-                  ...historicalBest
-                )
-              : null
-          );
+        : (historicalBest.length ? Math.min(...historicalBest) : null);
 
     $("summaryBestLap").textContent =
       best !== null
@@ -2039,7 +2012,6 @@ function renderOverviewSummary() {
         : "—";
   }
 }
-
 
 
 // ============================================================
