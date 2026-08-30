@@ -1897,13 +1897,9 @@ function renderOverviewSummary() {
   const rows =
     S.overview;
 
-
-  const calculatedRaceLap =
+  const rowRaceLap =
     rows.reduce(
-      (
-        max,
-        row
-      ) =>
+      (max, row) =>
         Math.max(
           max,
           number(
@@ -1918,13 +1914,9 @@ function renderOverviewSummary() {
       0
     );
 
-
-  const calculatedPitStops =
+  const rowPitStops =
     rows.reduce(
-      (
-        total,
-        row
-      ) =>
+      (total, row) =>
         total +
         (
           number(
@@ -1935,8 +1927,7 @@ function renderOverviewSummary() {
       0
     );
 
-
-  const historicalBest =
+  const rowBest =
     rows
       .map(
         row =>
@@ -1955,60 +1946,57 @@ function renderOverviewSummary() {
           value > 0
       );
 
+  const liveSummary =
+    isLiveRace() &&
+    S.liveMeta;
 
-  const liveTeams =
-    isLiveRace()
-      ? number(S.liveMeta?.team_count)
-      : null;
+  const teams =
+    liveSummary
+      ? (number(S.liveMeta.team_count) ?? rows.length)
+      : rows.length;
 
-  const liveRaceLap =
-    isLiveRace()
-      ? number(S.liveMeta?.race_lap)
-      : null;
+  const raceLap =
+    liveSummary
+      ? (number(S.liveMeta.race_lap) ?? rowRaceLap)
+      : rowRaceLap;
 
-  const livePitStops =
-    isLiveRace()
-      ? number(S.liveMeta?.pit_count)
-      : null;
+  const pitStops =
+    liveSummary
+      ? (number(S.liveMeta.pit_count) ?? rowPitStops)
+      : rowPitStops;
 
-  const liveRaceBest =
-    isLiveRace()
+  const bestLap =
+    liveSummary
       ? number(
-          S.liveMeta?.race_best_lap ??
-          S.liveMeta?.best_lap
+          S.liveMeta.race_best_lap ??
+          S.liveMeta.best_lap
         )
-      : null;
-
+      : (
+          rowBest.length
+            ? Math.min(...rowBest)
+            : null
+        );
 
   if ($("summaryTeams")) {
     $("summaryTeams").textContent =
-      (liveTeams !== null ? liveTeams : rows.length) || "—";
+      teams || "—";
   }
-
 
   if ($("summaryRaceLap")) {
     $("summaryRaceLap").textContent =
-      (liveRaceLap !== null ? liveRaceLap : calculatedRaceLap) || "—";
+      raceLap || "—";
   }
-
 
   if ($("summaryPits")) {
     $("summaryPits").textContent =
-      livePitStops !== null
-        ? livePitStops
-        : calculatedPitStops;
+      pitStops ?? 0;
   }
 
-
   if ($("summaryBestLap")) {
-    const best =
-      liveRaceBest !== null && liveRaceBest > 0
-        ? liveRaceBest
-        : (historicalBest.length ? Math.min(...historicalBest) : null);
-
     $("summaryBestLap").textContent =
-      best !== null
-        ? time(best)
+      bestLap !== null &&
+      bestLap > 0
+        ? time(bestLap)
         : "—";
   }
 }
