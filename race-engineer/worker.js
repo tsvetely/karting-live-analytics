@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.15-detail-best-minimal";
+  "2026-08-30-race-datasets-v6.16-stable-collector-race-best";
 
 const PAGE_SIZE = 1000;
 
@@ -4090,24 +4090,6 @@ export class ApexCollector {
         throw new Error(`Incomplete Apex detail ${id}: ${laps.length} laps, max ${maxLap}, expected ${lapCount}`);
       }
 
-      // Authoritative current-race personal best for this kart. The detail
-      // request above asks Apex for the COMPLETE current lap history. Calculate
-      // the minimum only after that response has passed the completeness check.
-      // This is deliberately separate from current-stint BEST.
-      const detailBest = laps.reduce((best, row) => {
-        const t = Number(row.lap_time);
-        if (!Number.isFinite(t) || t <= 0) return best;
-        return best === null || t < best ? t : best;
-      }, null);
-
-      if (detailBest !== null) {
-        const previous = Number(this.bestLaps.get(id));
-        if (!Number.isFinite(previous) || previous <= 0 || detailBest < previous) {
-          this.bestLaps.set(id, detailBest);
-          await this.upsertEntry(id, {best_lap: detailBest});
-        }
-      }
-
       // race_id=1 is reused. Once a complete CURRENT detail response is in hand,
       // replace this kart's contaminated raw history with the current session.
       await sbDelete(this.env,"apex_lap_events",{race_id:`eq.${this.rid}`,apex_id:`eq.${id}`});
@@ -4163,18 +4145,17 @@ export class ApexCollector {
     if(t==="llp"||c==="llp"||col==="9"){
       const v=parseLapTime(value);if(v!==null){this.lastLaps.set(id,v);await this.upsertEntry(id,{last_lap:v});}return;
     }
-    // IMPORTANT: do not infer Best lap from a hard-coded column number.
-    // Apex column positions/layout can change between event formats. Only an
-    // explicitly typed BLP field is accepted here. The authoritative fallback
-    // is the complete current-session detail history in refreshDetail().
-    if(t==="blp"||c==="blp"){
+    if(t==="blp"||c==="blp"||col==="12"){
       const v=parseLapTime(value);
       if(v!==null&&v>0){
         const previous=Number(this.bestLaps.get(id));
+        // A kart's race best can only improve during one session.  Some Apex
+        // full-grid packets are partial/transitional; never replace a known
+        // faster current-session best with a slower value from such a packet.
         if(!Number.isFinite(previous)||previous<=0||v<previous){
           this.bestLaps.set(id,v);
-          await this.upsertEntry(id,{best_lap:v});
         }
+        await this.upsertEntry(id,{best_lap:this.bestLaps.get(id)});
       }
       return;
     }
@@ -4256,10 +4237,27 @@ export class ApexCollector {
             const n = Number(value);
             if (Number.isFinite(n)) storedMaxLap = Math.max(storedMaxLap, n);
           }
+          const previousGridAt = Date.parse(this.lastGridAt || "");
+          const gridGapMs = Number.isFinite(previousGridAt)
+            ? Date.now() - previousGridAt
+            : Number.POSITIVE_INFINITY;
+
+          // Reset cumulative live metrics only for a credible NEW race.
+          // A partial/transitional Apex grid during the same race must never
+          // wipe the already known race best.
+          const fullEnoughGrid = grid.rows.size >= 20;
+          const realLapDrop =
+            incomingMaxLap > 0 &&
+            storedMaxLap >= 30 &&
+            incomingMaxLap + 20 < storedMaxLap;
+          const credibleNewStart =
+            incomingMaxLap <= 10 ||
+            gridGapMs > 30 * 60 * 1000;
+
           const newSession =
-            storedMaxLap >= 20 &&
-            incomingMaxLap >= 0 &&
-            incomingMaxLap + 15 < storedMaxLap;
+            fullEnoughGrid &&
+            realLapDrop &&
+            credibleNewStart;
 
           if (newSession) {
             this.pitCounts = new Map();
