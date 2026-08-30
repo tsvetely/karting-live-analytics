@@ -1,4 +1,4 @@
-const VERSION = "2026-08-30-race-engineer-v8.4-live-grid-authoritative-metrics";
+const VERSION = "2026-08-30-race-engineer-v8.5-apex-column-metrics-current-pits";
 const PAGE_SIZE = 1000;
 const BACKFILL_BATCH = 2;
 const LIVE_PACKET_TTL_MS = 180000;
@@ -1242,10 +1242,21 @@ function fieldSemantic(type, column = null, label = null) {
   if (l === "pits" || l === "pit") return "pit_count";
   if (l === "team") return "team_name";
   if (l === "driver") return "current_driver";
-  if (["best","blp","bestlap","best_lap"].includes(t)) return "best_lap";
-  if (["last","llp","lastlap","last_lap"].includes(t)) return "last_lap";
+  /*
+   * Apex commonv2 live grid uses generic field types for several
+   * timing columns.  The stable column numbers for this layout are:
+   *   c9  = Last lap
+   *   c12 = Best lap
+   *   c13 = Laps
+   *   c15 = Pits
+   * Header labels are not guaranteed to be present in websocket grid
+   * packets, so the current-race metrics must also recognize these
+   * columns directly.
+   */
+  if ((t === "tn" && column === "12") || ["best","blp","bestlap","best_lap"].includes(t)) return "best_lap";
+  if ((t === "tn" && column === "9") || ["last","llp","lastlap","last_lap"].includes(t)) return "last_lap";
   if (["laps","tlp","lapcount","lap_count"].includes(t) || (t === "in" && column === "13")) return "lap_count";
-  if (["pits","pitcount","pit_count"].includes(t)) return "pit_count";
+  if (["pits","pitcount","pit_count"].includes(t) || (t === "in" && column === "15")) return "pit_count";
   if (["drteam","driver","drivername","current_driver"].includes(t)) return "current_driver";
   if (["dr","team","teamname"].includes(t)) return "team_name";
   return null;
@@ -2565,11 +2576,15 @@ async function stintsPayload(
     );
 
   const pits =
-    uniquePits(
-      filterByIds(
-        pitsRaw,
-        fieldIds
-      )
+    scopePitsToSnapshotCounts(
+      uniquePits(
+        filterByIds(
+          pitsRaw,
+          fieldIds
+        )
+      ),
+      fieldIds,
+      isCurrentRace ? snapshot : null
     )
       .filter(
         row =>
@@ -3538,12 +3553,17 @@ async function livePayload(
       if (!fieldIds.has(id) || !Number.isFinite(candidate) || candidate <= 0) continue;
       if (bestLap === null || candidate < bestLap) bestLap = candidate;
     }
-  } else {
-    for (const [id, entry] of entries) {
-      if (!fieldIds.has(id)) continue;
-      const candidate = Number(entry.best_lap);
-      if (Number.isFinite(candidate) && candidate > 0 && (bestLap === null || candidate < bestLap)) bestLap = candidate;
-    }
+  }
+
+  /*
+   * During reconnect the collector may have only part of the live-best
+   * map populated.  Current entry values are still useful as fallback,
+   * but they must never replace a faster live-grid value.
+   */
+  for (const [id, entry] of entries) {
+    if (!fieldIds.has(id)) continue;
+    const candidate = Number(entry.best_lap);
+    if (Number.isFinite(candidate) && candidate > 0 && (bestLap === null || candidate < bestLap)) bestLap = candidate;
   }
 
   for (
