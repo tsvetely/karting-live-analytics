@@ -4306,7 +4306,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.27";
+      const repairVersion = "v6.29-final-detail-backfill";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4325,6 +4325,16 @@ export class ApexCollector {
       path === "/status" ||
       path === "/snapshot"
     ) {
+      // Keep detail history complete even when the race has already finished
+      // and Apex is no longer sending websocket changes. The helper itself is
+      // throttled to one full-field refresh every 5 minutes. This backfills
+      // late pit rows/laps that were visible on the final Apex detail page but
+      // were not persisted while the race was live.
+      this.state.waitUntil(
+        this.refreshAllFieldDetails(false)
+          .catch(e => console.error("DETAIL BACKFILL:", e))
+      );
+
       return json(
         await this.snapshot()
       );
