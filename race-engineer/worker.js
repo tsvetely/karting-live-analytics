@@ -2398,11 +2398,7 @@ async function stintsPayload(env, rid, snapshot = null) {
     const lastRecordedLap = laps.reduce((max,row)=>Math.max(max,Number(row.lap_number)||0),0);
     const currentLap=isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap) ? entryLap : lastRecordedLap);
     const expectedPitCount=isCurrentRace ? Number(realSnapshot?.pitCounts?.[id]) : teamPits.length;
-    const expectedPitNumber=Number.isFinite(expectedPitCount)?Math.max(0,Math.trunc(expectedPitCount)):null;
-    const newestPitUpdate=Math.max(0,...teamPits.map(p=>Date.parse(p.updated_at||"")||0));
-    const pitDataFresh=expectedPitNumber===0 || (newestPitUpdate>0 && Date.now()-newestPitUpdate<=180000);
-    const pitChainSynchronized=!isCurrentRace || expectedPitNumber===null || (expectedPitNumber===teamPits.length && pitDataFresh);
-    if (Number.isFinite(currentLap) && (pitChainSynchronized ? currentLap>=start : currentLap>=0)) {
+    if (Number.isFinite(currentLap) && currentLap>=start) {
       const emptyStats={
         valid_laps:0, avg_lap_time:null, best_lap_time:null, best_lap_number:null,
         worst_lap_time:null, worst_lap_number:null, consistency:null,
@@ -2410,23 +2406,22 @@ async function stintsPayload(env, rid, snapshot = null) {
         reverse_valid_laps:0,reverse_avg_lap_time:null,reverse_best_lap_time:null,reverse_best_lap_number:null,reverse_worst_lap_time:null,reverse_worst_lap_number:null,
         rain_valid_laps:0,rain_avg_lap_time:null,rain_best_lap_time:null,rain_best_lap_number:null,rain_worst_lap_time:null,rain_worst_lap_number:null
       };
-      const stats=pitChainSynchronized && currentLap>start
+      const stats=currentLap>start
         ? (calculateRawStintStats(id,laps,start,currentLap,exclusions,{globalExcluded,splitRange:splitById.get(id),rainStartLap:rainStartById.get(id)}) || emptyStats)
         : emptyStats;
       const liveStintNumber=isCurrentRace && Number.isFinite(expectedPitCount)
         ? Math.max(1,Math.trunc(expectedPitCount)+1)
         : stintNumber;
-      const liveStart=pitChainSynchronized ? start : null;
       result.push({
         race_id:Number(rid), apex_id:id,
         team_name:resolveTeam(id,teamMap,entry.team_name),
         driver_name:entry.current_driver||null,
-        stint_number:liveStintNumber, start_lap_count:liveStart,
+        stint_number:liveStintNumber, start_lap_count:start,
         end_lap_count:isCurrentRace?null:currentLap,
-        current_lap_count:currentLap, total_laps:pitChainSynchronized?Math.max(0,currentLap-start):null, ...stats,
+        current_lap_count:currentLap, total_laps:Math.max(0,currentLap-start), ...stats,
         pit_hour:null,on_track:null,pit_time:null,total_time:null,
-        is_live:isCurrentRace,status:isCurrentRace?(pitChainSynchronized?"LIVE":"SYNCING_PITS"):"COMPLETED",
-        data_complete:pitChainSynchronized, expected_pit_count:Number.isFinite(expectedPitCount)?Math.trunc(expectedPitCount):null, stored_pit_count:teamPits.length,
+        is_live:isCurrentRace,status:isCurrentRace?"LIVE":"COMPLETED",
+        data_complete:true, expected_pit_count:Number.isFinite(expectedPitCount)?Math.trunc(expectedPitCount):null, stored_pit_count:teamPits.length,
         direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
     }
@@ -4140,7 +4135,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.23";
+      const repairVersion = "v6.24";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4210,11 +4205,6 @@ export class ApexCollector {
       } catch {}
     }
 
-
-    // Keep Apex detail history synchronized even when individual websocket
-    // field updates are partial. This is the authoritative source for raw laps
-    // and pit boundaries used by the analytics.
-    this.state.waitUntil(this.refreshAllFieldDetails(false));
 
     await this.state.storage.setAlarm(
       Date.now() +
@@ -4541,7 +4531,7 @@ export class ApexCollector {
   async refreshAllFieldDetails(force = false) {
     const now=Date.now();
     if(this.fullDetailRefreshRunning)return;
-    if(!force && now-this.lastFullDetailRefreshAt<55000)return;
+    if(!force && now-this.lastFullDetailRefreshAt<300000)return;
     const ids=[...this.fieldApexIds].map(String).filter(validApexId);
     if(!ids.length)return;
     this.fullDetailRefreshRunning=true;
@@ -4731,7 +4721,6 @@ export class ApexCollector {
           }
 
           await this.persist();
-          this.state.waitUntil(this.refreshAllFieldDetails(false));
         }
 
 
