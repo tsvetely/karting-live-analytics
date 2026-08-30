@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.5-grid-authoritative-full-backfill";
+  "2026-08-30-race-datasets-v6.1-stable-field-archive";
 
 const PAGE_SIZE = 1000;
 
@@ -806,19 +806,10 @@ function parseGridData(html) {
 
 
       if (type) {
-        /*
-         * Keep the physical Apex column number as well as data-type.
-         * Several live-grid columns share generic classes (for example
-         * tn/in), so dropping c9/c12/c13/c15 makes Last/Best/Laps/Pits
-         * impossible to distinguish on a full grid packet.
-         */
-        fields[`c${id[1]}`] = {
-          type,
-          column: id[1],
-          value: stripHtml(
+        fields[type] =
+          stripHtml(
             cellMatch[2]
-          )
-        };
+          );
       }
     }
 
@@ -2013,181 +2004,6 @@ function fallbackStintsFromPits(
 }
 
 
-
-// ============================================================
-// CURRENT PIT CHAIN + RAW LAP ANALYTICS
-// ============================================================
-
-function currentPitsFromSnapshot(pits, snapshot) {
-  const counts = snapshot?.pitCounts || {};
-  const grouped = new Map();
-
-  for (const pit of pits || []) {
-    const id = String(pit.apex_id ?? "").trim();
-    if (!validApexId(id)) continue;
-    if (!grouped.has(id)) grouped.set(id, []);
-    grouped.get(id).push(pit);
-  }
-
-  const result = [];
-
-  for (const [id, rows] of grouped) {
-    rows.sort((a, b) => {
-      const la = Number(a.pit_lap);
-      const lb = Number(b.pit_lap);
-      if (Number.isFinite(la) && Number.isFinite(lb) && la !== lb) return la - lb;
-      return (Number(a.pit_number) || 0) - (Number(b.pit_number) || 0);
-    });
-
-    // Collapse duplicate pit boundaries first. The current detail refresh
-    // may overwrite the same pit_number, while old race_id=1 rows can leave
-    // additional stale rows behind.
-    const unique = [];
-    const seen = new Set();
-    for (const row of rows) {
-      const lap = Number(row.pit_lap);
-      if (!Number.isFinite(lap) || lap <= 0) continue;
-      const key = Math.trunc(lap);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      unique.push(row);
-    }
-
-    const currentCount = Number(counts[id]);
-    if (Number.isFinite(currentCount) && currentCount >= 0) {
-      result.push(...unique.slice(0, Math.trunc(currentCount)));
-    } else {
-      result.push(...unique);
-    }
-  }
-
-  return result;
-}
-
-async function loadLapEventsForApexIds(env, rid, fieldIds) {
-  const ids = [...(fieldIds || [])]
-    .map(value => String(value).trim())
-    .filter(validApexId);
-
-  if (!ids.length) return [];
-
-  return sbGetAll(
-    env,
-    "apex_lap_events",
-    {
-      select: "apex_id,lap_number,lap_time",
-      race_id: `eq.${rid}`,
-      apex_id: `in.(${ids.join(",")})`,
-      order: "apex_id.asc,lap_number.asc"
-    }
-  ).catch(() => []);
-}
-
-function manualExclusionSet(rows) {
-  const result = new Set();
-  for (const row of rows || []) {
-    const id = String(row.apex_id ?? "").trim();
-    const lap = Number(row.lap_number);
-    if (validApexId(id) && Number.isFinite(lap)) {
-      result.add(`${id}:${Math.trunc(lap)}`);
-    }
-  }
-  return result;
-}
-
-function calculateRawStintStats(apexId, lapRows, startLap, endLap, exclusions) {
-  const start = Number(startLap) || 0;
-  const end = Number(endLap);
-
-  if (!Number.isFinite(end) || end <= start) {
-    return {
-      valid_laps: 0,
-      avg_lap_time: null,
-      best_lap_time: null,
-      best_lap_number: null,
-      worst_lap_time: null,
-      worst_lap_number: null,
-      consistency: null
-    };
-  }
-
-  const byLap = new Map();
-  for (const row of lapRows || []) {
-    const lap = Number(row.lap_number);
-    const time = Number(row.lap_time);
-    if (!Number.isFinite(lap) || !Number.isFinite(time) || lap <= 0 || time <= 0) continue;
-    byLap.set(Math.trunc(lap), time);
-  }
-
-  const valid = [];
-  const pitOutLap = start > 0 ? start + 1 : null;
-
-  for (const [lap, time] of byLap) {
-    if (lap <= start || lap > end) continue;
-    if (pitOutLap !== null && lap === pitOutLap) continue;
-    if (exclusions.has(`${apexId}:${lap}`)) continue;
-    valid.push({ lap, time });
-  }
-
-  valid.sort((a, b) => a.lap - b.lap);
-
-  if (!valid.length) {
-    return {
-      valid_laps: 0,
-      avg_lap_time: null,
-      best_lap_time: null,
-      best_lap_number: null,
-      worst_lap_time: null,
-      worst_lap_number: null,
-      consistency: null
-    };
-  }
-
-  const avg = valid.reduce((sum, row) => sum + row.time, 0) / valid.length;
-  let best = valid[0];
-  let worst = valid[0];
-  let variance = 0;
-
-  for (const row of valid) {
-    if (row.time < best.time) best = row;
-    if (row.time > worst.time) worst = row;
-  }
-
-  for (const row of valid) {
-    variance += (row.time - avg) ** 2;
-  }
-
-  return {
-    valid_laps: valid.length,
-    avg_lap_time: avg,
-    best_lap_time: best.time,
-    best_lap_number: best.lap,
-    worst_lap_time: worst.time,
-    worst_lap_number: worst.lap,
-    consistency: Math.sqrt(variance / valid.length)
-  };
-}
-
-function savedStatsAreUsable(row, expectedStart, expectedEnd) {
-  if (!row) return false;
-
-  const start = Number(row.start_lap_count ?? 0);
-  const end = Number(row.end_lap_count ?? row.current_lap_count);
-  const valid = Number(row.valid_laps);
-  const avg = Number(row.avg_lap_time ?? row.avg_lap);
-  const best = Number(row.best_lap_time ?? row.best_lap);
-  const worst = Number(row.worst_lap_time ?? row.worst_lap);
-
-  return (
-    start === Number(expectedStart) &&
-    end === Number(expectedEnd) &&
-    Number.isFinite(valid) && valid > 0 &&
-    Number.isFinite(avg) && avg > 0 &&
-    Number.isFinite(best) && best > 0 &&
-    Number.isFinite(worst) && worst > 0
-  );
-}
-
 // ============================================================
 // STINT DATASET
 // ============================================================
@@ -2199,154 +2015,326 @@ async function stintsPayload(
 ) {
   const realSnapshot =
     snapshot ||
-    await collectorSnapshot(env).catch(() => null);
+    await collectorSnapshot(
+      env
+    )
+      .catch(
+        () => null
+      );
 
-  const fieldIds = currentFieldIds(realSnapshot);
-  if (fieldIds.size === 0) return [];
 
-  const [completedRaw, pitsRaw, entriesRaw, exclusionsRaw, lapRowsRaw, teamMap] =
+  const fieldIds =
+    currentFieldIds(
+      realSnapshot
+    );
+
+
+  if (
+    fieldIds.size === 0
+  ) {
+    return [];
+  }
+
+
+  const [
+    completedRaw,
+    liveRaw,
+    pitsRaw,
+    entriesRaw,
+    teamMap
+  ] =
     await Promise.all([
-      loadCompletedStints(env, rid),
-      loadPits(env, rid),
-      loadEntries(env, rid),
-      loadExclusions(env, rid),
-      loadLapEventsForApexIds(env, rid, fieldIds),
-      stableTeamNameMap(env, rid)
+      loadCompletedStints(
+        env,
+        rid
+      ),
+
+      loadLiveStints(
+        env,
+        rid
+      ),
+
+      loadPits(
+        env,
+        rid
+      ),
+
+      loadEntries(
+        env,
+        rid
+      ),
+
+      stableTeamNameMap(
+        env,
+        rid
+      )
     ]);
 
-  const completed = filterCurrentField(completedRaw, fieldIds);
-  const entries = filterCurrentField(entriesRaw, fieldIds);
-  const pits = currentPitsFromSnapshot(
-    filterCurrentField(pitsRaw, fieldIds),
-    realSnapshot
-  );
-  const exclusions = manualExclusionSet(
-    filterCurrentField(exclusionsRaw, fieldIds)
-  );
 
-  const entriesById = new Map(
-    entries.map(row => [String(row.apex_id), row])
-  );
+  const completed =
+    filterCurrentField(
+      completedRaw,
+      fieldIds
+    );
 
-  const pitsById = new Map();
-  for (const row of pits) {
-    const id = String(row.apex_id);
-    if (!pitsById.has(id)) pitsById.set(id, []);
-    pitsById.get(id).push(row);
-  }
 
-  const completedByIdStart = new Map();
-  for (const row of completed) {
-    const id = String(row.apex_id);
-    const start = Number(row.start_lap_count ?? 0);
-    completedByIdStart.set(`${id}:${start}`, row);
-  }
+  const live =
+    filterCurrentField(
+      liveRaw,
+      fieldIds
+    );
 
-  const lapsById = new Map();
-  for (const row of lapRowsRaw) {
-    const id = String(row.apex_id);
-    if (!fieldIds.has(id)) continue;
-    if (!lapsById.has(id)) lapsById.set(id, []);
-    lapsById.get(id).push(row);
-  }
+
+  const pits =
+    filterCurrentField(
+      pitsRaw,
+      fieldIds
+    );
+
+
+  const entries =
+    filterCurrentField(
+      entriesRaw,
+      fieldIds
+    );
+
 
   const rows = [];
 
-  for (const id of fieldIds) {
-    const entry = entriesById.get(String(id));
-    const teamPits = [...(pitsById.get(String(id)) || [])]
-      .sort((a, b) => Number(a.pit_lap) - Number(b.pit_lap));
-    const lapRows = lapsById.get(String(id)) || [];
 
-    let start = 0;
-    let stintNumber = 1;
+  const completedKeys =
+    new Set();
 
-    for (const pit of teamPits) {
-      const end = Number(pit.pit_lap);
-      if (!Number.isFinite(end) || end <= start) continue;
 
-      const saved = completedByIdStart.get(`${id}:${start}`);
-      const rawStats = calculateRawStintStats(
-        String(id),
-        lapRows,
-        start,
-        end,
-        exclusions
+  const stintCounter =
+    new Map();
+
+
+  for (
+    const row
+    of completed
+  ) {
+    const id =
+      String(
+        row.apex_id
       );
 
-      let stats = rawStats;
-      if (savedStatsAreUsable(saved, start, end) && rawStats.valid_laps === 0) {
-        stats = {
-          valid_laps: Number(saved.valid_laps),
-          avg_lap_time: number(saved.avg_lap_time ?? saved.avg_lap),
-          best_lap_time: number(saved.best_lap_time ?? saved.best_lap),
-          best_lap_number: number(saved.best_lap_number),
-          worst_lap_time: number(saved.worst_lap_time ?? saved.worst_lap),
-          worst_lap_number: number(saved.worst_lap_number),
-          consistency: number(saved.consistency)
-        };
-      }
 
-      rows.push({
-        race_id: Number(rid),
-        apex_id: String(id),
-        team_name: resolveTeam(id, teamMap, pit.team_name, entry?.team_name),
-        driver_name: pit.driver_name || saved?.driver_name || null,
-        stint_number: stintNumber,
-        start_lap_count: start,
-        end_lap_count: end,
-        current_lap_count: end,
-        total_laps: end - start,
-        ...stats,
-        pit_hour: pit.pit_hour || null,
-        on_track: pit.on_track || null,
-        pit_time: pit.pit_time || null,
-        total_time: pit.total_time || null,
-        is_live: false,
-        status: "COMPLETED"
-      });
+    const start =
+      Number(
+        row.start_lap_count ??
+        0
+      );
 
-      start = end;
-      stintNumber += 1;
+
+    const normalized =
+      normalizeStintRow(
+        row,
+        teamMap,
+        "COMPLETED"
+      );
+
+
+    const nextStint =
+      (
+        stintCounter.get(id) ||
+        0
+      ) + 1;
+
+
+    if (
+      !normalized.stint_number
+    ) {
+      normalized.stint_number =
+        nextStint;
     }
 
-    const currentLap = Number(entry?.lap_count);
-    if (Number.isFinite(currentLap) && currentLap > start) {
-      const stats = calculateRawStintStats(
-        String(id),
-        lapRows,
-        start,
-        currentLap,
-        exclusions
+
+    stintCounter.set(
+      id,
+      Math.max(
+        nextStint,
+        Number(
+          normalized.stint_number
+        ) ||
+        0
+      )
+    );
+
+
+    completedKeys.add(
+      `${id}:${start}`
+    );
+
+
+    rows.push(
+      normalized
+    );
+  }
+
+
+  for (
+    const row
+    of live
+  ) {
+    const id =
+      String(
+        row.apex_id
       );
 
-      rows.push({
-        race_id: Number(rid),
-        apex_id: String(id),
-        team_name: resolveTeam(id, teamMap, entry?.team_name),
-        driver_name: entry?.current_driver || null,
-        stint_number: stintNumber,
-        start_lap_count: start,
-        end_lap_count: null,
-        current_lap_count: currentLap,
-        total_laps: currentLap - start,
-        ...stats,
-        is_live: true,
-        status: "LIVE"
-      });
+
+    const start =
+      Number(
+        row.start_lap_count ??
+        0
+      );
+
+
+    if (
+      completedKeys.has(
+        `${id}:${start}`
+      )
+    ) {
+      continue;
+    }
+
+
+    const normalized =
+      normalizeStintRow(
+        row,
+        teamMap,
+        "LIVE"
+      );
+
+
+    normalized.stint_number =
+      (
+        stintCounter.get(id) ||
+        0
+      ) + 1;
+
+
+    stintCounter.set(
+      id,
+      normalized.stint_number
+    );
+
+
+    rows.push(
+      normalized
+    );
+  }
+
+
+  const existingStintKeys =
+    new Set(
+      rows.map(
+        row =>
+          `${String(row.apex_id)}:${Number(row.start_lap_count ?? 0)}`
+      )
+    );
+
+
+  const fallback =
+    fallbackStintsFromPits(
+      pits,
+      entries,
+      teamMap
+    );
+
+
+  for (
+    const row
+    of fallback
+  ) {
+    const key =
+      `${String(row.apex_id)}:${Number(row.start_lap_count ?? 0)}`;
+
+    if (
+      !existingStintKeys.has(key)
+    ) {
+      rows.push(row);
+      existingStintKeys.add(key);
     }
   }
 
-  rows.sort((a, b) => {
-    const pa = Number(realSnapshot?.positions?.[String(a.apex_id)]);
-    const pb = Number(realSnapshot?.positions?.[String(b.apex_id)]);
-    if (Number.isFinite(pa) && Number.isFinite(pb) && pa !== pb) return pa - pb;
-    if (Number.isFinite(pa)) return -1;
-    if (Number.isFinite(pb)) return 1;
-    const idCompare = Number(a.apex_id) - Number(b.apex_id);
-    if (idCompare !== 0) return idCompare;
-    return Number(a.stint_number) - Number(b.stint_number);
-  });
+
+  rows.sort(
+    (a, b) => {
+      const pa =
+        Number(
+          realSnapshot
+            ?.positions?.[
+              String(
+                a.apex_id
+              )
+            ]
+        );
+
+
+      const pb =
+        Number(
+          realSnapshot
+            ?.positions?.[
+              String(
+                b.apex_id
+              )
+            ]
+        );
+
+
+      if (
+        Number.isFinite(pa) &&
+        Number.isFinite(pb) &&
+        pa !== pb
+      ) {
+        return pa - pb;
+      }
+
+
+      if (
+        Number.isFinite(pa) &&
+        !Number.isFinite(pb)
+      ) {
+        return -1;
+      }
+
+
+      if (
+        !Number.isFinite(pa) &&
+        Number.isFinite(pb)
+      ) {
+        return 1;
+      }
+
+
+      const idCompare =
+        Number(
+          a.apex_id
+        ) -
+        Number(
+          b.apex_id
+        );
+
+
+      if (
+        idCompare !== 0
+      ) {
+        return idCompare;
+      }
+
+
+      return (
+        Number(
+          a.stint_number
+        ) -
+        Number(
+          b.stint_number
+        )
+      );
+    }
+  );
+
 
   return rows;
 }
@@ -2860,100 +2848,452 @@ async function livePayload(
   env,
   rid
 ) {
-  const [entriesRaw, snapshot, teamMap] = await Promise.all([
-    loadEntries(env, rid),
-    collectorSnapshot(env).catch(() => null),
-    stableTeamNameMap(env, rid)
-  ]);
+  const [
+    entriesRaw,
+    liveStintsRaw,
+    pitsRaw,
+    snapshot,
+    teamMap
+  ] =
+    await Promise.all([
+      loadEntries(
+        env,
+        rid
+      ),
 
-  const fieldIds = currentFieldIds(snapshot);
-  if (fieldIds.size === 0) {
+      loadLiveStints(
+        env,
+        rid
+      ),
+
+      loadPits(
+        env,
+        rid
+      ),
+
+      collectorSnapshot(
+        env
+      )
+        .catch(
+          () => null
+        ),
+
+      stableTeamNameMap(
+        env,
+        rid
+      )
+    ]);
+
+
+  const fieldIds =
+    currentFieldIds(
+      snapshot
+    );
+
+
+  if (
+    fieldIds.size === 0
+  ) {
     return {
-      race_id: Number(rid),
-      session_name: "Apex Timing",
-      active: false,
-      data_available: false,
-      is_live: false,
-      session_status: "WAITING FOR APEX GRID",
-      team_count: 0,
-      current: []
+      race_id:
+        Number(rid),
+
+      session_name:
+        "Apex Timing",
+
+      active:
+        false,
+
+      data_available:
+        false,
+
+      is_live:
+        false,
+
+      session_status:
+        "WAITING FOR APEX GRID",
+
+      team_count:
+        0,
+
+      current:
+        []
     };
   }
 
-  const entries = filterCurrentField(entriesRaw, fieldIds);
-  const stints = await stintsPayload(env, rid, snapshot);
-  const liveById = new Map(
-    stints.filter(row => row.is_live).map(row => [String(row.apex_id), row])
+
+  const entries =
+    filterCurrentField(
+      entriesRaw,
+      fieldIds
+    );
+
+
+  const liveStints =
+    filterCurrentField(
+      liveStintsRaw,
+      fieldIds
+    );
+
+
+  const pits =
+    filterCurrentField(
+      pitsRaw,
+      fieldIds
+    );
+
+
+  const liveMap =
+    new Map(
+      liveStints.map(
+        row => [
+          String(
+            row.apex_id
+          ),
+          row
+        ]
+      )
+    );
+
+
+  const pitCounts =
+    new Map();
+
+
+  const lastPitLap =
+    new Map();
+
+
+  for (
+    const pit
+    of pits
+  ) {
+    const id =
+      String(
+        pit.apex_id
+      );
+
+
+    const number =
+      Number(
+        pit.pit_number
+      );
+
+
+    const lap =
+      Number(
+        pit.pit_lap
+      );
+
+
+    if (
+      Number.isFinite(number)
+    ) {
+      pitCounts.set(
+        id,
+        Math.max(
+          pitCounts.get(id) ||
+          0,
+          number
+        )
+      );
+    }
+
+
+    if (
+      Number.isFinite(lap)
+    ) {
+      lastPitLap.set(
+        id,
+        Math.max(
+          lastPitLap.get(id) ||
+          0,
+          lap
+        )
+      );
+    }
+  }
+
+
+  const current =
+    entries.map(
+      entry => {
+        const id =
+          String(
+            entry.apex_id
+          );
+
+
+        const live =
+          liveMap.get(id) ||
+          {};
+
+
+        const raceLap =
+          Number(
+            entry.lap_count
+          ) ||
+          0;
+
+
+        const pitCount =
+          pitCounts.get(id) ||
+          0;
+
+
+        const start =
+          Number(
+            live.start_lap_count
+          );
+
+
+        const realStart =
+          Number.isFinite(start)
+            ? start
+            : (
+                lastPitLap.get(
+                  id
+                ) ||
+                0
+              );
+
+
+        const position =
+          Number(
+            snapshot
+              ?.positions?.[
+                id
+              ]
+          );
+
+
+        return {
+          race_id:
+            Number(rid),
+
+          apex_id:
+            id,
+
+          position:
+            Number.isFinite(
+              position
+            )
+              ? position
+              : null,
+
+          team_name:
+            resolveTeam(
+              id,
+              teamMap,
+              entry.team_name,
+              live.team_name
+            ),
+
+          driver_name:
+            live.driver_name ||
+            entry.current_driver ||
+            null,
+
+          current_driver:
+            live.driver_name ||
+            entry.current_driver ||
+            null,
+
+          race_lap:
+            raceLap,
+
+          live_lap_count:
+            raceLap,
+
+          pit_count:
+            pitCount,
+
+          stint_number:
+            pitCount + 1,
+
+          start_lap_count:
+            realStart,
+
+          stint_laps:
+            Number(
+              live.total_laps
+            ) ||
+            Math.max(
+              0,
+              raceLap -
+              realStart
+            ),
+
+          total_stint_laps:
+            Number(
+              live.total_laps
+            ) ||
+            Math.max(
+              0,
+              raceLap -
+              realStart
+            ),
+
+          valid_laps:
+            Number(
+              live.valid_laps
+            ) ||
+            0,
+
+          live_last_lap:
+            number(
+              entry.last_lap
+            ),
+
+          avg_lap_time:
+            number(
+              live.avg_lap_time ??
+              live.avg_lap
+            ),
+
+          best_lap_time:
+            number(
+              live.best_lap_time ??
+              live.best_lap ??
+              entry.best_lap
+            ),
+
+          best_lap_number:
+            number(
+              live.best_lap_number
+            ),
+
+          worst_lap_time:
+            number(
+              live.worst_lap_time ??
+              live.worst_lap
+            ),
+
+          worst_lap_number:
+            number(
+              live.worst_lap_number
+            ),
+
+          consistency:
+            number(
+              live.consistency
+            ),
+
+          updated_at:
+            entry.updated_at ||
+            live.updated_at ||
+            null
+        };
+      }
+    );
+
+
+  current.sort(
+    (a, b) => {
+      const pa =
+        Number(
+          a.position
+        );
+
+      const pb =
+        Number(
+          b.position
+        );
+
+
+      if (
+        Number.isFinite(pa) &&
+        Number.isFinite(pb) &&
+        pa !== pb
+      ) {
+        return pa - pb;
+      }
+
+
+      if (
+        Number.isFinite(pa)
+      ) {
+        return -1;
+      }
+
+
+      if (
+        Number.isFinite(pb)
+      ) {
+        return 1;
+      }
+
+
+      if (
+        b.race_lap !==
+        a.race_lap
+      ) {
+        return (
+          b.race_lap -
+          a.race_lap
+        );
+      }
+
+
+      return (
+        Number(
+          a.apex_id
+        ) -
+        Number(
+          b.apex_id
+        )
+      );
+    }
   );
 
-  const current = entries.map(entry => {
-    const id = String(entry.apex_id);
-    const live = liveById.get(id) || {};
-    const raceLap = Number(entry.lap_count) || 0;
-    const snapshotPitCount = Number(snapshot?.pitCounts?.[id]);
-    const pitCount = Number.isFinite(snapshotPitCount)
-      ? Math.max(0, Math.trunc(snapshotPitCount))
-      : Math.max(0, (Number(live.stint_number) || 1) - 1);
-    const position = Number(snapshot?.positions?.[id]);
 
-    const currentBest = number(live.best_lap_time);
-    const entryBest = number(entry.best_lap);
-    const best =
-      Number.isFinite(currentBest) && currentBest > 0 &&
-      Number.isFinite(entryBest) && entryBest > 0
-        ? Math.min(currentBest, entryBest)
-        : (Number.isFinite(currentBest) && currentBest > 0
-            ? currentBest
-            : entryBest);
+  const lastPacket =
+    Date.parse(
+      snapshot
+        ?.last_packet_at ||
+      ""
+    );
 
-    return {
-      race_id: Number(rid),
-      apex_id: id,
-      position: Number.isFinite(position) ? position : null,
-      team_name: resolveTeam(id, teamMap, entry.team_name, live.team_name),
-      driver_name: live.driver_name || entry.current_driver || null,
-      current_driver: live.driver_name || entry.current_driver || null,
-      race_lap: raceLap,
-      live_lap_count: raceLap,
-      pit_count: pitCount,
-      stint_number: number(live.stint_number) || (pitCount + 1),
-      start_lap_count: number(live.start_lap_count) || 0,
-      stint_laps: number(live.total_laps) || 0,
-      total_stint_laps: number(live.total_laps) || 0,
-      valid_laps: number(live.valid_laps) || 0,
-      live_last_lap: number(entry.last_lap),
-      avg_lap_time: number(live.avg_lap_time),
-      best_lap_time: best,
-      best_lap_number: number(live.best_lap_number),
-      worst_lap_time: number(live.worst_lap_time),
-      worst_lap_number: number(live.worst_lap_number),
-      consistency: number(live.consistency),
-      updated_at: entry.updated_at || null
-    };
-  });
 
-  current.sort((a, b) => {
-    const pa = Number(a.position);
-    const pb = Number(b.position);
-    if (Number.isFinite(pa) && Number.isFinite(pb) && pa !== pb) return pa - pb;
-    if (Number.isFinite(pa)) return -1;
-    if (Number.isFinite(pb)) return 1;
-    if (b.race_lap !== a.race_lap) return b.race_lap - a.race_lap;
-    return Number(a.apex_id) - Number(b.apex_id);
-  });
+  const isLive =
+    Number.isFinite(
+      lastPacket
+    ) &&
+    (
+      Date.now() -
+      lastPacket
+    ) <
+      180000;
 
-  const lastPacket = Date.parse(snapshot?.last_packet_at || "");
-  const isLive = Number.isFinite(lastPacket) && (Date.now() - lastPacket) < 180000;
 
   return {
-    race_id: Number(rid),
-    session_name: "Apex Timing",
-    active: current.length > 0,
-    data_available: current.length > 0,
-    is_live: isLive,
-    session_status: isLive ? "LIVE" : "FINISHED",
-    collector_connected: snapshot?.connected === true,
-    team_count: current.length,
+    race_id:
+      Number(rid),
+
+    session_name:
+      "Apex Timing",
+
+    active:
+      current.length > 0,
+
+    data_available:
+      current.length > 0,
+
+    is_live:
+      isLive,
+
+    session_status:
+      isLive
+        ? "LIVE"
+        : "FINISHED",
+
+    collector_connected:
+      snapshot?.connected ===
+      true,
+
+    team_count:
+      current.length,
+
     current
   };
 }
@@ -3838,12 +4178,6 @@ export class ApexCollector {
     this.lastDetailFetch =
       new Map();
 
-    this.fullDetailRefreshRunning =
-      false;
-
-    this.lastFullDetailRefreshAt =
-      0;
-
 
     state.blockConcurrencyWhile(
       async () => {
@@ -4030,10 +4364,6 @@ export class ApexCollector {
     ) {
       await this.connect();
 
-      this.state.waitUntil(
-        this.refreshAllFieldDetails(false)
-      );
-
       return json(
         await this.snapshot()
       );
@@ -4066,10 +4396,6 @@ export class ApexCollector {
 
 
       await this.connect();
-
-      this.state.waitUntil(
-        this.refreshAllFieldDetails(true)
-      );
 
 
       return json(
@@ -4373,8 +4699,7 @@ export class ApexCollector {
 
 
   async refreshDetail(
-    apexId,
-    force = false
+    apexId
   ) {
     const id =
       String(
@@ -4402,7 +4727,6 @@ export class ApexCollector {
 
 
     if (
-      !force &&
       now -
       (
         this.lastDetailFetch.get(
@@ -4501,6 +4825,19 @@ export class ApexCollector {
           "race_id,apex_id,pit_number"
         );
 
+
+        this.pitCounts.set(
+          id,
+          Math.max(
+            ...pits.map(
+              row =>
+                Number(
+                  row.pit_number
+                ) ||
+                0
+            )
+          )
+        );
       }
 
 
@@ -4510,61 +4847,6 @@ export class ApexCollector {
       this.detailRunning.delete(
         id
       );
-    }
-  }
-
-
-  async refreshAllFieldDetails(
-    force = false
-  ) {
-    const now = Date.now();
-
-    if (this.fullDetailRefreshRunning) {
-      return;
-    }
-
-    if (
-      !force &&
-      now - this.lastFullDetailRefreshAt < 300000
-    ) {
-      return;
-    }
-
-    const ids = [
-      ...this.fieldApexIds
-    ]
-      .map(String)
-      .filter(validApexId);
-
-    if (!ids.length) {
-      return;
-    }
-
-    this.fullDetailRefreshRunning = true;
-    this.lastFullDetailRefreshAt = now;
-
-    try {
-      /*
-       * Rehydrate the whole CURRENT field after deploy/reconnect.
-       * Six karts at a time keeps Apex/Supabase load bounded while
-       * ensuring every team gets raw laps and current pit history.
-       */
-      for (let i = 0; i < ids.length; i += 6) {
-        const batch = ids.slice(i, i + 6);
-        await Promise.all(
-          batch.map(id =>
-            this.refreshDetail(id, true)
-              .catch(error =>
-                console.error(
-                  `DETAIL REFRESH ${id}:`,
-                  error
-                )
-              )
-          )
-        );
-      }
-    } finally {
-      this.fullDetailRefreshRunning = false;
     }
   }
 
@@ -4653,8 +4935,7 @@ export class ApexCollector {
 
     if (
       type === "pit" ||
-      cls === "pit" ||
-      column === "15"
+      cls === "pit"
     ) {
       const pits =
         parseNumber(
@@ -4683,7 +4964,10 @@ export class ApexCollector {
     if (
       type === "llp" ||
       cls === "llp" ||
-      column === "9"
+      (
+        cls === "tn" &&
+        column === "9"
+      )
     ) {
       const lap =
         parseLapTime(
@@ -4709,8 +4993,7 @@ export class ApexCollector {
 
     if (
       type === "blp" ||
-      cls === "blp" ||
-      column === "12"
+      cls === "blp"
     ) {
       const lap =
         parseLapTime(
@@ -4737,7 +5020,10 @@ export class ApexCollector {
     if (
       type === "tlp" ||
       cls === "tlp" ||
-      column === "13"
+      (
+        cls === "in" &&
+        column === "13"
+      )
     ) {
       const lapCount =
         parseNumber(
@@ -4835,33 +5121,26 @@ export class ApexCollector {
             of grid.rows
           ) {
             for (
-              const cell
-              of Object.values(
+              const [
+                type,
+                fieldValue
+              ]
+              of Object.entries(
                 fields
               )
             ) {
               await this.applyField(
                 apexId,
-                cell.type,
-                cell.type,
-                cell.value,
-                cell.column
+                type,
+                type,
+                fieldValue,
+                null
               );
             }
           }
 
 
           await this.persist();
-
-          /*
-           * A deployment can happen after the race has finished, so there
-           * may be no new lap packet to trigger refreshDetail().  The full
-           * grid is the authoritative current field: hydrate all 72 teams
-           * now instead of leaving later stints with valid_laps = 0.
-           */
-          this.state.waitUntil(
-            this.refreshAllFieldDetails(false)
-          );
         }
 
 
@@ -5404,15 +5683,12 @@ export default {
           "/api/pits"
         ) {
           const rows =
-            currentPitsFromSnapshot(
-              filterCurrentField(
-                await loadPits(
-                  env,
-                  rid
-                ),
-                fieldIds
+            filterCurrentField(
+              await loadPits(
+                env,
+                rid
               ),
-              snapshot
+              fieldIds
             );
 
 
