@@ -2093,9 +2093,16 @@ function renderStints() {
   ${esc(row.worst_lap_number ?? "—")}
 </td>
 
-<td>
-  ${time(row.consistency)}
-</td>
+<td>${time(row.consistency)}</td>
+<td>${time(row.straight_avg_lap_time)}</td>
+<td class="good">${time(row.straight_best_lap_time)}</td>
+<td class="bad">${time(row.straight_worst_lap_time)}</td>
+<td>${time(row.reverse_avg_lap_time)}</td>
+<td class="good">${time(row.reverse_best_lap_time)}</td>
+<td class="bad">${time(row.reverse_worst_lap_time)}</td>
+<td>${time(row.rain_avg_lap_time)}</td>
+<td class="good">${time(row.rain_best_lap_time)}</td>
+<td class="bad">${time(row.rain_worst_lap_time)}</td>
 
 </tr>
 `
@@ -2103,7 +2110,7 @@ function renderStints() {
       .join("") ||
     `
 <tr class="empty">
-  <td colspan="13">
+  <td colspan="22">
     No stint data for this race.
   </td>
 </tr>
@@ -2261,27 +2268,21 @@ function renderTeams() {
   ${esc(row.total_laps ?? "—")}
 </td>
 
-<td>
-  ${time(row.avg_lap_time)}
-</td>
-
-<td class="good">
-  ${time(row.best_lap_time)}
-</td>
-
-<td>
-  ${time(
-    pick(
-      row,
-      "avg_consistency",
-      "consistency"
-    )
-  )}
-</td>
-
-<td>
-  ${time(row.driver_spread)}
-</td>
+<td>${time(row.avg_lap_time)}</td>
+<td class="good">${time(row.best_lap_time)}</td>
+<td>${esc(row.best_lap_number ?? "—")}</td>
+<td class="bad">${time(row.worst_lap_time)}</td>
+<td>${esc(row.worst_lap_number ?? "—")}</td>
+<td>${time(pick(row,"avg_consistency","consistency"))}</td>
+<td>${time(row.straight_avg_lap_time)}</td>
+<td class="good">${time(row.straight_best_lap_time)}</td>
+<td class="bad">${time(row.straight_worst_lap_time)}</td>
+<td>${time(row.reverse_avg_lap_time)}</td>
+<td class="good">${time(row.reverse_best_lap_time)}</td>
+<td class="bad">${time(row.reverse_worst_lap_time)}</td>
+<td>${time(row.rain_avg_lap_time)}</td>
+<td class="good">${time(row.rain_best_lap_time)}</td>
+<td class="bad">${time(row.rain_worst_lap_time)}</td>
 
 </tr>
 `
@@ -2289,7 +2290,7 @@ function renderTeams() {
       .join("") ||
     `
 <tr class="empty">
-  <td colspan="9">
+  <td colspan="20">
     No team data for this race.
   </td>
 </tr>
@@ -4635,10 +4636,21 @@ function initReports() {
   $("organiserReport2Pdf")
     ?.addEventListener(
       "click",
-      () => {
-        openReportWindow(
-          "/api/reports/pit-stops.html"
-        );
+      async event => {
+        const button = event.currentTarget;
+        setReportButtonBusy(button, true, "PDF");
+        try {
+          await downloadFileFromEndpoint(
+            "/api/reports/pit-stops.pdf",
+            `${reportBaseName()} - Pit stops.pdf`
+          );
+        } catch (error) {
+          console.error("PIT PDF DOWNLOAD ERROR", error);
+          alert(`Pit Stops PDF download failed:\n\n${error.message}`);
+        } finally {
+          setReportButtonBusy(button, false, "PDF");
+          renderReports();
+        }
       }
     );
 }
