@@ -1,6 +1,6 @@
-const VERSION = "2026-08-30-race-engineer-v8.1-live-field-authoritative";
+const VERSION = "2026-08-30-race-engineer-v8.2-apex-field-pits-best-backfill";
 const PAGE_SIZE = 1000;
-const BACKFILL_BATCH = 2;
+const BACKFILL_BATCH = 6;
 const LIVE_PACKET_TTL_MS = 180000;
 const CURRENT_ENTRY_WINDOW_MS = 10 * 60 * 1000;
 
@@ -405,7 +405,7 @@ function parseGridData(html) {
       );
     }
 
-    const fields = {};
+    const fields = [];
 
     let cellMatch;
 
@@ -443,10 +443,15 @@ function parseGridData(html) {
         );
 
       if (type) {
-        fields[type] =
-          stripHtml(
-            cellMatch[2]
-          );
+        fields.push({
+          type,
+          column:
+            id[1],
+          value:
+            stripHtml(
+              cellMatch[2]
+            )
+        });
       }
     }
 
@@ -2619,7 +2624,13 @@ async function stintsPayload(
         pitsRaw,
         fieldIds
       )
-    );
+    )
+      .filter(
+        row =>
+          Number(
+            row.pit_number
+          ) > 0
+      );
 
   const completed =
     filterByIds(
@@ -3471,6 +3482,12 @@ async function pitsPayload(
         ids
       )
     )
+      .filter(
+        row =>
+          Number(
+            row.pit_number
+          ) > 0
+      )
       .map(
         row => ({
           ...row,
@@ -4996,6 +5013,8 @@ export class ApexCollector {
 
       await this.scanAndQueueBackfill();
 
+      await this.processBackfillBatch();
+
       return json(
         this.snapshot()
       );
@@ -5105,7 +5124,7 @@ export class ApexCollector {
     } finally {
       const delay =
         this.backfillQueue.length
-          ? 1000
+          ? 250
           : 60000;
 
       await this.state.storage.setAlarm(
@@ -5516,7 +5535,11 @@ export class ApexCollector {
         "bestlap",
         "best_lap"
       ]
-        .includes(t)
+        .includes(t) ||
+      (
+        t === "tn" &&
+        column === "12"
+      )
     ) {
       const lap =
         parseLapTime(
@@ -5596,19 +5619,14 @@ export class ApexCollector {
       const patch = {};
 
       for (
-        const [
-          type,
-          value
-        ]
-        of Object.entries(
-          fields
-        )
+        const field
+        of fields
       ) {
         const partial =
           this.patchFromField(
-            type,
-            value,
-            null
+            field.type,
+            field.value,
+            field.column
           );
 
         if (partial) {
@@ -5640,6 +5658,8 @@ export class ApexCollector {
     await this.scanAndQueueBackfill(
       true
     );
+
+    await this.processBackfillBatch();
   }
 
   async applyProtocolUpdate(parsed) {
@@ -6009,56 +6029,85 @@ export class ApexCollector {
 
     try {
       /*
-       * Two teams per alarm.
-       * Full 72-team history is therefore fetched gradually
-       * instead of hammering Apex / Cloudflare in one request.
+       * Pull several current-field teams in parallel.  The previous
+       * 2-teams-per-second sequential backfill left half the live field
+       * showing VALID=0 for tens of seconds after deploy/reconnect.
        */
-      for (
-        let i = 0;
-        i <
+      const batch = [];
+
+      while (
+        batch.length <
           BACKFILL_BATCH &&
-        this.backfillQueue.length;
-        i++
+        this.backfillQueue.length
       ) {
         const id =
-          this.backfillQueue.shift();
+          String(
+            this.backfillQueue.shift()
+          );
 
         this.backfillQueued.delete(
           id
         );
 
-        try {
-          const lapCount =
-            await this.backfillOne(
-              id
-            );
+        if (
+          validApexId(id) &&
+          (
+            !this.fieldApexIds.size ||
+            this.fieldApexIds.has(id)
+          )
+        ) {
+          batch.push(id);
+        }
+      }
 
-          if (
-            lapCount >
-            0
-          ) {
+      const results =
+        await Promise.allSettled(
+          batch.map(
+            async id => ({
+              id,
+              lapCount:
+                await this.backfillOne(id)
+            })
+          )
+        );
+
+      for (
+        const result
+        of results
+      ) {
+        if (
+          result.status ===
+            "fulfilled"
+        ) {
+          const {
+            id,
+            lapCount
+          } = result.value;
+
+          if (lapCount > 0) {
             this.backfilledLapCount.set(
               String(id),
               lapCount
             );
           }
 
-        } catch (
-          error
-        ) {
-          console.error(
-            `BACKFILL ${id} ERROR`,
-            error
-          );
-
-          /*
-           * Do not lose the team.
-           * Retry on a later alarm.
-           */
-          this.enqueueBackfill(
-            id
-          );
+          continue;
         }
+
+        const failedIndex =
+          results.indexOf(result);
+
+        const failedId =
+          batch[failedIndex];
+
+        console.error(
+          `BACKFILL ${failedId} ERROR`,
+          result.reason
+        );
+
+        this.enqueueBackfill(
+          failedId
+        );
       }
 
     } finally {
