@@ -14,7 +14,7 @@ const S = {
   liveMeta: null,
 
   overview: [],
-  stints: [],ь
+  stints: [],
   drivers: [],
   teams: [],
   pits: [],
