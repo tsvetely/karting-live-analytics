@@ -1630,25 +1630,24 @@ function updateRaceContext() {
       );
 
 
+    // "Current race" is the LIVE source/mode even after timing has stopped.
+    // Do not replace the LIVE badge with FINISHED; the separate status text
+    // already tells the user whether timing is active, waiting or finished.
     if (badge) {
       badge.textContent =
-        status;
+        "LIVE";
 
       badge.className =
-        status === "LIVE"
-          ? "raceModeBadge live"
-          : "raceModeBadge history";
+        "raceModeBadge live";
     }
 
 
     if (liveBadge) {
       liveBadge.textContent =
-        status;
+        "LIVE";
 
       liveBadge.className =
-        status === "LIVE"
-          ? "liveBadge live"
-          : "liveBadge history";
+        "liveBadge live";
     }
 
 
