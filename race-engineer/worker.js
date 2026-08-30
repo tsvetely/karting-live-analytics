@@ -1,6 +1,6 @@
-const VERSION = "2026-08-30-race-engineer-v8.3-authoritative-detail-rebuild";
+const VERSION = "2026-08-30-race-engineer-v8.4-live-grid-authoritative-metrics";
 const PAGE_SIZE = 1000;
-const BACKFILL_BATCH = 6;
+const BACKFILL_BATCH = 2;
 const LIVE_PACKET_TTL_MS = 180000;
 const CURRENT_ENTRY_WINDOW_MS = 10 * 60 * 1000;
 
@@ -311,161 +311,50 @@ function parseRowId(id) {
 }
 
 function parseGridData(html) {
-  const source =
-    String(
-      html || ""
-    );
-
-  const columnTypes =
-    new Map();
-
-  const positions =
-    new Map();
-
-  const rows =
-    new Map();
-
+  const source = String(html || "");
+  const columnTypes = new Map();
+  const columnLabels = new Map();
+  const positions = new Map();
+  const rows = new Map();
   let match;
 
-  const headerRegex =
-    /<td\b([^>]*)>/gi;
-
-  while (
-    (
-      match =
-        headerRegex.exec(
-          source
-        )
-    ) !== null
-  ) {
-    const id =
-      /data-id=["'](c\d+)["']/i
-        .exec(
-          match[1]
-        );
-
-    const type =
-      /data-type=["']([^"']+)["']/i
-        .exec(
-          match[1]
-        );
-
-    if (
-      id &&
-      type
-    ) {
-      columnTypes.set(
-        id[1],
-        type[1]
-      );
-    }
+  const headerRegex = /<t[dh]\b([^>]*)>([\s\S]*?)<\/t[dh]>/gi;
+  while ((match = headerRegex.exec(source)) !== null) {
+    const id = /data-id=["'](c\d+)["']/i.exec(match[1]);
+    if (!id) continue;
+    const type = /data-type=["']([^"']+)["']/i.exec(match[1]);
+    if (type) columnTypes.set(id[1], type[1]);
+    const label = stripHtml(match[2]);
+    if (label) columnLabels.set(id[1], label);
   }
 
-  const rowRegex =
-    /<tr\b([^>]*)data-id=["']r(\d+)["']([^>]*)>([\s\S]*?)<\/tr>/gi;
-
-  while (
-    (
-      match =
-        rowRegex.exec(
-          source
-        )
-    ) !== null
-  ) {
-    const apexId =
-      String(
-        match[2]
-      );
-
-    if (
-      !validApexId(
-        apexId
-      )
-    ) {
-      continue;
-    }
-
-    const attrs =
-      `${match[1]} ${match[3]}`;
-
-    const positionMatch =
-      /data-pos=["'](\d+)["']/i
-        .exec(
-          attrs
-        );
-
-    if (
-      positionMatch
-    ) {
-      positions.set(
-        apexId,
-        Number(
-          positionMatch[1]
-        )
-      );
-    }
+  const rowRegex = /<tr\b([^>]*)data-id=["']r(\d+)["']([^>]*)>([\s\S]*?)<\/tr>/gi;
+  while ((match = rowRegex.exec(source)) !== null) {
+    const apexId = String(match[2]);
+    if (!validApexId(apexId)) continue;
+    const attrs = `${match[1]} ${match[3]}`;
+    const positionMatch = /data-pos=["'](\d+)["']/i.exec(attrs);
+    if (positionMatch) positions.set(apexId, Number(positionMatch[1]));
 
     const fields = [];
-
     let cellMatch;
-
-    const cellRegex =
-      /<td\b([^>]*)>([\s\S]*?)<\/td>/gi;
-
-    while (
-      (
-        cellMatch =
-          cellRegex.exec(
-            match[4]
-          )
-      ) !== null
-    ) {
-      const id =
-        /data-id=["']r\d+c(\d+)["']/i
-          .exec(
-            cellMatch[1]
-          );
-
-      if (!id) {
-        continue;
-      }
-
-      const explicitType =
-        /data-type=["']([^"']+)["']/i
-          .exec(
-            cellMatch[1]
-          );
-
-      const type =
-        explicitType?.[1] ||
-        columnTypes.get(
-          `c${id[1]}`
-        );
-
-      if (type) {
-        fields.push({
-          type,
-          column:
-            id[1],
-          value:
-            stripHtml(
-              cellMatch[2]
-            )
-        });
-      }
+    const cellRegex = /<t[dh]\b([^>]*)>([\s\S]*?)<\/t[dh]>/gi;
+    while ((cellMatch = cellRegex.exec(match[4])) !== null) {
+      const id = /data-id=["']r\d+c(\d+)["']/i.exec(cellMatch[1]);
+      if (!id) continue;
+      const key = `c${id[1]}`;
+      const explicitType = /data-type=["']([^"']+)["']/i.exec(cellMatch[1]);
+      fields.push({
+        type: explicitType?.[1] || columnTypes.get(key) || "",
+        column: id[1],
+        label: columnLabels.get(key) || "",
+        value: stripHtml(cellMatch[2])
+      });
     }
-
-    rows.set(
-      apexId,
-      fields
-    );
+    rows.set(apexId, fields);
   }
 
-  return {
-    columnTypes,
-    positions,
-    rows
-  };
+  return { columnTypes, columnLabels, positions, rows };
 }
 
 function msToTime(ms) {
@@ -1334,6 +1223,61 @@ function teamNameMapFromRows(
     }
   }
 
+  return result;
+}
+
+function normalizeFieldLabel(value) {
+  return stripHtml(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function fieldSemantic(type, column = null, label = null) {
+  const t = String(type || "").toLowerCase().trim();
+  const l = normalizeFieldLabel(label);
+  if (l === "best lap" || l === "best") return "best_lap";
+  if (l === "last lap" || l === "last") return "last_lap";
+  if (l === "laps" || l === "lap") return "lap_count";
+  if (l === "pits" || l === "pit") return "pit_count";
+  if (l === "team") return "team_name";
+  if (l === "driver") return "current_driver";
+  if (["best","blp","bestlap","best_lap"].includes(t)) return "best_lap";
+  if (["last","llp","lastlap","last_lap"].includes(t)) return "last_lap";
+  if (["laps","tlp","lapcount","lap_count"].includes(t) || (t === "in" && column === "13")) return "lap_count";
+  if (["pits","pitcount","pit_count"].includes(t)) return "pit_count";
+  if (["drteam","driver","drivername","current_driver"].includes(t)) return "current_driver";
+  if (["dr","team","teamname"].includes(t)) return "team_name";
+  return null;
+}
+
+function snapshotNumberMap(snapshot, key) {
+  const result = new Map();
+  for (const [id, value] of Object.entries(snapshot?.[key] || {})) {
+    const n = Number(value);
+    if (validApexId(id) && Number.isFinite(n)) result.set(String(id), n);
+  }
+  return result;
+}
+
+function scopePitsToSnapshotCounts(rows, ids, snapshot) {
+  const counts = snapshotNumberMap(snapshot, "pitCounts");
+  if (!counts.size) return rows;
+  const grouped = new Map();
+  for (const row of rows) {
+    const id = String(row.apex_id ?? "");
+    if (!ids?.has(id)) continue;
+    if (!grouped.has(id)) grouped.set(id, []);
+    grouped.get(id).push(row);
+  }
+  const result = [];
+  for (const id of ids || []) {
+    const teamRows = uniquePits(grouped.get(String(id)) || [])
+      .sort((a,b) => Number(a.pit_number) - Number(b.pit_number));
+    const expected = counts.get(String(id));
+    if (!Number.isFinite(expected) || expected < 0) result.push(...teamRows);
+    else result.push(...teamRows.slice(0, Math.trunc(expected)));
+  }
   return result;
 }
 
@@ -3478,53 +3422,27 @@ async function pitsPayload(
     );
 
   const rows =
-    uniquePits(
-      filterByIds(
-        raw,
-        ids
-      )
+    scopePitsToSnapshotCounts(
+      uniquePits(
+        filterByIds(
+          raw,
+          ids
+        )
+      ),
+      ids,
+      isCurrent ? snapshot : null
     )
-      .filter(
-        row =>
-          Number(
-            row.pit_number
-          ) > 0
-      )
       .map(
         row => ({
           ...row,
-
-          apex_id:
-            String(
-              row.apex_id
-            ),
-
-          team_name:
-            resolveTeam(
-              row.apex_id,
-              teamMap,
-              row.team_name
-            )
+          apex_id: String(row.apex_id),
+          team_name: resolveTeam(row.apex_id, teamMap, row.team_name)
         })
       )
       .sort(
         (a, b) =>
-          String(
-            a.team_name ||
-            ""
-          )
-            .localeCompare(
-              String(
-                b.team_name ||
-                ""
-              )
-            ) ||
-          Number(
-            a.pit_number
-          ) -
-          Number(
-            b.pit_number
-          )
+          String(a.team_name || "").localeCompare(String(b.team_name || "")) ||
+          Number(a.pit_number) - Number(b.pit_number)
       );
 
   return {
@@ -3578,6 +3496,11 @@ async function livePayload(
           entriesRaw
         );
 
+  const livePitCounts = isCurrentRace ? snapshotNumberMap(snapshot, "pitCounts") : new Map();
+  const liveBestLaps = isCurrentRace ? snapshotNumberMap(snapshot, "bestLaps") : new Map();
+  const liveLastLaps = isCurrentRace ? snapshotNumberMap(snapshot, "lastLaps") : new Map();
+  const liveLapCounts = isCurrentRace ? snapshotNumberMap(snapshot, "lapCounts") : new Map();
+
   const [
     stintData,
     pitData
@@ -3610,35 +3533,16 @@ async function livePayload(
   let bestLap =
     null;
 
-  /*
-   * Apex entry.best_lap is the organiser's current-race best for that
-   * kart and is available immediately for the whole live field.  Use
-   * it for the Overview global best; stint/raw analytics remain the
-   * fallback when the entry value is not available.
-   */
-  for (
-    const [id, entry]
-    of entries
-  ) {
-    if (!fieldIds.has(id)) {
-      continue;
+  if (isCurrentRace && liveBestLaps.size) {
+    for (const [id, candidate] of liveBestLaps) {
+      if (!fieldIds.has(id) || !Number.isFinite(candidate) || candidate <= 0) continue;
+      if (bestLap === null || candidate < bestLap) bestLap = candidate;
     }
-
-    const candidate =
-      Number(
-        entry.best_lap
-      );
-
-    if (
-      Number.isFinite(candidate) &&
-      candidate > 0 &&
-      (
-        bestLap === null ||
-        candidate < bestLap
-      )
-    ) {
-      bestLap =
-        candidate;
+  } else {
+    for (const [id, entry] of entries) {
+      if (!fieldIds.has(id)) continue;
+      const candidate = Number(entry.best_lap);
+      if (Number.isFinite(candidate) && candidate > 0 && (bestLap === null || candidate < bestLap)) bestLap = candidate;
     }
   }
 
@@ -3683,6 +3587,7 @@ async function livePayload(
       );
 
     if (
+      (!isCurrentRace || !liveBestLaps.size) &&
       Number.isFinite(candidate) &&
       candidate > 0 &&
       (
@@ -3750,15 +3655,10 @@ async function livePayload(
       {};
 
     const lapCount =
-      Number(
-        entry.lap_count
-      ) ||
-      Number(
-        stint.current_lap_count
-      ) ||
-      Number(
-        stint.end_lap_count
-      ) ||
+      Number(liveLapCounts.get(id)) ||
+      Number(entry.lap_count) ||
+      Number(stint.current_lap_count) ||
+      Number(stint.end_lap_count) ||
       0;
 
     raceLap =
@@ -3811,10 +3711,9 @@ async function livePayload(
         lapCount,
 
       pit_count:
-        pitCountById.get(
-          id
-        ) ||
-        0,
+        Number.isFinite(livePitCounts.get(id))
+          ? livePitCounts.get(id)
+          : (pitCountById.get(id) || 0),
 
       stint_number:
         num(
@@ -3855,9 +3754,9 @@ async function livePayload(
         0,
 
       live_last_lap:
-        num(
-          entry.last_lap
-        ),
+        Number.isFinite(liveLastLaps.get(id))
+          ? liveLastLaps.get(id)
+          : num(entry.last_lap),
 
       avg_lap_time:
         num(
@@ -3980,7 +3879,9 @@ async function livePayload(
       raceLap,
 
     pit_count:
-      pitData.count,
+      livePitCounts.size
+        ? [...fieldIds].reduce((sum, id) => sum + (Number.isFinite(livePitCounts.get(String(id))) ? Number(livePitCounts.get(String(id))) : 0), 0)
+        : pitData.count,
 
     best_lap:
       bestLap,
@@ -4708,6 +4609,12 @@ export class ApexCollector {
     this.columnTypes =
       new Map();
 
+    this.columnLabels = new Map();
+    this.livePitCounts = new Map();
+    this.liveBestLaps = new Map();
+    this.liveLastLaps = new Map();
+    this.liveLapCounts = new Map();
+
     this.fieldApexIds =
       new Set();
 
@@ -4773,6 +4680,12 @@ export class ApexCollector {
               {}
             )
           );
+
+        this.columnLabels = new Map(Object.entries(await state.storage.get("columnLabels") || {}));
+        this.livePitCounts = new Map(Object.entries(await state.storage.get("livePitCounts") || {}).map(([id,v]) => [String(id), Number(v)]).filter(([id,v]) => validApexId(id) && Number.isFinite(v)));
+        this.liveBestLaps = new Map(Object.entries(await state.storage.get("liveBestLaps") || {}).map(([id,v]) => [String(id), Number(v)]).filter(([id,v]) => validApexId(id) && Number.isFinite(v)));
+        this.liveLastLaps = new Map(Object.entries(await state.storage.get("liveLastLaps") || {}).map(([id,v]) => [String(id), Number(v)]).filter(([id,v]) => validApexId(id) && Number.isFinite(v)));
+        this.liveLapCounts = new Map(Object.entries(await state.storage.get("liveLapCounts") || {}).map(([id,v]) => [String(id), Number(v)]).filter(([id,v]) => validApexId(id) && Number.isFinite(v)));
 
         this.fieldApexIds =
           new Set(
@@ -4846,13 +4759,18 @@ export class ApexCollector {
            */
           this.backfilledLapCount =
             new Map();
+          this.livePitCounts = new Map();
+          this.liveBestLaps = new Map();
+          this.liveLastLaps = new Map();
+          this.liveLapCounts = new Map();
 
           await state.storage.put({
-            backfillVersion:
-              VERSION,
-
-            backfilledLapCount:
-              {}
+            backfillVersion: VERSION,
+            backfilledLapCount: {},
+            livePitCounts: {},
+            liveBestLaps: {},
+            liveLastLaps: {},
+            liveLapCounts: {}
           });
         }
 
@@ -4913,6 +4831,12 @@ export class ApexCollector {
         Object.fromEntries(
           this.columnTypes
         ),
+
+      columnLabels: Object.fromEntries(this.columnLabels),
+      livePitCounts: Object.fromEntries(this.livePitCounts),
+      liveBestLaps: Object.fromEntries(this.liveBestLaps),
+      liveLastLaps: Object.fromEntries(this.liveLastLaps),
+      liveLapCounts: Object.fromEntries(this.liveLapCounts),
 
       fieldApexIds:
         [
@@ -4987,6 +4911,11 @@ export class ApexCollector {
                 )
             )
         ),
+
+      pitCounts: Object.fromEntries(this.livePitCounts),
+      bestLaps: Object.fromEntries(this.liveBestLaps),
+      lastLaps: Object.fromEntries(this.liveLastLaps),
+      lapCounts: Object.fromEntries(this.liveLapCounts),
 
       backfill_pending:
         this.backfillQueue
@@ -5417,385 +5346,121 @@ export class ApexCollector {
     return next;
   }
 
-  patchFromField(
-    type,
-    value,
-    column = null
-  ) {
-    const t =
-      String(
-        type ||
-        ""
-      )
-        .toLowerCase();
-
-    if (
-      [
-        "drteam",
-        "driver",
-        "drivername",
-        "current_driver"
-      ]
-        .includes(t)
-    ) {
-      const driver =
-        cleanDriver(
-          value
-        );
-
-      return driver
-        ? {
-            current_driver:
-              driver
-          }
-        : null;
+  patchFromField(type, value, column = null, label = null) {
+    const semantic = fieldSemantic(type, column, label);
+    if (semantic === "current_driver") {
+      const driver = cleanDriver(value);
+      return driver ? { current_driver: driver } : null;
     }
-
-    if (
-      [
-        "dr",
-        "team",
-        "teamname"
-      ]
-        .includes(t)
-    ) {
-      const team =
-        stripHtml(
-          value
-        );
-
-      return team
-        ? {
-            team_name:
-              team
-          }
-        : null;
+    if (semantic === "team_name") {
+      const team = stripHtml(value);
+      return team ? { team_name: team } : null;
     }
-
-    if (
-      [
-        "laps",
-        "tlp",
-        "lapcount",
-        "lap_count"
-      ]
-        .includes(t) ||
-      (
-        t === "in" &&
-        column === "13"
-      )
-    ) {
-      const lap =
-        parseNumber(
-          value
-        );
-
-      return (
-        lap !== null &&
-        lap >= 0
-      )
-        ? {
-            lap_count:
-              Math.trunc(
-                lap
-              )
-          }
-        : null;
+    if (semantic === "lap_count") {
+      const lap = parseNumber(value);
+      return lap !== null && lap >= 0 ? { lap_count: Math.trunc(lap) } : null;
     }
-
-    if (
-      [
-        "last",
-        "llp",
-        "lastlap",
-        "last_lap"
-      ]
-        .includes(t) ||
-      (
-        t === "tn" &&
-        column === "9"
-      )
-    ) {
-      const lap =
-        parseLapTime(
-          value
-        );
-
-      return lap !==
-        null
-        ? {
-            last_lap:
-              lap
-          }
-        : null;
+    if (semantic === "last_lap") {
+      const lap = parseLapTime(value);
+      return lap !== null ? { last_lap: lap } : null;
     }
-
-    if (
-      [
-        "best",
-        "blp",
-        "bestlap",
-        "best_lap"
-      ]
-        .includes(t) ||
-      (
-        t === "tn" &&
-        column === "12"
-      )
-    ) {
-      const lap =
-        parseLapTime(
-          value
-        );
-
-      return lap !==
-        null
-        ? {
-            best_lap:
-              lap
-          }
-        : null;
+    if (semantic === "best_lap") {
+      const lap = parseLapTime(value);
+      return lap !== null ? { best_lap: lap } : null;
     }
-
     return null;
   }
 
   async applyGrid(grid) {
-    if (
-      grid.columnTypes.size
-    ) {
-      this.columnTypes =
-        grid.columnTypes;
-    }
+    if (grid.columnTypes.size) this.columnTypes = grid.columnTypes;
+    if (grid.columnLabels?.size) this.columnLabels = grid.columnLabels;
+    if (!grid.rows.size) return;
 
-    if (
-      !grid.rows.size
-    ) {
-      return;
-    }
+    this.fieldApexIds = new Set([...grid.rows.keys()].filter(validApexId));
+    this.positions = new Map([...grid.positions].filter(([id]) => validApexId(id)));
 
-    /*
-     * The currently visible Apex grid defines the live field.
-     * Old IDs are replaced, not merged.
-     */
-    this.fieldApexIds =
-      new Set(
-        [
-          ...grid.rows.keys()
-        ]
-          .filter(
-            validApexId
-          )
-      );
+    const prune = map => new Map([...map].filter(([id]) => this.fieldApexIds.has(String(id))));
+    this.livePitCounts = prune(this.livePitCounts);
+    this.liveBestLaps = prune(this.liveBestLaps);
+    this.liveLastLaps = prune(this.liveLastLaps);
+    this.liveLapCounts = prune(this.liveLapCounts);
 
-    this.positions =
-      new Map(
-        [
-          ...grid.positions
-        ]
-          .filter(
-            (
-              [
-                id
-              ]
-            ) =>
-              validApexId(
-                id
-              )
-          )
-      );
-
-    for (
-      const [
-        id,
-        fields
-      ]
-      of grid.rows
-    ) {
-      if (
-        !validApexId(id)
-      ) {
-        continue;
-      }
-
+    for (const [id, fields] of grid.rows) {
+      if (!validApexId(id)) continue;
       const patch = {};
-
-      for (
-        const field
-        of fields
-      ) {
-        const partial =
-          this.patchFromField(
-            field.type,
-            field.value,
-            field.column
-          );
-
-        if (partial) {
-          Object.assign(
-            patch,
-            partial
-          );
+      for (const field of fields) {
+        const semantic = fieldSemantic(field.type, field.column, field.label);
+        if (semantic === "pit_count") {
+          const count = parseNumber(field.value);
+          if (count !== null && count >= 0) this.livePitCounts.set(String(id), Math.trunc(count));
+          continue;
         }
+        if (semantic === "best_lap") {
+          const lap = parseLapTime(field.value);
+          if (lap !== null && lap > 0) this.liveBestLaps.set(String(id), lap);
+        }
+        if (semantic === "last_lap") {
+          const lap = parseLapTime(field.value);
+          if (lap !== null && lap > 0) this.liveLastLaps.set(String(id), lap);
+        }
+        if (semantic === "lap_count") {
+          const lap = parseNumber(field.value);
+          if (lap !== null && lap >= 0) this.liveLapCounts.set(String(id), Math.trunc(lap));
+        }
+        const partial = this.patchFromField(field.type, field.value, field.column, field.label);
+        if (partial) Object.assign(patch, partial);
       }
-
-      if (
-        Object.keys(
-          patch
-        ).length
-      ) {
-        await this.upsertEntry(
-          id,
-          patch
-        );
-      }
+      if (Object.keys(patch).length) await this.upsertEntry(id, patch);
     }
 
     await this.persistState();
-
-    /*
-     * Grid alone is enough to trigger full race backfill.
-     * We do not wait for another new lap.
-     */
-    await this.scanAndQueueBackfill(
-      true
-    );
-
-    await this.processBackfillBatch();
+    await this.scanAndQueueBackfill(true);
   }
 
   async applyProtocolUpdate(parsed) {
-    const row =
-      parseRowId(
-        parsed.id
-      );
+    const row = parseRowId(parsed.id);
+    if (!row || !validApexId(row.apexId)) return;
+    const id = String(row.apexId);
+    this.fieldApexIds.add(id);
+    const key = row.column ? `c${row.column}` : null;
+    const type = row.column ? (this.columnTypes.get(key) || parsed.cls) : parsed.cls;
+    const label = key ? (this.columnLabels.get(key) || "") : "";
+    const normalizedType = String(type || "").toLowerCase();
 
-    if (
-      !row ||
-      !validApexId(
-        row.apexId
-      )
-    ) {
+    if (["rk","rank","pos","position"].includes(normalizedType)) {
+      const position = parseNumber(parsed.value);
+      if (position !== null && position > 0) this.positions.set(id, Math.trunc(position));
       return;
     }
 
-    const id =
-      String(
-        row.apexId
-      );
-
-    /*
-     * Every valid row update coming from the live Apex websocket is
-     * evidence that the kart belongs to the current field.  Do not
-     * reject a new current kart just because a restored field already
-     * contains some IDs.
-     */
-    this.fieldApexIds.add(
-      id
-    );
-
-    const type =
-      row.column
-        ? (
-            this.columnTypes.get(
-              `c${row.column}`
-            ) ||
-            parsed.cls
-          )
-        : parsed.cls;
-
-    const normalizedType =
-      String(
-        type ||
-        ""
-      )
-        .toLowerCase();
-
-    if (
-      [
-        "rk",
-        "rank",
-        "pos",
-        "position"
-      ]
-        .includes(
-          normalizedType
-        )
-    ) {
-      const position =
-        parseNumber(
-          parsed.value
-        );
-
-      if (
-        position !==
-          null &&
-        position >
-          0
-      ) {
-        this.positions.set(
-          id,
-          Math.trunc(
-            position
-          )
-        );
-      }
-
+    const semantic = fieldSemantic(type, row.column, label);
+    if (semantic === "pit_count") {
+      const count = parseNumber(parsed.value);
+      if (count !== null && count >= 0) this.livePitCounts.set(id, Math.trunc(count));
       return;
     }
-
-    const patch =
-      this.patchFromField(
-        type,
-        parsed.value,
-        row.column
-      );
-
-    if (!patch) {
-      return;
+    if (semantic === "best_lap") {
+      const lap = parseLapTime(parsed.value);
+      if (lap !== null && lap > 0) this.liveBestLaps.set(id, lap);
+    }
+    if (semantic === "last_lap") {
+      const lap = parseLapTime(parsed.value);
+      if (lap !== null && lap > 0) this.liveLastLaps.set(id, lap);
+    }
+    if (semantic === "lap_count") {
+      const lap = parseNumber(parsed.value);
+      if (lap !== null && lap >= 0) this.liveLapCounts.set(id, Math.trunc(lap));
     }
 
-    const previous =
-      await this.getEntry(
-        id
-      );
-
-    const previousLap =
-      Number(
-        previous
-          ?.lap_count
-      ) ||
-      0;
-
-    const next =
-      await this.upsertEntry(
-        id,
-        patch
-      );
-
-    const nextLap =
-      Number(
-        next
-          ?.lap_count
-      ) ||
-      0;
-
-    /*
-     * Live incremental update:
-     * queue a detail refresh for this kart.
-     */
-    if (
-      nextLap >
-      previousLap
-    ) {
-      this.enqueueBackfill(
-        id
-      );
-
-      await this.state.storage.setAlarm(
-        Date.now() +
-        100
-      );
+    const patch = this.patchFromField(type, parsed.value, row.column, label);
+    if (!patch) return;
+    const previous = await this.getEntry(id);
+    const previousLap = Number(previous?.lap_count) || 0;
+    const next = await this.upsertEntry(id, patch);
+    const nextLap = Number(next?.lap_count) || 0;
+    if (nextLap > previousLap) {
+      this.enqueueBackfill(id);
+      await this.state.storage.setAlarm(Date.now() + 100);
     }
   }
 
