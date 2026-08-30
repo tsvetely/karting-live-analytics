@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.4-current-pits-raw-analytics";
+  "2026-08-30-race-datasets-v6.5-grid-authoritative-full-backfill";
 
 const PAGE_SIZE = 1000;
 
@@ -806,10 +806,19 @@ function parseGridData(html) {
 
 
       if (type) {
-        fields[type] =
-          stripHtml(
+        /*
+         * Keep the physical Apex column number as well as data-type.
+         * Several live-grid columns share generic classes (for example
+         * tn/in), so dropping c9/c12/c13/c15 makes Last/Best/Laps/Pits
+         * impossible to distinguish on a full grid packet.
+         */
+        fields[`c${id[1]}`] = {
+          type,
+          column: id[1],
+          value: stripHtml(
             cellMatch[2]
-          );
+          )
+        };
       }
     }
 
@@ -3829,6 +3838,12 @@ export class ApexCollector {
     this.lastDetailFetch =
       new Map();
 
+    this.fullDetailRefreshRunning =
+      false;
+
+    this.lastFullDetailRefreshAt =
+      0;
+
 
     state.blockConcurrencyWhile(
       async () => {
@@ -4015,6 +4030,10 @@ export class ApexCollector {
     ) {
       await this.connect();
 
+      this.state.waitUntil(
+        this.refreshAllFieldDetails(false)
+      );
+
       return json(
         await this.snapshot()
       );
@@ -4047,6 +4066,10 @@ export class ApexCollector {
 
 
       await this.connect();
+
+      this.state.waitUntil(
+        this.refreshAllFieldDetails(true)
+      );
 
 
       return json(
@@ -4350,7 +4373,8 @@ export class ApexCollector {
 
 
   async refreshDetail(
-    apexId
+    apexId,
+    force = false
   ) {
     const id =
       String(
@@ -4378,6 +4402,7 @@ export class ApexCollector {
 
 
     if (
+      !force &&
       now -
       (
         this.lastDetailFetch.get(
@@ -4476,19 +4501,6 @@ export class ApexCollector {
           "race_id,apex_id,pit_number"
         );
 
-
-        this.pitCounts.set(
-          id,
-          Math.max(
-            ...pits.map(
-              row =>
-                Number(
-                  row.pit_number
-                ) ||
-                0
-            )
-          )
-        );
       }
 
 
@@ -4498,6 +4510,61 @@ export class ApexCollector {
       this.detailRunning.delete(
         id
       );
+    }
+  }
+
+
+  async refreshAllFieldDetails(
+    force = false
+  ) {
+    const now = Date.now();
+
+    if (this.fullDetailRefreshRunning) {
+      return;
+    }
+
+    if (
+      !force &&
+      now - this.lastFullDetailRefreshAt < 300000
+    ) {
+      return;
+    }
+
+    const ids = [
+      ...this.fieldApexIds
+    ]
+      .map(String)
+      .filter(validApexId);
+
+    if (!ids.length) {
+      return;
+    }
+
+    this.fullDetailRefreshRunning = true;
+    this.lastFullDetailRefreshAt = now;
+
+    try {
+      /*
+       * Rehydrate the whole CURRENT field after deploy/reconnect.
+       * Six karts at a time keeps Apex/Supabase load bounded while
+       * ensuring every team gets raw laps and current pit history.
+       */
+      for (let i = 0; i < ids.length; i += 6) {
+        const batch = ids.slice(i, i + 6);
+        await Promise.all(
+          batch.map(id =>
+            this.refreshDetail(id, true)
+              .catch(error =>
+                console.error(
+                  `DETAIL REFRESH ${id}:`,
+                  error
+                )
+              )
+          )
+        );
+      }
+    } finally {
+      this.fullDetailRefreshRunning = false;
     }
   }
 
@@ -4586,7 +4653,8 @@ export class ApexCollector {
 
     if (
       type === "pit" ||
-      cls === "pit"
+      cls === "pit" ||
+      column === "15"
     ) {
       const pits =
         parseNumber(
@@ -4615,10 +4683,7 @@ export class ApexCollector {
     if (
       type === "llp" ||
       cls === "llp" ||
-      (
-        cls === "tn" &&
-        column === "9"
-      )
+      column === "9"
     ) {
       const lap =
         parseLapTime(
@@ -4644,7 +4709,8 @@ export class ApexCollector {
 
     if (
       type === "blp" ||
-      cls === "blp"
+      cls === "blp" ||
+      column === "12"
     ) {
       const lap =
         parseLapTime(
@@ -4671,10 +4737,7 @@ export class ApexCollector {
     if (
       type === "tlp" ||
       cls === "tlp" ||
-      (
-        cls === "in" &&
-        column === "13"
-      )
+      column === "13"
     ) {
       const lapCount =
         parseNumber(
@@ -4772,26 +4835,33 @@ export class ApexCollector {
             of grid.rows
           ) {
             for (
-              const [
-                type,
-                fieldValue
-              ]
-              of Object.entries(
+              const cell
+              of Object.values(
                 fields
               )
             ) {
               await this.applyField(
                 apexId,
-                type,
-                type,
-                fieldValue,
-                null
+                cell.type,
+                cell.type,
+                cell.value,
+                cell.column
               );
             }
           }
 
 
           await this.persist();
+
+          /*
+           * A deployment can happen after the race has finished, so there
+           * may be no new lap packet to trigger refreshDetail().  The full
+           * grid is the authoritative current field: hydrate all 72 teams
+           * now instead of leaving later stints with valid_laps = 0.
+           */
+          this.state.waitUntil(
+            this.refreshAllFieldDetails(false)
+          );
         }
 
 
