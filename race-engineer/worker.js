@@ -1,4 +1,4 @@
-const VERSION = "2026-08-30-race-datasets-v6.22-history-and-downloads";
+const VERSION = "2026-08-30-race-datasets-v6.23-apex-sync";
 
 const PAGE_SIZE = 1000;
 
@@ -2397,23 +2397,36 @@ async function stintsPayload(env, rid, snapshot = null) {
     const entryLap=Number(entry.lap_count);
     const lastRecordedLap = laps.reduce((max,row)=>Math.max(max,Number(row.lap_number)||0),0);
     const currentLap=isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap) ? entryLap : lastRecordedLap);
-    if (Number.isFinite(currentLap) && currentLap>=start) {
-      const stats=currentLap>start ? (calculateRawStintStats(id,laps,start,currentLap,exclusions,{globalExcluded,splitRange:splitById.get(id),rainStartLap:rainStartById.get(id)}) || {
+    const expectedPitCount=isCurrentRace ? Number(realSnapshot?.pitCounts?.[id]) : teamPits.length;
+    const expectedPitNumber=Number.isFinite(expectedPitCount)?Math.max(0,Math.trunc(expectedPitCount)):null;
+    const newestPitUpdate=Math.max(0,...teamPits.map(p=>Date.parse(p.updated_at||"")||0));
+    const pitDataFresh=expectedPitNumber===0 || (newestPitUpdate>0 && Date.now()-newestPitUpdate<=180000);
+    const pitChainSynchronized=!isCurrentRace || expectedPitNumber===null || (expectedPitNumber===teamPits.length && pitDataFresh);
+    if (Number.isFinite(currentLap) && (pitChainSynchronized ? currentLap>=start : currentLap>=0)) {
+      const emptyStats={
         valid_laps:0, avg_lap_time:null, best_lap_time:null, best_lap_number:null,
-        worst_lap_time:null, worst_lap_number:null, consistency:null
-      }) : {
-        valid_laps:0, avg_lap_time:null, best_lap_time:null, best_lap_number:null,
-        worst_lap_time:null, worst_lap_number:null, consistency:null
+        worst_lap_time:null, worst_lap_number:null, consistency:null,
+        straight_valid_laps:0,straight_avg_lap_time:null,straight_best_lap_time:null,straight_best_lap_number:null,straight_worst_lap_time:null,straight_worst_lap_number:null,
+        reverse_valid_laps:0,reverse_avg_lap_time:null,reverse_best_lap_time:null,reverse_best_lap_number:null,reverse_worst_lap_time:null,reverse_worst_lap_number:null,
+        rain_valid_laps:0,rain_avg_lap_time:null,rain_best_lap_time:null,rain_best_lap_number:null,rain_worst_lap_time:null,rain_worst_lap_number:null
       };
+      const stats=pitChainSynchronized && currentLap>start
+        ? (calculateRawStintStats(id,laps,start,currentLap,exclusions,{globalExcluded,splitRange:splitById.get(id),rainStartLap:rainStartById.get(id)}) || emptyStats)
+        : emptyStats;
+      const liveStintNumber=isCurrentRace && Number.isFinite(expectedPitCount)
+        ? Math.max(1,Math.trunc(expectedPitCount)+1)
+        : stintNumber;
+      const liveStart=pitChainSynchronized ? start : null;
       result.push({
         race_id:Number(rid), apex_id:id,
         team_name:resolveTeam(id,teamMap,entry.team_name),
         driver_name:entry.current_driver||null,
-        stint_number:stintNumber, start_lap_count:start,
+        stint_number:liveStintNumber, start_lap_count:liveStart,
         end_lap_count:isCurrentRace?null:currentLap,
-        current_lap_count:currentLap, total_laps:Math.max(0,currentLap-start), ...stats,
+        current_lap_count:currentLap, total_laps:pitChainSynchronized?Math.max(0,currentLap-start):null, ...stats,
         pit_hour:null,on_track:null,pit_time:null,total_time:null,
-        is_live:isCurrentRace,status:isCurrentRace?"LIVE":"COMPLETED",
+        is_live:isCurrentRace,status:isCurrentRace?(pitChainSynchronized?"LIVE":"SYNCING_PITS"):"COMPLETED",
+        data_complete:pitChainSynchronized, expected_pit_count:Number.isFinite(expectedPitCount)?Math.trunc(expectedPitCount):null, stored_pit_count:teamPits.length,
         direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
     }
@@ -3039,8 +3052,9 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       current_driver:(isCurrentRace?snapshot?.drivers?.[id]:null)||stint.driver_name||entry.current_driver||null,
       race_lap:Number(lap)||0,live_lap_count:Number(lap)||0,pit_count:pitCount,
       stint_number:number(stint.stint_number)||pitCount+1,start_lap_count:number(stint.start_lap_count)||0,
-      stint_laps:number(stint.total_laps)||0,total_stint_laps:number(stint.total_laps)||0,
-      valid_laps:number(stint.valid_laps)||0,
+      stint_laps:number(stint.total_laps),total_stint_laps:number(stint.total_laps),
+      valid_laps:number(stint.valid_laps) ?? 0,
+      stint_status:stint.status||null,data_complete:stint.data_complete!==false,expected_pit_count:number(stint.expected_pit_count),stored_pit_count:number(stint.stored_pit_count),
       live_last_lap:isCurrentRace?(number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap)):number(entry.last_lap),
       avg_lap_time:number(stint.avg_lap_time),best_lap_time:number(stint.best_lap_time),
       best_lap_number:number(stint.best_lap_number),worst_lap_time:number(stint.worst_lap_time),
@@ -3905,6 +3919,7 @@ export class ApexCollector {
 
     this.fullDetailRefreshRunning = false;
     this.lastFullDetailRefreshAt = 0;
+    this.sessionResetting = false;
 
     this.detailRunning =
       new Set();
@@ -4125,7 +4140,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.21";
+      const repairVersion = "v6.23";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4195,6 +4210,11 @@ export class ApexCollector {
       } catch {}
     }
 
+
+    // Keep Apex detail history synchronized even when individual websocket
+    // field updates are partial. This is the authoritative source for raw laps
+    // and pit boundaries used by the analytics.
+    this.state.waitUntil(this.refreshAllFieldDetails(false));
 
     await this.state.storage.setAlarm(
       Date.now() +
@@ -4494,15 +4514,23 @@ export class ApexCollector {
         throw new Error(`Incomplete Apex detail ${id}: ${laps.length} laps, max ${maxLap}, expected ${lapCount}`);
       }
 
-      // race_id=1 is reused. Once a complete CURRENT detail response is in hand,
-      // replace this kart's contaminated raw history with the current session.
+      // Replace lap history only after Apex returned a complete lap chain.
+      // This removes stale rows from the previous organiser session while never
+      // deleting good current data on a partial response.
       await sbDelete(this.env,"apex_lap_events",{race_id:`eq.${this.rid}`,apex_id:`eq.${id}`});
       for(let i=0;i<laps.length;i+=250){
         await sbUpsert(this.env,"apex_lap_events",laps.slice(i,i+250),"race_id,apex_id,lap_number");
       }
 
-      await sbDelete(this.env,"apex_pit_stints",{race_id:`eq.${this.rid}`,apex_id:`eq.${id}`});
-      if(pits.length) await sbUpsert(this.env,"apex_pit_stints",pits,"race_id,apex_id,pit_number");
+      const expectedPits=Number(this.pitCounts.get(id));
+      const parsedPitNumbers=new Set(pits.map(p=>Number(p.pit_number)).filter(n=>Number.isFinite(n)&&n>0));
+      const pitChainComplete=!Number.isFinite(expectedPits)||expectedPits<=0||parsedPitNumbers.size>=Math.trunc(expectedPits);
+      if(pitChainComplete){
+        await sbDelete(this.env,"apex_pit_stints",{race_id:`eq.${this.rid}`,apex_id:`eq.${id}`});
+        if(pits.length) await sbUpsert(this.env,"apex_pit_stints",pits,"race_id,apex_id,pit_number");
+      } else {
+        console.warn(`Incomplete Apex pit detail ${id}: ${parsedPitNumbers.size} pits, expected ${expectedPits}; keeping existing pit chain and retrying`);
+      }
 
       await this.persist();
     } finally {
@@ -4513,7 +4541,7 @@ export class ApexCollector {
   async refreshAllFieldDetails(force = false) {
     const now=Date.now();
     if(this.fullDetailRefreshRunning)return;
-    if(!force && now-this.lastFullDetailRefreshAt<300000)return;
+    if(!force && now-this.lastFullDetailRefreshAt<55000)return;
     const ids=[...this.fieldApexIds].map(String).filter(validApexId);
     if(!ids.length)return;
     this.fullDetailRefreshRunning=true;
@@ -4544,7 +4572,18 @@ export class ApexCollector {
       const p=parseNumber(value);if(p!==null&&p>0)this.positions.set(id,Math.trunc(p));return;
     }
     if(t==="pit"||c==="pit"||col==="15"){
-      const p=parseNumber(value);if(p!==null&&p>=0)this.pitCounts.set(id,Math.trunc(p));return;
+      const p=parseNumber(value);
+      if(p!==null&&p>=0){
+        const next=Math.trunc(p);
+        const previous=Number(this.pitCounts.get(id));
+        this.pitCounts.set(id,next);
+        // A pit-count change changes the stint boundary immediately. Fetch the
+        // Apex P/L detail now instead of waiting for the next lap or 5-minute sweep.
+        if(!Number.isFinite(previous)||next!==previous){
+          this.state.waitUntil(this.refreshDetail(id,true).catch(e=>console.error(`PIT DETAIL REFRESH ${id}:`,e)));
+        }
+      }
+      return;
     }
     if(t==="llp"||c==="llp"||col==="9"){
       const v=parseLapTime(value);if(v!==null){this.lastLaps.set(id,v);await this.upsertEntry(id,{last_lap:v});}return;
@@ -4566,6 +4605,19 @@ export class ApexCollector {
     if(t==="tlp"||c==="tlp"||col==="13"){
       const n=parseNumber(value);if(n!==null&&n>=0){
         const lapNumber=Math.trunc(n);
+        const previousLap=Number(this.lapCounts.get(id));
+        // New organiser session can start minutes after the previous one. A
+        // clear lap counter reset is a stronger boundary than a 6-hour silence.
+        if(Number.isFinite(previousLap)&&previousLap>=10&&lapNumber>=0&&lapNumber+5<previousLap&&!this.sessionResetting){
+          this.sessionResetting=true;
+          try{
+            const archivedRid=await archiveCurrentRace(this.env,this.rid);
+            if(archivedRid) await this.state.storage.put("lastArchivedRaceId",archivedRid);
+            await clearCurrentRaceData(this.env,this.rid);
+            this.positions.clear();this.fieldApexIds.clear();this.pitCounts.clear();this.lapCounts.clear();this.bestLaps.clear();this.lastLaps.clear();
+            this.lastDetailFetch.clear();
+          }catch(error){console.error("LAP RESET ARCHIVE:",error);}finally{this.sessionResetting=false;}
+        }
         this.lapCounts.set(id,lapNumber);
         await this.upsertEntry(id,{lap_count:lapNumber});
 
