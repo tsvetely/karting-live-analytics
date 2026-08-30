@@ -697,7 +697,8 @@ function parsePitRows(
         String(
           match[1]
         ),
-            team_name:
+
+      team_name:
         teamName ||
         null,
 
@@ -1432,6 +1433,7 @@ function newestEntryMap(
 
   return result;
 }
+
 function uniquePits(rows) {
   const result =
     new Map();
@@ -1590,7 +1592,6 @@ function normalizeLapRows(rows) {
         b.lap_number
     );
 }
-
 function hasLapCoverageThrough(
   rows,
   endLap
@@ -2722,7 +2723,8 @@ async function stintsPayload(
         []
       );
     }
-        completedById
+
+    completedById
       .get(id)
       .push(row);
   }
@@ -3138,7 +3140,6 @@ function buildDriversFromStints(
           )
     );
 }
-
 function buildTeamsFromStints(
   stints,
   positions = {}
@@ -3422,7 +3423,8 @@ async function pitsPayload(
       .catch(
         () => []
       );
-    const isCurrent =
+
+  const isCurrent =
     Number(rid) ===
     Number(
       raceId(env)
@@ -4123,7 +4125,7 @@ function csvEscape(value) {
 
   return /[",\n]/
     .test(
-            text
+      text
     )
       ? `"${text.replace(
           /"/g,
@@ -4633,6 +4635,7 @@ async function deleteManualExclusion(
       true
   });
 }
+
 export class ApexCollector {
 
   constructor(
@@ -5105,8 +5108,7 @@ export class ApexCollector {
       );
     }
   }
-
-  async ensureStarted() {
+    async ensureStarted() {
     if (
       !this.fieldApexIds.size
     ) {
@@ -5259,7 +5261,8 @@ export class ApexCollector {
       throw error;
     }
   }
-    async getEntry(id) {
+
+  async getEntry(id) {
     const key =
       String(id);
 
@@ -5480,7 +5483,11 @@ export class ApexCollector {
         "lastlap",
         "last_lap"
       ]
-        .includes(t)
+        .includes(t) ||
+      (
+        t === "tn" &&
+        column === "9"
+      )
     ) {
       const lap =
         parseLapTime(
@@ -5628,7 +5635,8 @@ export class ApexCollector {
       true
     );
   }
-    async applyProtocolUpdate(parsed) {
+
+  async applyProtocolUpdate(parsed) {
     const row =
       parseRowId(
         parsed.id
@@ -6247,6 +6255,7 @@ export class ApexCollector {
     return lapCount;
   }
 }
+
 async function handleApi(
   request,
   env,
