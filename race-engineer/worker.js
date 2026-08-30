@@ -1,4 +1,4 @@
-const VERSION = "2026-08-30-race-datasets-v6.22-live-grid-authoritative";
+const VERSION = "2026-08-30-race-datasets-v6.21-current-session-rebuild";
 
 const PAGE_SIZE = 1000;
 
@@ -2782,30 +2782,18 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       worst_lap_number:number(live.worst_lap_number),consistency:number(live.consistency),updated_at:entry.updated_at||null
     });
   }
-  // Overall race best is LIVE-grid authoritative. Apex already exposes each
-  // kart's race best semantically as BLP. Do not derive this card from the
-  // current stint and do not require the asynchronous detail rebuild to finish.
-  for (const id of fieldIds) {
-    const t = Number(snapshot?.bestLaps?.[String(id)]);
-    if (Number.isFinite(t) && t > 0 && (raceBest === null || t < raceBest)) {
-      raceBest = t;
-    }
-  }
-
-  // Raw current-session history is only a safe fallback when the grid did not
-  // expose any BLP value yet. It may never replace a valid Apex grid best with
-  // a slower value.
-  if (raceBest === null) {
-    for (const lapRow of currentLapEvents || []) {
-      const id = String(lapRow.apex_id ?? "").trim();
-      if (!fieldIds.has(id)) continue;
-      const lapNo = Number(lapRow.lap_number);
-      const currentCount = Number(snapshot?.lapCounts?.[id]);
-      if (!Number.isFinite(lapNo) || lapNo <= 0) continue;
-      if (Number.isFinite(currentCount) && currentCount >= 0 && lapNo > currentCount) continue;
-      const t = Number(lapRow.lap_time);
-      if (Number.isFinite(t) && t > 0 && (raceBest === null || t < raceBest)) raceBest = t;
-    }
+  // Authoritative overall best: only raw laps belonging to the current 72-kart
+  // field and not beyond each kart's current Apex lap count. refreshDetail()
+  // replaces each kart's race_id=1 history with the complete current session.
+  for (const lapRow of currentLapEvents || []) {
+    const id = String(lapRow.apex_id ?? "").trim();
+    if (!fieldIds.has(id)) continue;
+    const lapNo = Number(lapRow.lap_number);
+    const currentCount = Number(snapshot?.lapCounts?.[id]);
+    if (!Number.isFinite(lapNo) || lapNo <= 0) continue;
+    if (Number.isFinite(currentCount) && currentCount >= 0 && lapNo > currentCount) continue;
+    const t = Number(lapRow.lap_time);
+    if (Number.isFinite(t) && t > 0 && (raceBest === null || t < raceBest)) raceBest = t;
   }
 
   current.sort((a,b)=>{
@@ -4347,7 +4335,7 @@ export class ApexCollector {
     if(t==="llp"||c==="llp"||col==="9"){
       const v=parseLapTime(value);if(v!==null){this.lastLaps.set(id,v);await this.upsertEntry(id,{last_lap:v});}return;
     }
-    if(t==="blp"||c==="blp"){
+    if(t==="blp"||c==="blp"||col==="12"){
       const v=parseLapTime(value);
       if(v!==null&&v>0){
         const previous=Number(this.bestLaps.get(id));
