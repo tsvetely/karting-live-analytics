@@ -1,5 +1,5 @@
 const VERSION =
-  "2026-08-30-race-datasets-v6.11-stable-grid-best-session-aware";
+  "2026-08-30-race-datasets-v6.12-ui-race-best-authoritative";
 
 const PAGE_SIZE = 1000;
 
@@ -2626,7 +2626,7 @@ async function livePayload(env, rid) {
   const isLive=Number.isFinite(lastPacket)&&Date.now()-lastPacket<180000;
   return {race_id:Number(rid),session_name:"Apex Timing",active:current.length>0,data_available:current.length>0,
     is_live:isLive,session_status:isLive?"LIVE":"FINISHED",collector_connected:snapshot?.connected===true,
-    team_count:current.length,race_lap:raceLap,pit_count:pitTotal,best_lap:raceBest,current};
+    team_count:current.length,race_lap:raceLap,pit_count:pitTotal,best_lap:raceBest,race_best_lap:raceBest,current};
 }
 
 // ============================================================
