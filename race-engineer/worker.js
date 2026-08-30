@@ -3483,134 +3483,92 @@ async function clearCurrentRaceData(env, rid) {
 // RACES
 // ============================================================
 
-async function racesPayload(env) {
-  const rows =
-    await sbGetAll(
-      env,
-      "apex_entries",
-      {
-        select:
-          "race_id,updated_at",
+async function raceArchiveFingerprint(entries) {
+  return (entries || [])
+    .map(row => [
+      String(row.apex_id ?? ""),
+      String(row.team_name ?? ""),
+      String(row.lap_count ?? ""),
+      String(row.best_lap ?? "")
+    ].join("|"))
+    .sort()
+    .join("\n");
+}
 
-        order:
-          "updated_at.desc"
-      }
-    )
-      .catch(
-        () => []
-      );
+async function ensureFinishedCurrentRaceArchived(env, currentRid, snapshot = null) {
+  const lastPacket = Date.parse(snapshot?.last_packet_at || "");
+  const raceStillLive = Number.isFinite(lastPacket) && (Date.now() - lastPacket) < 3 * 60 * 1000;
+  if (raceStillLive) return null;
 
+  const currentEntries = await loadEntries(env, currentRid).catch(() => []);
+  if (!currentEntries.length) return null;
 
-  const races =
-    new Map();
+  const currentFingerprint = await raceArchiveFingerprint(currentEntries);
+  if (!currentFingerprint) return null;
 
+  const allEntries = await sbGetAll(env, "apex_entries", {
+    select: "*",
+    order: "race_id.asc,apex_id.asc"
+  }).catch(() => []);
 
-  for (
-    const row
-    of rows
-  ) {
-    const id =
-      Number(
-        row.race_id
-      );
+  const byRace = new Map();
+  for (const row of allEntries) {
+    const id = Number(row.race_id);
+    if (!Number.isFinite(id) || id === Number(currentRid)) continue;
+    if (!byRace.has(id)) byRace.set(id, []);
+    byRace.get(id).push(row);
+  }
 
+  for (const [id, rows] of byRace.entries()) {
+    if ((await raceArchiveFingerprint(rows)) === currentFingerprint) return id;
+  }
 
-    if (
-      !Number.isFinite(id)
-    ) {
-      continue;
-    }
+  // The live/current race remains available as race_id=currentRid. We only COPY
+  // the finished data into a new immutable history race; do not clear current.
+  return archiveCurrentRace(env, currentRid);
+}
 
+async function racesPayload(env, currentRid = raceId(env)) {
+  const rows = await sbGetAll(env, "apex_entries", {
+    select: "race_id,updated_at",
+    order: "updated_at.asc"
+  }).catch(() => []);
 
-    const timestamp =
-      Date.parse(
-        row.updated_at ||
-        ""
-      );
+  const races = new Map();
+  for (const row of rows) {
+    const id = Number(row.race_id);
+    if (!Number.isFinite(id) || id === Number(currentRid)) continue;
 
-
-    const previous =
-      races.get(id);
-
-
-    if (
-      !previous ||
-      timestamp >
-        previous.timestamp
-    ) {
-      races.set(
-        id,
-        {
-          timestamp:
-            Number.isFinite(
-              timestamp
-            )
-              ? timestamp
-              : 0
-        }
-      );
+    const timestamp = Date.parse(row.updated_at || "");
+    const previous = races.get(id);
+    if (!previous || timestamp > previous.timestamp) {
+      races.set(id, {
+        timestamp: Number.isFinite(timestamp) ? timestamp : 0
+      });
     }
   }
 
+  // The database race_id is an internal storage key. History labels are a
+  // chronological user-facing sequence so the current race is never duplicated
+  // under HISTORY and old races remain stable in the selector.
+  const chronological = [...races.entries()]
+    .map(([id, value]) => ({ id, race_id: id, timestamp: value.timestamp }))
+    .sort((a, b) => a.timestamp - b.timestamp || Number(a.race_id) - Number(b.race_id));
 
-  return [
-    ...races.entries()
-  ]
-    .map(
-      (
-        [
-          id,
-          value
-        ]
-      ) => {
-        const date =
-          value.timestamp
-            ? new Date(
-                value.timestamp
-              )
-            : null;
+  chronological.forEach((race, index) => {
+    const date = race.timestamp ? new Date(race.timestamp) : null;
+    race.label = date
+      ? `Race ${index + 1} — ${date.toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          timeZone: "Europe/Sofia"
+        })}`
+      : `Race ${index + 1}`;
+  });
 
-
-        return {
-          id,
-
-          race_id:
-            id,
-
-          label:
-            date
-              ? (
-                  `Race ${id} — ` +
-                  date.toLocaleDateString(
-                    "en-GB",
-                    {
-                      day:
-                        "2-digit",
-
-                      month:
-                        "2-digit",
-
-                      year:
-                        "numeric",
-
-                      timeZone:
-                        "Europe/Sofia"
-                    }
-                  )
-                )
-              : `Race ${id}`
-        };
-      }
-    )
-    .sort(
-      (a, b) =>
-        Number(
-          b.race_id
-        ) -
-        Number(
-          a.race_id
-        )
-    );
+  // Latest race first in the dropdown.
+  return chronological.reverse();
 }
 
 
@@ -5306,14 +5264,17 @@ export default {
         url.pathname ===
         "/api/races"
       ) {
-        return json({
-          current_race_id:
-            raceId(env),
+        const currentRid = raceId(env);
+        const snapshot = await collectorSnapshot(env).catch(() => null);
 
-          rows:
-            await racesPayload(
-              env
-            )
+        // If the current Apex session has finished, preserve it once as a
+        // history race. This does not depend on a future race packet arriving.
+        await ensureFinishedCurrentRaceArchived(env, currentRid, snapshot)
+          .catch(error => console.warn("HISTORY ARCHIVE:", error?.message || error));
+
+        return json({
+          current_race_id: currentRid,
+          rows: await racesPayload(env, currentRid)
         });
       }
 
