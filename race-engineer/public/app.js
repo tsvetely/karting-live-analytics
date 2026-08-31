@@ -376,18 +376,140 @@ function apiUrl(path) {
 // the browser download.
 // ============================================================
 
-function downloadFileFromEndpoint(
+async function downloadFileFromEndpoint(
   path,
-  fallbackFilename = "download"
+  fallbackFilename =
+    "download"
 ) {
-  const link = document.createElement("a");
-  link.href = apiUrl(path);
-  link.style.display = "none";
-  link.setAttribute("aria-hidden", "true");
-  document.body.appendChild(link);
-  link.click();
-  window.setTimeout(() => link.remove(), 1000);
-  return { filename: fallbackFilename, url: link.href };
+  const response =
+    await fetch(
+      apiUrl(path),
+      {
+        method: "GET",
+        cache: "no-store"
+      }
+    );
+
+
+  if (!response.ok) {
+    let message = "";
+
+    try {
+      message =
+        await response.text();
+    } catch {
+      message = "";
+    }
+
+    throw new Error(
+      message ||
+      `Download failed: HTTP ${response.status}`
+    );
+  }
+
+
+  const blob =
+    await response.blob();
+
+
+  if (
+    !blob ||
+    blob.size === 0
+  ) {
+    throw new Error(
+      "The server returned an empty file."
+    );
+  }
+
+
+  const disposition =
+    response.headers.get(
+      "content-disposition"
+    ) || "";
+
+
+  let filename =
+    fallbackFilename;
+
+
+  const utf8Match =
+    /filename\*=UTF-8''([^;]+)/i
+      .exec(disposition);
+
+
+  const normalMatch =
+    /filename="([^"]+)"/i
+      .exec(disposition);
+
+
+  if (
+    utf8Match?.[1]
+  ) {
+    try {
+      filename =
+        decodeURIComponent(
+          utf8Match[1]
+        );
+    } catch {
+      filename =
+        utf8Match[1];
+    }
+
+  } else if (
+    normalMatch?.[1]
+  ) {
+    filename =
+      normalMatch[1];
+  }
+
+
+  const objectUrl =
+    URL.createObjectURL(
+      blob
+    );
+
+
+  try {
+    const link =
+      document.createElement(
+        "a"
+      );
+
+    link.href =
+      objectUrl;
+
+    link.download =
+      filename;
+
+    link.style.display =
+      "none";
+
+
+    document.body
+      .appendChild(
+        link
+      );
+
+
+    link.click();
+    link.remove();
+
+  } finally {
+    window.setTimeout(
+      () =>
+        URL.revokeObjectURL(
+          objectUrl
+        ),
+      1000
+    );
+  }
+
+
+  return {
+    filename,
+    size:
+      blob.size
+  };
 }
 
 
@@ -1508,24 +1630,25 @@ function updateRaceContext() {
       );
 
 
-    // "Current race" is the LIVE source/mode even after timing has stopped.
-    // Do not replace the LIVE badge with FINISHED; the separate status text
-    // already tells the user whether timing is active, waiting or finished.
     if (badge) {
       badge.textContent =
-        "LIVE";
+        status;
 
       badge.className =
-        "raceModeBadge live";
+        status === "LIVE"
+          ? "raceModeBadge live"
+          : "raceModeBadge history";
     }
 
 
     if (liveBadge) {
       liveBadge.textContent =
-        "LIVE";
+        status;
 
       liveBadge.className =
-        "liveBadge live";
+        status === "LIVE"
+          ? "liveBadge live"
+          : "liveBadge history";
     }
 
 
@@ -1598,28 +1721,6 @@ function updateRaceContext() {
 // OVERVIEW
 // ============================================================
 
-// Read a value from the unmodified Apex grid row. Prefer Apex semantic
-// data-type names and use the current grid column only as a compatibility
-// fallback. This is display-only: no analytics are reconstructed here.
-function apexField(row, types = []) {
-  const fields = row?.apex_fields;
-  if (!fields || typeof fields !== "object") return null;
-
-  const wanted = new Set(types.map(value => String(value || "").toLowerCase()));
-  for (const cell of Object.values(fields)) {
-    const type = String(cell?.type || "").toLowerCase();
-    if (!wanted.has(type)) continue;
-
-    const value = cell?.value;
-    if (value !== null && value !== undefined && String(value).trim() !== "") return value;
-
-    const alt = cell?.image_alt;
-    if (alt !== null && alt !== undefined && String(alt).trim() !== "") return alt;
-  }
-
-  return null;
-}
-
 function renderOverview() {
   const body =
     $("overviewBody");
@@ -1658,14 +1759,6 @@ function renderOverview() {
   ${esc(row.position ?? "—")}
 </td>
 
-<td>
-  ${esc(apexField(row, ["no", "kart", "num", "number", "kartnumber"]) ?? "—")}
-</td>
-
-<td>
-  ${esc(apexField(row, ["nat", "nation", "country", "flag"]) ?? "—")}
-</td>
-
 <td class="team">
   ${esc(
     row.team_name ||
@@ -1682,26 +1775,6 @@ function renderOverview() {
 </td>
 
 <td>
-  ${esc(apexField(row, ["s1", "sector1", "sector_1"]) ?? "—")}
-</td>
-
-<td>
-  ${esc(apexField(row, ["s2", "sector2", "sector_2"]) ?? "—")}
-</td>
-
-<td>
-  ${esc(apexField(row, ["s3", "sector3", "sector_3"]) ?? "—")}
-</td>
-
-<td>
-  ${esc(apexField(row, ["gap", "gapleader", "gap_leader"]) ?? "—")}
-</td>
-
-<td>
-  ${esc(apexField(row, ["interval", "interv", "int", "gapnext", "gap_next"]) ?? "—")}
-</td>
-
-<td>
   ${esc(
     pick(
       row,
@@ -1713,19 +1786,7 @@ function renderOverview() {
 </td>
 
 <td>
-  ${esc(apexField(row, ["otr", "ontrack", "on_track", "tracktime", "trk"]) ?? "—")}
-</td>
-
-<td>
   ${esc(row.pit_count ?? "—")}
-</td>
-
-<td>
-  ${esc(apexField(row, ["pittime", "pit_time", "pt"]) ?? "—")}
-</td>
-
-<td>
-  ${esc(apexField(row, ["penalty", "pen", "penaltime"]) ?? "—")}
 </td>
 
 <td>
@@ -1755,10 +1816,6 @@ function renderOverview() {
       "last_lap"
     )
   )}
-</td>
-
-<td class="good">
-  ${time(row.apex_best_lap)}
 </td>
 
 <td>
@@ -1824,7 +1881,7 @@ function renderOverview() {
       .join("") ||
     `
 <tr class="empty">
-  <td colspan="29">
+  <td colspan="16">
     ${
       isLiveRace()
         ? "Waiting for current Apex race data."
@@ -1899,36 +1956,32 @@ function renderOverviewSummary() {
       );
 
 
-  const liveSummary = isLiveRace() ? S.liveMeta : null;
+  const liveSummary = isCurrentRaceSelected() ? S.liveMeta : null;
   const authoritativeTeams = number(liveSummary?.team_count);
   const authoritativeLap = number(liveSummary?.race_lap);
   const authoritativePits = number(liveSummary?.pit_count);
   const authoritativeBest = number(liveSummary?.race_best_lap ?? liveSummary?.best_lap);
 
   if ($("summaryTeams")) {
-    const value = authoritativeTeams !== null && authoritativeTeams > 0 ? authoritativeTeams : rows.length;
+    const value = authoritativeTeams ?? rows.length;
     $("summaryTeams").textContent = value > 0 ? value : "—";
   }
 
   if ($("summaryRaceLap")) {
-    const value = authoritativeLap !== null && authoritativeLap > 0 ? authoritativeLap : raceLap;
+    const value = authoritativeLap ?? raceLap;
     $("summaryRaceLap").textContent = value > 0 ? value : "—";
   }
 
   if ($("summaryPits")) {
-    const value = authoritativePits !== null && authoritativePits > 0 ? authoritativePits : pitStops;
-    $("summaryPits").textContent = value > 0 ? value : (rows.length ? 0 : "—");
+    $("summaryPits").textContent = authoritativePits ?? pitStops;
   }
 
   if ($("summaryBestLap")) {
-    const fallbackBest = best.length ? Math.min(...best) : null;
-    const value = authoritativeBest !== null && authoritativeBest > 0
-      ? authoritativeBest
-      : fallbackBest;
-
+    // Do not calculate the overall race best from current-stint BEST cells.
+    // If Apex has not supplied an authoritative race best yet, show blank.
     $("summaryBestLap").textContent =
-      value !== null && value > 0
-        ? time(value)
+      authoritativeBest && authoritativeBest > 0
+        ? time(authoritativeBest)
         : "—";
   }
 }
@@ -2041,16 +2094,9 @@ function renderStints() {
   ${esc(row.worst_lap_number ?? "—")}
 </td>
 
-<td>${time(row.consistency)}</td>
-<td>${time(row.straight_avg_lap_time)}</td>
-<td class="good">${time(row.straight_best_lap_time)}</td>
-<td class="bad">${time(row.straight_worst_lap_time)}</td>
-<td>${time(row.reverse_avg_lap_time)}</td>
-<td class="good">${time(row.reverse_best_lap_time)}</td>
-<td class="bad">${time(row.reverse_worst_lap_time)}</td>
-<td>${time(row.rain_avg_lap_time)}</td>
-<td class="good">${time(row.rain_best_lap_time)}</td>
-<td class="bad">${time(row.rain_worst_lap_time)}</td>
+<td>
+  ${time(row.consistency)}
+</td>
 
 </tr>
 `
@@ -2058,7 +2104,7 @@ function renderStints() {
       .join("") ||
     `
 <tr class="empty">
-  <td colspan="22">
+  <td colspan="13">
     No stint data for this race.
   </td>
 </tr>
@@ -2216,21 +2262,27 @@ function renderTeams() {
   ${esc(row.total_laps ?? "—")}
 </td>
 
-<td>${time(row.avg_lap_time)}</td>
-<td class="good">${time(row.best_lap_time)}</td>
-<td>${esc(row.best_lap_number ?? "—")}</td>
-<td class="bad">${time(row.worst_lap_time)}</td>
-<td>${esc(row.worst_lap_number ?? "—")}</td>
-<td>${time(pick(row,"avg_consistency","consistency"))}</td>
-<td>${time(row.straight_avg_lap_time)}</td>
-<td class="good">${time(row.straight_best_lap_time)}</td>
-<td class="bad">${time(row.straight_worst_lap_time)}</td>
-<td>${time(row.reverse_avg_lap_time)}</td>
-<td class="good">${time(row.reverse_best_lap_time)}</td>
-<td class="bad">${time(row.reverse_worst_lap_time)}</td>
-<td>${time(row.rain_avg_lap_time)}</td>
-<td class="good">${time(row.rain_best_lap_time)}</td>
-<td class="bad">${time(row.rain_worst_lap_time)}</td>
+<td>
+  ${time(row.avg_lap_time)}
+</td>
+
+<td class="good">
+  ${time(row.best_lap_time)}
+</td>
+
+<td>
+  ${time(
+    pick(
+      row,
+      "avg_consistency",
+      "consistency"
+    )
+  )}
+</td>
+
+<td>
+  ${time(row.driver_spread)}
+</td>
 
 </tr>
 `
@@ -2238,7 +2290,7 @@ function renderTeams() {
       .join("") ||
     `
 <tr class="empty">
-  <td colspan="20">
+  <td colspan="9">
     No team data for this race.
   </td>
 </tr>
@@ -2966,7 +3018,6 @@ async function loadCurrentView(
       break;
 
     case "reports":
-      await loadReportData(force);
       renderReports();
       break;
   }
@@ -3036,11 +3087,6 @@ async function switchView(view) {
     );
 
   } else {
-    try {
-      await loadReportData(false);
-    } catch (error) {
-      console.error("Report data load failed:", error);
-    }
     renderReports();
   }
 }
@@ -4388,18 +4434,6 @@ window.onload = () => window.print();
 // REPORTS
 // ============================================================
 
-async function loadReportData(force = false) {
-  const results = await Promise.allSettled([
-    loadStints(force),
-    loadDrivers(force),
-    loadTeams(force),
-    loadPits(force)
-  ]);
-  const failed = results.find(result => result.status === "rejected");
-  if (failed) throw failed.reason;
-}
-
-
 function renderReports() {
   const hasRace =
     raceHasData() ||
@@ -4413,12 +4447,7 @@ function renderReports() {
     "downloadRaceCsv",
     "downloadRacePdf",
     "organiserReport1Csv",
-    "organiserReport1Pdf",
-    "organiserReport2Csv",
-    "organiserReport2Pdf",
-    "viewRawApex",
-    "downloadRawApexJson",
-    "downloadRawApexTxt"
+    "organiserReport2Pdf"
   ]
     .forEach(
       id => {
@@ -4432,6 +4461,24 @@ function renderReports() {
       }
     );
 
+
+  const report1Pdf =
+    $("organiserReport1Pdf");
+
+  const report2Csv =
+    $("organiserReport2Csv");
+
+
+  if (report1Pdf) {
+    report1Pdf.style.display =
+      "none";
+  }
+
+
+  if (report2Csv) {
+    report2Csv.style.display =
+      "none";
+  }
 
 
   const note =
@@ -4489,80 +4536,40 @@ function setReportButtonBusy(
 
 
 function initReports() {
-  $("viewRawApex")
-    ?.addEventListener("click", () => {
-      const params = new URLSearchParams();
-      if (S.raceId) params.set("race_id", String(S.raceId));
-      params.set("limit", "500");
-      window.open(`/api/raw/apex?${params.toString()}`, "_blank", "noopener");
-    });
-
-  $("downloadRawApexJson")
-    ?.addEventListener("click", async event => {
-      const button = event.currentTarget;
-      setReportButtonBusy(button, true, "JSON");
-      try {
-        await downloadFileFromEndpoint(
-          "/api/reports/apex-raw.json",
-          `${reportBaseName()} - Apex raw data.json`
-        );
-      } catch (error) {
-        alert(`Raw Apex JSON download failed:\n\n${error.message}`);
-      } finally {
-        setReportButtonBusy(button, false, "JSON");
-        renderReports();
-      }
-    });
-
-  $("downloadRawApexTxt")
-    ?.addEventListener("click", async event => {
-      const button = event.currentTarget;
-      setReportButtonBusy(button, true, "RAW TXT");
-      try {
-        await downloadFileFromEndpoint(
-          "/api/reports/apex-raw.txt",
-          `${reportBaseName()} - Apex raw packets.txt`
-        );
-      } catch (error) {
-        alert(`Raw Apex TXT download failed:\n\n${error.message}`);
-      } finally {
-        setReportButtonBusy(button, false, "RAW TXT");
-        renderReports();
-      }
-    });
-
   $("downloadRaceCsv")
-    ?.addEventListener("click", event => {
-      const button = event.currentTarget;
-      setReportButtonBusy(button, true, "CSV");
-      try {
-        downloadFileFromEndpoint(
-          "/api/reports/race-analytics.csv",
-          `${reportBaseName()} - Race Analytics.csv`
-        );
-      } catch (error) {
-        alert(`Race Analytics CSV download failed:\n\n${error.message}`);
-      } finally {
-        window.setTimeout(() => setReportButtonBusy(button, false, "CSV"), 300);
+    ?.addEventListener(
+      "click",
+      () => {
+        try {
+          downloadText(
+            `${reportBaseName()} - Race Analytics.csv`,
+            buildRaceAnalyticsCsv(),
+            "text/csv;charset=utf-8"
+          );
+
+        } catch (error) {
+          alert(
+            error.message
+          );
+        }
       }
-    });
+    );
 
 
   $("downloadRacePdf")
-    ?.addEventListener("click", event => {
-      const button = event.currentTarget;
-      setReportButtonBusy(button, true, "PDF");
-      try {
-        downloadFileFromEndpoint(
-          "/api/reports/race-analytics.pdf",
-          `${reportBaseName()} - Race Analytics.pdf`
-        );
-      } catch (error) {
-        alert(`Race Analytics PDF download failed:\n\n${error.message}`);
-      } finally {
-        window.setTimeout(() => setReportButtonBusy(button, false, "PDF"), 300);
+    ?.addEventListener(
+      "click",
+      () => {
+        try {
+          openAnalyticsPdf();
+
+        } catch (error) {
+          alert(
+            error.message
+          );
+        }
       }
-    });
+    );
 
 
   /*
@@ -4626,68 +4633,13 @@ function initReports() {
     );
 
 
-  $("organiserReport1Pdf")
-    ?.addEventListener(
-      "click",
-      async event => {
-        const button = event.currentTarget;
-        setReportButtonBusy(button, true, "PDF");
-        try {
-          await downloadFileFromEndpoint(
-            "/api/reports/lap-time-records.pdf",
-            `${reportBaseName()} - Lap time records.pdf`
-          );
-        } catch (error) {
-          console.error("LAP PDF DOWNLOAD ERROR", error);
-          alert(`Lap Time Records PDF download failed:\n\n${error.message}`);
-        } finally {
-          setReportButtonBusy(button, false, "PDF");
-          renderReports();
-        }
-      }
-    );
-
-
-  $("organiserReport2Csv")
-    ?.addEventListener(
-      "click",
-      async event => {
-        const button = event.currentTarget;
-        setReportButtonBusy(button, true, "CSV");
-        try {
-          await downloadFileFromEndpoint(
-            "/api/reports/pit-stops.csv",
-            `${reportBaseName()} - Pit stops.csv`
-          );
-        } catch (error) {
-          console.error("PIT CSV DOWNLOAD ERROR", error);
-          alert(`Pit Stops CSV download failed:\n\n${error.message}`);
-        } finally {
-          setReportButtonBusy(button, false, "CSV");
-          renderReports();
-        }
-      }
-    );
-
-
   $("organiserReport2Pdf")
     ?.addEventListener(
       "click",
-      async event => {
-        const button = event.currentTarget;
-        setReportButtonBusy(button, true, "PDF");
-        try {
-          await downloadFileFromEndpoint(
-            "/api/reports/pit-stops.pdf",
-            `${reportBaseName()} - Pit stops.pdf`
-          );
-        } catch (error) {
-          console.error("PIT PDF DOWNLOAD ERROR", error);
-          alert(`Pit Stops PDF download failed:\n\n${error.message}`);
-        } finally {
-          setReportButtonBusy(button, false, "PDF");
-          renderReports();
-        }
+      () => {
+        openReportWindow(
+          "/api/reports/pit-stops.html"
+        );
       }
     );
 }
