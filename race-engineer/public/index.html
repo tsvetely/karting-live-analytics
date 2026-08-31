@@ -639,33 +639,13 @@
 
                   <th>POS</th>
 
-                  <th>KART</th>
-
-                  <th>NATION</th>
-
                   <th>TEAM</th>
 
                   <th>DRIVER</th>
 
-                  <th>S1</th>
-
-                  <th>S2</th>
-
-                  <th>S3</th>
-
-                  <th>GAP</th>
-
-                  <th>INTERVAL</th>
-
                   <th>RACE LAP</th>
 
-                  <th>ON TRACK</th>
-
                   <th>PITS</th>
-
-                  <th>PIT TIME</th>
-
-                  <th>PENALTY</th>
 
                   <th>STINT</th>
 
@@ -674,8 +654,6 @@
                   <th>VALID</th>
 
                   <th>LAST</th>
-
-                  <th>APEX BEST</th>
 
                   <th>AVG</th>
 
@@ -700,7 +678,7 @@
 
                 <tr class="empty">
 
-                  <td colspan="29">
+                  <td colspan="16">
                     Loading race data...
                   </td>
 
@@ -763,27 +741,30 @@
                 <tr>
 
                   <th>TEAM</th>
+
                   <th>DRIVER</th>
+
                   <th>STINT</th>
-                  <th>START</th>
-                  <th>END</th>
-                  <th>TOTAL</th>
-                  <th>VALID</th>
-                  <th>O AVG</th>
-                  <th>O BEST</th>
+
+                  <th>START LAP</th>
+
+                  <th>END LAP</th>
+
+                  <th>TOTAL LAPS</th>
+
+                  <th>VALID LAPS</th>
+
+                  <th>AVERAGE</th>
+
+                  <th>BEST</th>
+
                   <th>BEST LAP</th>
-                  <th>O WORST</th>
+
+                  <th>WORST</th>
+
                   <th>WORST LAP</th>
-                  <th>CONS.</th>
-                  <th>S AVG</th>
-                  <th>S BEST</th>
-                  <th>S WORST</th>
-                  <th>R AVG</th>
-                  <th>R BEST</th>
-                  <th>R WORST</th>
-                  <th>RAIN AVG</th>
-                  <th>RAIN BEST</th>
-                  <th>RAIN WORST</th>
+
+                  <th>CONSISTENCY</th>
 
                 </tr>
 
@@ -794,7 +775,7 @@
 
                 <tr class="empty">
 
-                  <td colspan="22">
+                  <td colspan="13">
                     Open the Stints view to load data.
                   </td>
 
@@ -946,25 +927,22 @@
                 <tr>
 
                   <th>TEAM</th>
+
                   <th>DRIVERS</th>
+
                   <th>STINTS</th>
-                  <th>VALID</th>
-                  <th>TOTAL</th>
-                  <th>O AVG</th>
-                  <th>O BEST</th>
-                  <th>BEST LAP</th>
-                  <th>O WORST</th>
-                  <th>WORST LAP</th>
-                  <th>CONS.</th>
-                  <th>S AVG</th>
-                  <th>S BEST</th>
-                  <th>S WORST</th>
-                  <th>R AVG</th>
-                  <th>R BEST</th>
-                  <th>R WORST</th>
-                  <th>RAIN AVG</th>
-                  <th>RAIN BEST</th>
-                  <th>RAIN WORST</th>
+
+                  <th>VALID LAPS</th>
+
+                  <th>TOTAL LAPS</th>
+
+                  <th>AVERAGE</th>
+
+                  <th>BEST</th>
+
+                  <th>CONSISTENCY</th>
+
+                  <th>DRIVER SPREAD</th>
 
                 </tr>
 
@@ -975,7 +953,7 @@
 
                 <tr class="empty">
 
-                  <td colspan="20">
+                  <td colspan="9">
                     Open the Teams view to load data.
                   </td>
 
@@ -1242,7 +1220,7 @@
             </h1>
 
             <p>
-              Race Engineer analytics and mandatory Apex-style organiser reports.
+              Race Engineer analytics and Apex source reports. Downloads are CSV or PDF only.
             </p>
 
           </div>
@@ -1412,30 +1390,6 @@
           </article>
 
 
-          <article class="reportCard mandatory">
-
-            <div class="reportCardTop">
-              <div class="reportIcon">RAW</div>
-              <div class="reportType">UNFILTERED APEX DATA</div>
-            </div>
-
-            <h3>Raw Apex Data</h3>
-            <p>Direct preserved Apex input plus every stored entry, lap and pit row. No analytics exclusions, no validity filtering and no stint calculations.</p>
-
-            <div class="reportMeta">
-              <span>Source / diagnostics</span>
-              <span>JSON / TXT</span>
-            </div>
-
-            <div class="reportActions">
-              <button id="viewRawApex" class="reportButton primary" type="button">VIEW JSON</button>
-              <button id="downloadRawApexJson" class="reportButton" type="button">JSON</button>
-              <button id="downloadRawApexTxt" class="reportButton" type="button">RAW TXT</button>
-            </div>
-
-          </article>
-
-
           <!-- ===============================================
                APEX PIT STOPS
                =============================================== -->
@@ -1523,7 +1477,7 @@
             Pit Stops PDF
           </strong>
 
-          opens the printable report; use the browser's
+          opens the printable Apex pit report; use the browser's
           <strong>Print / Save PDF</strong>
           action to save the PDF.
 
