@@ -3507,72 +3507,87 @@ async function recoverMissingApexLaps(env, rid, fieldIds, existingRows) {
 }
 
 async function createLapRecordsCsvResponse(env, rid, snapshot) {
-  // Fetch all laps for the race in bulk. Per-kart Apex requests exceed the
-  // Cloudflare Worker subrequest limit (observed error 26749).
-  // The hard bound prevents silently exporting an incomplete lap matrix.
-  const entries = await sbGet(env, "apex_entries", {
-    select: "apex_id,team_name", race_id: `eq.${rid}`, limit: "1000"
+  // Stream pages instead of accumulating the full 12-hour race in Worker memory.
+  // Only one kart's laps are retained at a time; no upstream Apex subrequests.
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const emit = line => controller.enqueue(encoder.encode(line + "\r\n"));
+      try {
+        const entries = await sbGet(env, "apex_entries", {
+          select: "apex_id,team_name", race_id: `eq.${rid}`, limit: "1000"
+        });
+        const names = new Map(entries.map(e => [String(e.apex_id), String(e.team_name || "")]));
+        emit("\uFEFFApex Timing - drive your success https://www.apex-timing.com/");
+        emit(""); emit(""); emit("Karting Events Bulgaria - Karting Track");
+        emit(""); emit(""); emit(`Race ${rid} - recorded lap times`);
+        emit(""); emit(""); emit(""); emit(""); emit("");
+        let currentId = null;
+        let laps = new Map();
+        let maxLap = 0;
+        let count = 0;
+        const flush = () => {
+          if (currentId === null) return;
+          emit(`${currentId} - ${names.get(currentId) || `APEX ${currentId}`}`);
+          emit(""); emit("Laps,1,2,3,4,5,6,7,8,9,10");
+          for (let base = 0; base < maxLap; base += 10) {
+            const cells = [base ? String(base) : ""];
+            for (let n = 1; n <= 10; n++) {
+              const v = laps.get(base + n);
+              cells.push(Number.isFinite(v) ? v.toFixed(3) : "-");
+            }
+            emit(cells.join(","));
+          }
+          emit(""); emit("");
+        };
+        // Keyset pagination avoids large OFFSET scans and Cloudflare CPU limits.
+        // The stable sort is by apex_id and lap_number.
+        let cursorId = null;
+        let cursorLap = 0;
+        for (let page = 0; page < 2000; page++) {
+          const params = {
+            select: "apex_id,lap_number,lap_time",
+            race_id: `eq.${rid}`,
+            order: "apex_id.asc,lap_number.asc",
+            limit: "1000"
+          };
+          if (cursorId !== null) {
+            // PostgREST OR filter: next kart or a higher lap within this kart.
+            params.or = `(apex_id.gt.${cursorId},and(apex_id.eq.${cursorId},lap_number.gt.${cursorLap}))`;
+          }
+          const rows = await sbGet(env, "apex_lap_events", params);
+          if (!rows.length) break;
+          for (const row of rows) {
+            const id = String(row.apex_id ?? "").trim();
+            const lap = Number(row.lap_number);
+            const time = Number(row.lap_time);
+            if (!validApexId(id) || !Number.isInteger(lap) || lap < 1) continue;
+            if (currentId !== id) {
+              flush(); currentId = id; laps = new Map(); maxLap = 0;
+            }
+            if (Number.isFinite(time) && time > 0) laps.set(lap, time);
+            maxLap = Math.max(maxLap, lap);
+            count++;
+          }
+          const last = rows[rows.length - 1];
+          cursorId = String(last.apex_id);
+          cursorLap = Number(last.lap_number);
+          if (rows.length < 1000) break;
+          if (page === 1999) throw new Error("Lap export exceeded safety pagination limit");
+        }
+        flush();
+        if (!count) emit("No stored lap records for this race");
+        controller.close();
+      } catch (error) {
+        console.error("CSV STREAM ERROR", error);
+        controller.error(error);
+      }
+    }
   });
-  const names = new Map();
-  for (const entry of entries) {
-    const id = String(entry.apex_id ?? "").trim();
-    if (validApexId(id)) names.set(id, String(entry.team_name || "").trim());
-  }
-  const grouped = new Map();
-  // Supabase REST caps each page at 1000 rows. Fetch independent pages in
-  // bounded parallel batches instead of waiting for 42 serial round trips.
-  // Keep the request count below the Cloudflare subrequest ceiling.
-  // A 12-hour race with 66 teams can exceed 42,000 lap rows.
-  // Keep fetching until the database returns a short page, rather than
-  // incorrectly treating a full page 42 as an error.
-  const MAX_PAGES = 600;
-  const BATCH_SIZE = 6;
-  let complete = false;
-  for (let first = 0; first < MAX_PAGES && !complete; first += BATCH_SIZE) {
-    const pages = Array.from({length: Math.min(BATCH_SIZE, MAX_PAGES - first)}, (_, i) => first + i);
-    const batches = await Promise.all(pages.map(page => sbGet(env, "apex_lap_events", {
-      select: "apex_id,lap_number,lap_time",
-      race_id: `eq.${rid}`,
-      order: "apex_id.asc,lap_number.asc"
-    }, {from: page * PAGE_SIZE, to: (page + 1) * PAGE_SIZE - 1})));
-    for (let i = 0; i < batches.length; i++) {
-      const rows = batches[i];
-      for (const row of rows) {
-        const id = String(row.apex_id ?? "").trim();
-        const lap = Number(row.lap_number);
-        const time = Number(row.lap_time);
-        if (!validApexId(id) || !Number.isInteger(lap) || lap < 1 || !Number.isFinite(time) || time <= 0) continue;
-        if (!grouped.has(id)) grouped.set(id, new Map());
-        grouped.get(id).set(lap, time);
-      }
-      if (rows.length < PAGE_SIZE) { complete = true; break; }
-    }
-  }
-  if (!complete) return json({error: "Lap export exceeded the pagination safety limit; refusing to produce a truncated CSV."}, 413);
-  if (!grouped.size) return json({error: `No recorded lap times for race ${rid}.`}, 404);
-  const out = [
-    "\uFEFFApex Timing - drive your success https://www.apex-timing.com/",
-    "", "", "Karting Events Bulgaria - Karting Track", "", "",
-    `Race ${rid} - recorded lap times`, "", "", "", "", ""
-  ];
-  for (const id of [...grouped.keys()].sort((a,b)=>Number(a)-Number(b))) {
-    const laps = grouped.get(id);
-    out.push(`${id} - ${names.get(id) || `APEX ${id}`}`, "", "Laps,1,2,3,4,5,6,7,8,9,10");
-    const max = Math.max(...laps.keys());
-    for (let base=0; base<max; base+=10) {
-      const cells = [base ? String(base) : ""];
-      for (let n=1; n<=10; n++) {
-        const value = laps.get(base+n);
-        cells.push(Number.isFinite(value) ? value.toFixed(3) : "-");
-      }
-      out.push(cells.join(","));
-    }
-    out.push("", "");
-  }
-  return new Response(out.join("\r\n"), {headers:{
-    "content-type":"text/csv; charset=utf-8",
-    "content-disposition":`attachment; filename="${safeFilename(`Race ${rid} - Lap time records.csv`)}"`,
-    "cache-control":"no-store", "x-content-type-options":"nosniff"
+  return new Response(stream, {headers: {
+    "content-type": "text/csv; charset=utf-8",
+    "content-disposition": `attachment; filename="${safeFilename(`Race ${rid} - Lap time records.csv`)}"`,
+    "cache-control": "no-store", "x-content-type-options": "nosniff"
   }});
 }
 
