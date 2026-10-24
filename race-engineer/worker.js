@@ -1297,6 +1297,94 @@ function resolveTeam(
 }
 
 
+// Quota-independent ingestion path. No Durable Object access or storage writes.
+async function directApexDetail(env, apexId, lapCount = 800) {
+  const count = Math.max(1, Math.min(800, Number(lapCount) || 800));
+  const request = `D#-${count}#D${apexId}.L#-${count}#D${apexId}.P#-999#D${apexId}.B#1#D${apexId}.INF`;
+  const response = await fetch("https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php", {
+    method: "POST",
+    headers: {"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
+    body: new URLSearchParams({port: env.APEX_DETAIL_PORT || "8910", request})
+  });
+  if (!response.ok) throw new Error(`Apex detail HTTP ${response.status}`);
+  return response.text();
+}
+
+async function directSyncKart(env, apexId, snapshot = null) {
+  const id = String(apexId);
+  if (!validApexId(id)) throw new Error("Invalid apex_id");
+  const rid = Number(env.DEFAULT_RACE_ID || 1);
+  const before = await sbGet(env, "apex_lap_events", {
+    select: "lap_number", race_id: `eq.${rid}`, apex_id: `eq.${id}`,
+    order: "lap_number.desc", limit: "1"
+  });
+  const entryRows = await sbGet(env, "apex_entries", {
+    select: "team_name,lap_count", race_id: `eq.${rid}`, apex_id: `eq.${id}`, limit: "1"
+  });
+  const entry = entryRows[0] || {};
+  const expected = Number(snapshot?.lapCounts?.[id] || entry.lap_count || 800);
+  const raw = await directApexDetail(env, id, expected);
+  const laps = parseLapRows(raw, rid).filter(row => String(row.apex_id) === id);
+  const pits = parsePitRows(raw, snapshot?.teamNames?.[id] || entry.team_name || "", rid)
+    .filter(row => String(row.apex_id) === id && Number(row.pit_number) > 0);
+  if (!laps.length && !pits.length) throw new Error(`Apex returned no detail rows for ${id}`);
+  for (let i = 0; i < laps.length; i += 150) {
+    await sbUpsert(env, "apex_lap_events", laps.slice(i, i + 150), "race_id,apex_id,lap_number");
+  }
+  for (let i = 0; i < pits.length; i += 150) {
+    await sbUpsert(env, "apex_pit_stints", pits.slice(i, i + 150), "race_id,apex_id,pit_number");
+  }
+  const updates = {
+    race_id: rid, apex_id: id,
+    team_name: snapshot?.teamNames?.[id] || entry.team_name || null,
+    current_driver: snapshot?.drivers?.[id] || null,
+    lap_count: Math.max(Number(entry.lap_count) || 0, Number(snapshot?.lapCounts?.[id]) || 0,
+      ...laps.map(row => Number(row.lap_number) || 0)),
+    updated_at: new Date().toISOString()
+  };
+  // Preserve existing driver name unless Apex supplies a fresh one.
+  if (!updates.current_driver) delete updates.current_driver;
+  if (!updates.team_name) delete updates.team_name;
+  await sbUpsert(env, "apex_entries", updates, "race_id,apex_id");
+  const after = await sbGet(env, "apex_lap_events", {
+    select: "lap_number", race_id: `eq.${rid}`, apex_id: `eq.${id}`,
+    order: "lap_number.desc", limit: "1"
+  });
+  return {ok: true, apex_id: id, before_max_lap: before[0]?.lap_number ?? null,
+    after_max_lap: after[0]?.lap_number ?? null, apex_laps: laps.length,
+    apex_pits: pits.length, source: "direct-worker-no-durable-object"};
+}
+
+async function directCronSync(env) {
+  let snapshot = null;
+  let ids = [];
+  try {
+    snapshot = await directApexSnapshot(env);
+    ids = [...currentFieldIds(snapshot)].sort((a, b) => Number(a) - Number(b));
+  } catch (error) {
+    console.warn("DIRECT_APEX_GRID_UNAVAILABLE", String(error));
+  }
+  if (!ids.length) {
+    const rows = await sbGet(env, "apex_entries", {
+      select: "apex_id", race_id: `eq.${Number(env.DEFAULT_RACE_ID || 1)}`,
+      order: "updated_at.desc", limit: "100"
+    });
+    ids = [...new Set(rows.map(row => String(row.apex_id)).filter(validApexId))].slice(0, 66).sort((a,b)=>Number(a)-Number(b));
+  }
+  if (!ids.length) throw new Error("No Apex kart IDs available for direct sync");
+  // Deterministic rotation; no Durable Object cursor and no database cursor writes.
+  const minute = Math.floor(Date.now() / 60000);
+  const start = (minute * 3) % ids.length;
+  const selected = [0, 1, 2].map(i => ids[(start + i) % ids.length]);
+  const results = [];
+  for (const id of [...new Set(selected)]) {
+    try { results.push(await directSyncKart(env, id, snapshot)); }
+    catch (error) { console.error("DIRECT_SYNC_KART_FAILED", id, String(error)); }
+  }
+  console.log("DIRECT_SYNC_CRON", JSON.stringify({selected, results}));
+  if (!results.length) throw new Error("All direct sync attempts failed");
+}
+
 // ============================================================
 // COLLECTOR STUB
 // ============================================================
@@ -4854,8 +4942,8 @@ export default {
       if (url.pathname === "/api/collector/sync-check") {
         const id = url.searchParams.get("apex_id");
         if (!validApexId(id)) return json({ok:false,error:"Invalid apex_id"},400);
-        const result = await collectorStub(env).fetch(`https://collector/sync-check?apex_id=${encodeURIComponent(id)}`);
-        return new Response(result.body,{status:result.status,headers:{"content-type":"application/json","cache-control":"no-store"}});
+        try { return json(await directSyncKart(env, id)); }
+        catch (error) { return json({ok:false,apex_id:id,error:String(error),source:"direct-worker-no-durable-object"},502); }
       }
 
       if (
@@ -5551,18 +5639,7 @@ export default {
   },
 
 
-  async scheduled(
-    controller,
-    env,
-    ctx
-  ) {
-    ctx.waitUntil(
-      startCollector(
-        env
-      )
-        .catch(
-          console.error
-        )
-    );
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(directCronSync(env).catch(error => console.error("DIRECT_SYNC_CRON_FAILED", String(error))));
   }
 };
