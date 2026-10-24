@@ -1726,19 +1726,47 @@ function updateRaceContext() {
 function apexField(row, types = []) {
   const fields = row?.apex_fields;
   if (!fields || typeof fields !== "object") return null;
-
   const wanted = new Set(types.map(value => String(value || "").toLowerCase()));
+  const columnByType = {
+    no: "3", kart: "3", num: "3", number: "3", kartnumber: "3",
+    nat: "4", nation: "4", country: "4", flag: "4",
+    pittime: "16", pit_time: "16", pt: "16",
+    penalty: "17", pen: "17", penaltime: "17"
+  };
+  const valueOf = cell => {
+    if (!cell) return null;
+    for (const value of [cell.value, cell.data_value, cell.image_alt, cell.cell_title]) {
+      if (value !== null && value !== undefined && String(value).trim()) return value;
+    }
+    // Apex encodes the nation in the TD class (for example "BUL nat"),
+    // while the cell text and image metadata are empty.
+    if (wanted.has("nat") || wanted.has("nation") || wanted.has("country") || wanted.has("flag")) {
+      const classes = String(cell.cell_class || "").split(/\s+/).filter(Boolean);
+      const nationClass = classes.find(token => /^[A-Z]{3}$/i.test(token) && !/^(nat|row|col|td)$/i.test(token));
+      if (nationClass) return nationClass.toUpperCase();
+    }
+    // Apex uses image filenames for some flags. Never display a raw URL.
+    if (wanted.has("nat") || wanted.has("nation") || wanted.has("country") || wanted.has("flag")) {
+      const src = String(cell.image_src || "") || String(cell.cell_style || "");
+      const file = src.split("/").pop()?.split("?")[0] || "";
+      const match = /^(?:flag[_-]?)?([a-z]{2,3})\.(?:png|gif|svg|webp)$/i.exec(file);
+      if (match) return match[1].toUpperCase();
+    }
+    return null;
+  };
   for (const cell of Object.values(fields)) {
-    const type = String(cell?.type || "").toLowerCase();
-    if (!wanted.has(type)) continue;
-
-    const value = cell?.value;
-    if (value !== null && value !== undefined && String(value).trim() !== "") return value;
-
-    const alt = cell?.image_alt;
-    if (alt !== null && alt !== undefined && String(alt).trim() !== "") return alt;
+    if (wanted.has(String(cell?.type || "").toLowerCase())) {
+      const value = valueOf(cell);
+      if (value !== null) return value;
+    }
   }
-
+  for (const type of wanted) {
+    const column = columnByType[type];
+    if (!column) continue;
+    const cell = fields[`c${column}`] || Object.values(fields).find(v => String(v?.column) === column);
+    const value = valueOf(cell);
+    if (value !== null) return value;
+  }
   return null;
 }
 
