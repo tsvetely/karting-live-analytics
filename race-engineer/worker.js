@@ -1511,9 +1511,7 @@ function snapshotFromGrid(grid) {
     bestLaps,
     lastLaps,
     teamNames,
-    drivers,
-    // Forward original Apex cells to /api/live; otherwise the UI sees null apex_fields.
-    rawRows: Object.fromEntries(grid?.rows || [])
+    drivers
   };
 }
 
@@ -2083,10 +2081,7 @@ async function loadLapEventsForApexIds(env, rid, fieldIds) {
     race_id: `eq.${rid}`,
     apex_id: `in.(${ids.join(",")})`,
     order: "apex_id.asc,lap_number.asc"
-  }).catch(error => {
-    console.error("loadLapEventsForApexIds failed", { race_id: rid, apex_id_count: ids.length, error: String(error) });
-    return [];
-  });
+  }).catch(() => []);
 }
 
 function manualExclusionSet(rows) {
@@ -3451,15 +3446,14 @@ async function createLapRecordsCsvResponse(env, rid, snapshot) {
 
   // KartingNumbersXlsx/RaceParser.parseLapTimeCSV expects the official Apex matrix:
   // first cell = base lap, following cells = base+1, base+2 ...
-  // Official Apex CSV uses ten lap columns per row (Laps,1,...,10).
-  const blockSize=10;
-  const out=["\uFEFFApex Timing - drive your success https://www.apex-timing.com/","","Karting Events Bulgaria - Karting Track","",`Race ${rid} - Lap time records`,"","","",""];
+  // A block size of 50 keeps the file readable and preserves every raw lap.
+  const blockSize=50;
+  const out=["\uFEFFApex Timing - drive your success https://www.apex-timing.com/","","Karting Events Bulgaria - Karting Track","",`Race ${rid} - Lap time records`,""];
   const ordered=[...fieldIds].map(String).sort((a,b)=>Number(a)-Number(b));
   for(const id of ordered){
     const laps=grouped.get(id); if(!laps||!laps.size)continue;
     const team=resolveTeam(id,teamMap)||`APEX ${id}`;
     out.push(`${id} - ${team}`);
-    out.push("");
     out.push(["Laps",...Array.from({length:blockSize},(_,i)=>i+1)].join(','));
     const maxLap=Math.max(...laps.keys());
     for(let base=0;base<maxLap;base+=blockSize){
@@ -3828,71 +3822,64 @@ ${content}
 
 
 function pitReportSourcePages(stints) {
-  const grouped = new Map();
-  for (const row of stints || []) {
-    if (row.is_live) continue;
-    const id = String(row.apex_id || '').trim();
-    if (!id) continue;
-    if (!grouped.has(id)) grouped.set(id, []);
-    grouped.get(id).push(row);
+  const grouped=new Map();
+  for(const row of stints||[]){
+    if(row.is_live) continue; // Never invent Hour/Out values for an unfinished stint.
+    const id=String(row.apex_id||'').trim(); if(!id)continue;
+    if(!grouped.has(id))grouped.set(id,[]); grouped.get(id).push(row);
   }
-  const pages = [];
-  for (const [id, rows] of [...grouped].sort((a,b) => Number(a[0])-Number(b[0]))) {
-    rows.sort((a,b) => Number(a.stint_number)-Number(b.stint_number));
-    const team = rows[0]?.team_name || `APEX ${id}`;
-    const table = [];
-    for (const row of rows) {
-      const stint = Math.trunc(Number(row.stint_number)||0);
-      const lap = Math.trunc(Number(row.end_lap_count)||0);
-      if (stint <= 0 || lap <= 0) continue;
-      const stamp = value => /^\d{2}:\d{2}:\d{2}$/.test(String(value||'')) ? String(value) : '-';
-      const best = Number(row.best_lap_time), avg = Number(row.avg_lap_time);
-      table.push([
-        String(stint), String(lap), stamp(row.pit_hour), stamp(row.total_time),
-        stamp(row.on_track), String(Math.max(0,Math.trunc(Number(row.total_laps)||0))),
-        cleanDriver(row.driver_name)||'Unknown',
-        Number.isFinite(best)&&best>0?best.toFixed(3):'-',
-        Number.isFinite(avg)&&avg>0?avg.toFixed(3):'-',
-        String(row.pit_time||'-'), '-'
-      ]);
+  const pages=[];
+  for(const [id,rows] of [...grouped.entries()].sort((a,b)=>Number(a[0])-Number(b[0]))){
+    rows.sort((a,b)=>Number(a.stint_number)-Number(b.stint_number));
+    const team=rows[0]?.team_name||`APEX ${id}`;
+    const lines=[`${id} - ${team}`,'Stint Lap Hour Total On track Laps Driver Total Best lap Avg Pits Out'];
+    for(const row of rows){
+      const stint=Math.trunc(Number(row.stint_number)||0), lap=Math.trunc(Number(row.end_lap_count)||0);
+      if(stint<=0||lap<=0)continue;
+      const hour=/^\d{2}:\d{2}:\d{2}$/.test(String(row.pit_hour||''))?String(row.pit_hour):'00:00:00';
+      const total=/^\d{2}:\d{2}:\d{2}$/.test(String(row.total_time||''))?String(row.total_time):'00:00:00';
+      const onTrack=/^\d{2}:\d{2}:\d{2}$/.test(String(row.on_track||''))?String(row.on_track):'00:00:00';
+      const driver=cleanDriver(row.driver_name)||'Unknown';
+      const best=Number(row.best_lap_time), avg=Number(row.avg_lap_time);
+      const bestText=Number.isFinite(best)&&best>0?best.toFixed(3):'';
+      const avgText=Number.isFinite(avg)&&avg>0?avg.toFixed(3):'';
+      const pit=String(row.pit_time||'0.000').replace(',', '.');
+      // RaceParser accepts the final Out as HH:MM:SS. Apex detail does not expose it
+      // separately in the current collector, so use the persisted pit hour rather than
+      // fabricating a different time value.
+      lines.push(`${stint} ${lap} ${hour} ${total} ${onTrack} ${Math.max(0,Math.trunc(Number(row.total_laps)||0))} ${driver} ${total} ${bestText} ${avgText} ${pit} ${hour}`.replace(/\s+/g,' ').trim());
     }
-    pages.push({title:`${id} - ${team}`, rows:table});
+    pages.push(lines);
   }
   return pages;
 }
 
-function pdfEscape(value) {
-  return String(value??'').replace(/[^\x20-\x7E]/g,'?').replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
-}
+function pdfEscape(value){return String(value??'').replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');}
 
 function buildTextPdf(pages) {
   const objects=[null];
   const add=body=>{objects.push(body);return objects.length-1;};
   const fontId=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
-  const boldId=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
-  const pageIds=[], contentIds=[];
-  const headers=['Stint','Lap','Hour','Total','On track','Laps','Driver','Best lap','Avg','Pit time','Out'];
-  const xs=[32,77,121,205,289,373,417,720,802,884,976];
-  const draw=(x,y,value,font='F1',size=9)=>`BT /${font} ${size} Tf 1 0 0 1 ${x} ${y} Tm (${pdfEscape(value)}) Tj ET`;
-  for(const page of pages.length?pages:[{title:'No pit stop data available',rows:[]}]) {
-    const commands=[draw(32,800,page.title,'F2',15)];
-    headers.forEach((h,i)=>commands.push(draw(xs[i],760,h,'F2',9)));
-    commands.push('0.6 w 32 750 m 1058 750 l S');
-    for(let i=0;i<page.rows.length;i++) {
-      const y=730-i*24;
-      if(y<40) break;
-      page.rows[i].forEach((value,j)=>commands.push(draw(xs[j],y,String(value).slice(0,j===6?40:16))));
-      commands.push(`0.2 w 32 ${y-9} m 1058 ${y-9} l S`);
+  const pageIds=[];
+  const contentIds=[];
+  for(const lines of pages.length?pages:[['No pit stop data available.']]){
+    const commands=['BT','/F1 8 Tf','36 806 Td','10 TL'];
+    for(let i=0;i<lines.length;i++){
+      if(i>0)commands.push('T*');
+      commands.push(`(${pdfEscape(lines[i])}) Tj`);
     }
+    commands.push('ET');
     const stream=commands.join('\n');
     contentIds.push(add(`<< /Length ${new TextEncoder().encode(stream).length} >>\nstream\n${stream}\nendstream`));
     pageIds.push(add('PENDING_PAGE'));
   }
   const pagesId=add('PENDING_PAGES');
-  for(let i=0;i<pageIds.length;i++) objects[pageIds[i]]=`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 1090 842] /Resources << /Font << /F1 ${fontId} 0 R /F2 ${boldId} 0 R >> >> /Contents ${contentIds[i]} 0 R >>`;
+  for(let i=0;i<pageIds.length;i++){
+    objects[pageIds[i]]=`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentIds[i]} 0 R >>`;
+  }
   objects[pagesId]=`<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map(id=>`${id} 0 R`).join(' ')}] >>`;
   const catalogId=add(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
-  let out='%PDF-1.4\n';const offsets=[0];
+  let out='%PDF-1.4\n'; const offsets=[0];
   for(let i=1;i<objects.length;i++){offsets[i]=new TextEncoder().encode(out).length;out+=`${i} 0 obj\n${objects[i]}\nendobj\n`;}
   const xref=new TextEncoder().encode(out).length;
   out+=`xref\n0 ${objects.length}\n0000000000 65535 f \n`;
@@ -3974,8 +3961,6 @@ export class ApexCollector {
 
     this.fullDetailRefreshRunning = false;
     this.lastFullDetailRefreshAt = 0;
-    this.detailQueue = new Set();
-    this.detailSweepCursor = 0;
     this.sessionResetting = false;
 
     this.detailRunning =
@@ -3983,6 +3968,9 @@ export class ApexCollector {
 
     this.lastDetailFetch =
       new Map();
+
+    this.entryWriteCache = new Map();
+    this.lastEntryWrite = new Map();
 
 
     state.blockConcurrencyWhile(
@@ -4054,12 +4042,6 @@ export class ApexCollector {
         this.bestLaps = new Map(Object.entries(await state.storage.get("bestLaps") || {}));
         this.lastLaps = new Map(Object.entries(await state.storage.get("lastLaps") || {}));
         this.rawRows = new Map(Object.entries(await state.storage.get("rawRows") || {}));
-        // Resume outstanding detail requests after a Durable Object restart.
-        this.detailQueue = new Set(await state.storage.get("detailQueue") || []);
-        if (!this.detailQueue.size) {
-          for (const id of this.fieldApexIds) this.detailQueue.add(String(id));
-        }
-
 
 
         if (
@@ -4121,8 +4103,7 @@ export class ApexCollector {
       lapCounts: Object.fromEntries(this.lapCounts),
       bestLaps: Object.fromEntries(this.bestLaps),
       lastLaps: Object.fromEntries(this.lastLaps),
-      rawRows: Object.fromEntries(this.rawRows),
-      detailQueue: [...this.detailQueue]
+      rawRows: Object.fromEntries(this.rawRows)
     });
   }
 
@@ -4215,9 +4196,9 @@ export class ApexCollector {
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
-        this.enqueueAllFieldDetails();
+        this.state.waitUntil(this.refreshAllFieldDetails(false));
       } else {
-        this.enqueueAllFieldDetails();
+        this.state.waitUntil(this.refreshAllFieldDetails(false));
       }
 
       return json(
@@ -4253,7 +4234,7 @@ export class ApexCollector {
 
       await this.connect();
 
-      this.enqueueAllFieldDetails();
+      this.state.waitUntil(this.refreshAllFieldDetails(true));
 
       return json(
         await this.snapshot()
@@ -4271,21 +4252,23 @@ export class ApexCollector {
 
 
   async alarm() {
-    try {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-        try { await this.connect(); }
-        catch (error) { console.error("APEX_RECONNECT_FAILED", String(error)); }
-      }
-      // One team per invocation: avoids large Supabase upsert bursts.
-      await this.drainDetailQueue(1);
-    } catch (error) {
-      console.error("APEX_DETAIL_ALARM_FAILED", String(error));
-    } finally {
-      // Persist the queue and always schedule the next attempt, even on errors.
-      await this.persist();
-      await this.state.storage.setAlarm(Date.now() + 60000);
+    if (
+      !this.ws ||
+      this.ws.readyState !==
+        WebSocket.OPEN
+    ) {
+      try {
+        await this.connect();
+      } catch {}
     }
+
+
+    await this.state.storage.setAlarm(
+      Date.now() +
+      60000
+    );
   }
+
 
   async connect() {
     if (
@@ -4426,71 +4409,29 @@ export class ApexCollector {
   }
 
 
-  async upsertEntry(
-    apexId,
-    changes
-  ) {
-    const old =
-      await this.getEntry(
-        apexId
-      );
-
-
-    await sbUpsert(
-      this.env,
-      "apex_entries",
-      {
-        race_id:
-          this.rid,
-
-        apex_id:
-          String(
-            apexId
-          ),
-
-        team_name:
-          changes.team_name !==
-            undefined
-            ? changes.team_name
-            : old?.team_name ??
-              null,
-
-        current_driver:
-          changes.current_driver !==
-            undefined
-            ? changes.current_driver
-            : old?.current_driver ??
-              null,
-
-        last_lap:
-          changes.last_lap !==
-            undefined
-            ? changes.last_lap
-            : old?.last_lap ??
-              null,
-
-        best_lap:
-          changes.best_lap !==
-            undefined
-            ? changes.best_lap
-            : old?.best_lap ??
-              null,
-
-        lap_count:
-          changes.lap_count !==
-            undefined
-            ? changes.lap_count
-            : old?.lap_count ??
-              null,
-
-        updated_at:
-          new Date()
-            .toISOString()
-      },
-      "race_id,apex_id"
-    );
+  async upsertEntry(apexId, changes) {
+    const id = String(apexId);
+    const cached = this.entryWriteCache.get(id);
+    // Avoid the former one GET + one POST for every incoming Apex grid cell.
+    // The database row is read only on first update of an entry in this DO lifetime.
+    const old = cached || await this.getEntry(id) || {};
+    const next = {
+      race_id: this.rid,
+      apex_id: id,
+      team_name: changes.team_name !== undefined ? changes.team_name : old.team_name ?? null,
+      current_driver: changes.current_driver !== undefined ? changes.current_driver : old.current_driver ?? null,
+      last_lap: changes.last_lap !== undefined ? changes.last_lap : old.last_lap ?? null,
+      best_lap: changes.best_lap !== undefined ? changes.best_lap : old.best_lap ?? null,
+      lap_count: changes.lap_count !== undefined ? changes.lap_count : old.lap_count ?? null
+    };
+    if (cached && ["team_name", "current_driver", "last_lap", "best_lap", "lap_count"]
+      .every(key => cached[key] === next[key])) return;
+    // Never mark a failed write as persisted. A subsequent Apex update retries it.
+    await sbUpsert(this.env, "apex_entries", {
+      ...next, updated_at: new Date().toISOString()
+    }, "race_id,apex_id");
+    this.entryWriteCache.set(id, next);
   }
-
 
   async requestDetail(
     apexId,
@@ -4558,7 +4499,7 @@ export class ApexCollector {
     if(this.fieldApexIds.size>0&&!this.fieldApexIds.has(id))return;
     if(this.detailRunning.has(id))return;
     const now=Date.now();
-    if(!force && now-(this.lastDetailFetch.get(id)||0)<1500)return;
+    if(!force && now-(this.lastDetailFetch.get(id)||0)<60000)return;
 
     const entry=await this.getEntry(id);
     const snapshotLap=Number(this.lapCounts.get(id));
@@ -4571,72 +4512,38 @@ export class ApexCollector {
       const raw=await this.requestDetail(id,lapCount);
       const laps=parseLapRows(raw,this.rid).filter(r=>String(r.apex_id)===id);
       const pits=parsePitRows(raw,entry.team_name,this.rid).filter(r=>String(r.apex_id)===id && Number(r.pit_number)>0);
-      // A successful HTTP response is not proof of a complete Apex history.
-      // Keep the team queued until the latest lap and pit numbers are present.
-      const expectedPits = Number(this.pitCounts.get(id)) || 0;
-      const receivedLapNumbers = new Set(laps.map(r => Number(r.lap_number)));
-      const receivedPitNumbers = new Set(pits.map(r => Number(r.pit_number)));
-      const completeLaps = receivedLapNumbers.has(lapCount);
-      const completePits = expectedPits === 0 || (receivedPitNumbers.size >= expectedPits && receivedPitNumbers.has(expectedPits));
-      console.log('APEX_DETAIL_AUDIT', JSON.stringify({id, lapCount, receivedLaps:laps.length, maxReceivedLap:Math.max(0,...receivedLapNumbers), expectedPits, receivedPits:pits.length, completeLaps, completePits}));
       // PRESERVE-FIRST: never reject real Apex detail rows because our own
       // expectation says the reply is "incomplete". Persist every lap/pit row
       // Apex actually returned. Do not delete older rows before merging.
-      // Only write new lap numbers; repeated full-history upserts on every
-      // alarm caused excessive Supabase traffic and Worker resource use.
-      const existingLaps = await sbGetAll(this.env,"apex_lap_events",{
-        select:"lap_number",race_id:`eq.${this.rid}`,apex_id:`eq.${id}`
-      });
-      const storedNumbers = new Set(existingLaps.map(r=>Number(r.lap_number)));
-      const newLaps = laps.filter(r=>!storedNumbers.has(Number(r.lap_number)));
-      for(let i=0;i<newLaps.length;i+=100){
-        await sbUpsert(this.env,"apex_lap_events",newLaps.slice(i,i+100),"race_id,apex_id,lap_number");
+      for(let i=0;i<laps.length;i+=250){
+        await sbUpsert(this.env,"apex_lap_events",laps.slice(i,i+250),"race_id,apex_id,lap_number");
       }
       if(pits.length){
-        const existingPits = await sbGetAll(this.env,"apex_pit_stints",{
-          select:"pit_number",race_id:`eq.${this.rid}`,apex_id:`eq.${id}`
-        });
-        const storedPits = new Set(existingPits.map(r=>Number(r.pit_number)));
-        const newPits = pits.filter(r=>!storedPits.has(Number(r.pit_number)));
-        if(newPits.length) await sbUpsert(this.env,"apex_pit_stints",newPits,"race_id,apex_id,pit_number");
+        await sbUpsert(this.env,"apex_pit_stints",pits,"race_id,apex_id,pit_number");
       }
 
       await this.persist();
-      if (!completeLaps || !completePits) {
-        this.detailQueue.add(id);
-        console.warn('APEX_DETAIL_INCOMPLETE', id, 'lap', lapCount, 'pits', expectedPits);
-      }
     } finally {
       this.detailRunning.delete(id);
     }
   }
 
-  enqueueAllFieldDetails() {
-    for (const id of this.fieldApexIds) {
-      if (validApexId(String(id))) this.detailQueue.add(String(id));
-    }
-  }
-
-  async drainDetailQueue(maxRequests = 1) {
-    if (!this.detailQueue.size) this.enqueueAllFieldDetails();
-    const batch = [...this.detailQueue].slice(0, maxRequests);
-    for (const id of batch) {
-      // Rotate the queue: a repeatedly failing team cannot starve other teams.
-      this.detailQueue.delete(id);
-      try {
-        await this.refreshDetail(id, true);
-        console.log("APEX_DETAIL_ATTEMPT", JSON.stringify({id, queued:this.detailQueue.has(id)}));
-      } catch (error) {
-        this.detailQueue.add(id);
-        console.error("APEX_DETAIL_FAILED", JSON.stringify({id, error:String(error)}));
-      }
-    }
-    await this.persist();
-  }
-
   async refreshAllFieldDetails(force = false) {
-    this.enqueueAllFieldDetails();
-    // Detail collection is performed by bounded, independent alarm invocations.
+    const now=Date.now();
+    if(this.fullDetailRefreshRunning)return;
+    if(!force && now-this.lastFullDetailRefreshAt<300000)return;
+    const ids=[...this.fieldApexIds].map(String).filter(validApexId);
+    if(!ids.length)return;
+    this.fullDetailRefreshRunning=true;
+    this.lastFullDetailRefreshAt=now;
+    try {
+      for(let i=0;i<ids.length;i+=4){
+        const batch=ids.slice(i,i+4);
+        await Promise.all(batch.map(id=>this.refreshDetail(id,true).catch(e=>console.error(`DETAIL REFRESH ${id}:`,e))));
+      }
+    } finally {
+      this.fullDetailRefreshRunning=false;
+    }
   }
 
   async applyField(apexId, type, cls, value, column) {
@@ -4669,7 +4576,7 @@ export class ApexCollector {
         // A pit-count change changes the stint boundary immediately. Fetch the
         // Apex P/L detail now instead of waiting for the next lap or 5-minute sweep.
         if(!Number.isFinite(previous)||next!==previous){
-          this.detailQueue.add(id);
+          this.state.waitUntil(this.refreshDetail(id,false).catch(e=>console.error(`PIT DETAIL REFRESH ${id}:`,e)));
         }
       }
       return;
@@ -4698,7 +4605,7 @@ export class ApexCollector {
         // Do not manufacture a lap/time pair by combining independent live-grid
         // fields (TLP + the last cached LLP). Their update order is not guaranteed.
         // Fetch the kart detail and persist the exact lap-number/time pairs Apex returns.
-        this.detailQueue.add(id);
+        this.state.waitUntil(this.refreshDetail(id,false).catch(e=>console.error(`LAP DETAIL REFRESH ${id}:`,e)));
       }
     }
   }
@@ -4855,25 +4762,14 @@ export class ApexCollector {
     this.lastPacketAt = now.toISOString();
 
 
-    try {
-      await sbInsert(
-        this.env,
-        "apex_raw_packets",
-        {
-          race_id:
-            this.rid,
-
-          payload
-        }
-      );
-
-    } catch (
-      error
-    ) {
-      console.warn(
-        "RAW PACKET SAVE:",
-        error
-      );
+    // Raw packet audit sampling: reduce write amplification while retaining
+    // periodic evidence of the incoming Apex stream.
+    if (this.packetCount % 20 === 0) {
+      try {
+        await sbInsert(this.env, "apex_raw_packets", { race_id: this.rid, payload });
+      } catch (error) {
+        console.warn("RAW PACKET SAVE:", error);
+      }
     }
 
 
@@ -5064,105 +4960,6 @@ export default {
         });
       }
 
-
-      // Read-only end-to-end probe: Apex detail HTTP -> parser -> Supabase SELECT.
-      // Does not mutate race data and never returns API credentials.
-      if (url.pathname === "/api/debug/apex-detail") {
-        const apexId = String(url.searchParams.get("apex_id") || "").trim();
-        if (!validApexId(apexId)) return json({error:"Valid apex_id required"},400);
-        const snapshot = Number(rid) === Number(raceId(env))
-          ? await collectorSnapshot(env).catch(error => ({error:String(error)})) : null;
-        const expectedLaps = Number(snapshot?.lapCounts?.[apexId]) || 0;
-        const expectedPits = Number(snapshot?.pitCounts?.[apexId]) || 0;
-        const count = Math.max(1,Math.min(expectedLaps || 1,800));
-        const requestBody = `D#-${count}#D${apexId}.L#-${count}#D${apexId}.P#-999#D${apexId}.B#1#D${apexId}.INF`;
-        const results = {race_id:Number(rid),apex_id:apexId,expected:{laps:expectedLaps,pits:expectedPits},apex:{},parser:{},database:{}};
-        try {
-          const response = await fetch("https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php",{
-            method:"POST",headers:{"content-type":"application/x-www-form-urlencoded; charset=UTF-8"},
-            body:new URLSearchParams({port:env.APEX_DETAIL_PORT || "8910",request:requestBody})
-          });
-          const raw = await response.text();
-          results.apex = {http_status:response.status,ok:response.ok,content_type:response.headers.get("content-type"),body_length:raw.length,body_prefix:raw.slice(0,160)};
-          if(response.ok){
-            const laps=parseLapRows(raw,rid).filter(row=>String(row.apex_id)===apexId);
-            const pits=parsePitRows(raw,"",rid).filter(row=>String(row.apex_id)===apexId);
-            const numbers=laps.map(row=>Number(row.lap_number)).filter(Number.isFinite);
-            const unique=new Set(numbers);
-            results.parser={laps:laps.length,unique_laps:unique.size,max_lap:numbers.length?Math.max(...numbers):null,
-              missing_laps:Array.from({length:Math.min(expectedLaps,800)},(_,i)=>i+1).filter(n=>!unique.has(n)).slice(0,50),
-              pits:pits.length,pit_numbers:pits.map(row=>row.pit_number),last_laps:laps.slice(-3)};
-          }
-        } catch(error) { results.apex.error=String(error); }
-        for (const [key,table,order] of [["entries","apex_entries",null],["laps","apex_lap_events","lap_number.desc"],["pits","apex_pit_stints","pit_number.desc"]]){
-          try {
-            const params={select:key==="laps"?"lap_number,lap_time":key==="pits"?"pit_number,pit_lap":"lap_count,updated_at,last_lap,best_lap",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,limit:"1"};
-            if(order)params.order=order;
-            const rows=await sbGet(env,table,params);
-            results.database[key]={read_ok:true,latest:rows[0] || null};
-          } catch(error) { results.database[key]={read_ok:false,error:String(error)}; }
-        }
-        return json(results);
-      }
-
-      // The previous unbounded repair endpoint exhausted Worker resources.
-      if (url.pathname === "/api/debug/repair-apex-detail") {
-        return json({error:"Bulk recovery disabled: exceeded Worker resource limits. Use bounded collector synchronization."}, 410);
-      }
-
-      // Read-only diagnostic: compare live Apex grid, stored rows and API mapping.
-      if (url.pathname === "/api/debug/apex-integrity") {
-        const requestedId = String(url.searchParams.get("apex_id") || "").trim();
-        const snapshot = Number(rid) === Number(raceId(env))
-          ? await collectorSnapshot(env).catch(error => ({diagnostic_error:String(error)})) : null;
-        const ids = currentFieldIds(snapshot);
-        const apexId = requestedId || [...ids][0] || "";
-        if (!validApexId(apexId)) return json({error:"Provide a valid apex_id",race_id:rid},400);
-        const [entriesResult,lapsResult,pitsResult] = await Promise.allSettled([
-          sbGet(env,"apex_entries",{select:"*",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,limit:"5"}),
-          sbGetAll(env,"apex_lap_events",{select:"apex_id,lap_number,lap_time",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,order:"lap_number.asc"}),
-          sbGet(env,"apex_pit_stints",{select:"*",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,order:"pit_number.asc",limit:"100"})
-        ]);
-        const unpack = result => result.status === "fulfilled"
-          ? {ok:true,rows:result.value}
-          : {ok:false,error:String(result.reason)};
-        const entries = unpack(entriesResult), laps = unpack(lapsResult), pits = unpack(pitsResult);
-        const lapNumbers = laps.ok ? laps.rows.map(row=>Number(row.lap_number)).filter(Number.isFinite) : [];
-        const stored = new Set(lapNumbers);
-        const apexLapCount = snapshot?.lapCounts?.[apexId] ?? null;
-        const maxLap = Math.max(0,Number(apexLapCount)||0,...lapNumbers);
-        const missing = [];
-        for (let n=1;n<=Math.min(maxLap,3000);n++) if (!stored.has(n)) missing.push(n);
-        const cells = snapshot?.rawRows?.[apexId] || null;
-        const apiRow = {
-          apex_id:apexId,
-          team_name:snapshot?.teamNames?.[apexId] ?? null,
-          driver_name:snapshot?.drivers?.[apexId] ?? null,
-          race_lap:apexLapCount,
-          pits:snapshot?.pitCounts?.[apexId] ?? null,
-          last_lap:snapshot?.lastLaps?.[apexId] ?? null,
-          best_lap:snapshot?.bestLaps?.[apexId] ?? null,
-          apex_fields:cells
-        };
-        return json({
-          race_id:Number(rid),apex_id:apexId,
-          collector:{connected:snapshot?.connected ?? null,field_count:snapshot?.field_count ?? null,
-            has_raw_rows:!!snapshot?.rawRows,field_ids_count:ids.size,
-            column_types:snapshot?.columnTypes || null,
-            raw_cells:cells,position:snapshot?.positions?.[apexId] ?? null},
-          mapped_api_values:apiRow,
-          database:{entries,laps:{ok:laps.ok,error:laps.error || null,count:laps.ok?laps.rows.length:null,
-            max_lap:lapNumbers.length?Math.max(...lapNumbers):null,
-            missing_lap_numbers:missing,duplicate_lap_numbers:lapNumbers.filter((n,i)=>lapNumbers.indexOf(n)!==i),
-            sample_first:laps.ok?laps.rows.slice(0,5):[],sample_last:laps.ok?laps.rows.slice(-5):[]},
-            pits:{ok:pits.ok,error:pits.error || null,count:pits.ok?pits.rows.length:null,
-              rows:pits.ok?pits.rows:[]}},
-          comparison:{apex_lap_count:apexLapCount,stored_lap_count:laps.ok?laps.rows.length:null,
-            apex_pit_count:snapshot?.pitCounts?.[apexId] ?? null,
-            stored_pit_count:pits.ok?pits.rows.length:null},
-          note:"Read-only diagnostic. Missing lap numbers are relative to 1..max(Apex/stored); not proof that Apex sent those events."
-        });
-      }
 
       if (url.pathname === "/api/raw/apex") {
         const rawSnapshot = Number(rid) === Number(raceId(env)) ? await collectorSnapshot(env).catch(() => null) : null;
