@@ -5171,182 +5171,58 @@ export default {
           url.pathname ===
           "/api/teams"
         ) {
-          const stints =
-            await stintsPayload(
-              env,
-              rid,
-              snapshot
-            );
-
-
-          const drivers =
-            driversFromStints(
-              stints
-            );
-
-
-          let rows =
-            teamsFromStints(
-              stints,
-              snapshot
-            );
-
-
-          const entries =
-            filterCurrentField(
-              await loadEntries(
-                env,
-                rid
-              ),
-              fieldIds
-            );
-
-
-          const teamMap =
-            await stableTeamNameMap(
-              env,
-              rid
-            );
-
-
-          const seen =
-            new Set(
-              rows.map(
-                row =>
-                  String(
-                    row.apex_id
-                  )
-              )
-            );
-
-
-          for (
-            const entry
-            of entries
-          ) {
-            const id =
-              String(
-                entry.apex_id
-              );
-
-
-            if (
-              seen.has(id)
-            ) {
-              continue;
-            }
-
-
-            const position =
-              Number(
-                snapshot
-                  ?.positions?.[
-                    id
-                  ]
-              );
-
-
+          // A team listing must not recompute every lap/stint of the race.
+          // The old path fetched the entire lap history and exceeded the
+          // per-invocation subrequest budget once the race grew.
+          const [entriesRaw, pitsRaw] = await Promise.all([
+            loadEntries(env, rid),
+            loadPits(env, rid)
+          ]);
+          const activeIds = fieldIds.size ? fieldIds : new Set(
+            entriesRaw.map(row => String(row.apex_id ?? "")).filter(validApexId)
+          );
+          const entries = filterCurrentField(entriesRaw, activeIds);
+          const pits = filterCurrentField(pitsRaw, activeIds);
+          const pitGroups = new Map();
+          for (const pit of pits) {
+            const id = String(pit.apex_id);
+            if (!pitGroups.has(id)) pitGroups.set(id, []);
+            pitGroups.get(id).push(pit);
+          }
+          const entryById = new Map();
+          for (const entry of entries) {
+            const id = String(entry.apex_id);
+            if (!entryById.has(id)) entryById.set(id, entry);
+          }
+          const rows = [];
+          for (const id of activeIds) {
+            const entry = entryById.get(String(id)) || {};
+            const teamPits = pitGroups.get(String(id)) || [];
+            const drivers = new Set(teamPits.map(p => cleanDriver(p.driver_name)).filter(Boolean));
+            const currentDriver = cleanDriver(snapshot?.drivers?.[id] || entry.current_driver);
+            if (currentDriver) drivers.add(currentDriver);
+            const position = Number(snapshot?.positions?.[id]);
+            const lapCount = Number(snapshot?.lapCounts?.[id] ?? entry.lap_count);
             rows.push({
-              race_id:
-                rid,
-
-              apex_id:
-                id,
-
-              position:
-                Number.isFinite(
-                  position
-                )
-                  ? position
-                  : null,
-
-              team_name:
-                resolveTeam(
-                  id,
-                  teamMap,
-                  entry.team_name
-                ),
-
-              driver_count:
-                entry.current_driver
-                  ? 1
-                  : 0,
-
-              stint_count:
-                0,
-
-              valid_laps:
-                0,
-
-              total_laps:
-                Number(
-                  entry.lap_count
-                ) ||
-                0,
-
-              avg_lap_time:
-                null,
-
-              best_lap_time:
-                number(
-                  entry.best_lap
-                ),
-
-              avg_consistency:
-                null,
-
-              driver_spread:
-                0
+              race_id: rid, apex_id: String(id),
+              position: Number.isFinite(position) && position > 0 ? position : null,
+              team_name: snapshot?.teamNames?.[id] || entry.team_name || teamPits[0]?.team_name || `APEX ${id}`,
+              driver_count: drivers.size, drivers: drivers.size,
+              stint_count: teamPits.length + 1,
+              valid_stint_count: null, valid_laps: null,
+              total_laps: Number.isFinite(lapCount) ? lapCount : null,
+              avg_lap_time: null,
+              best_lap_time: number(snapshot?.bestLaps?.[id]) ?? number(entry.best_lap),
+              best_lap_number: null, worst_lap_time: null, worst_lap_number: null,
+              avg_consistency: null, consistency: null, driver_spread: null
             });
           }
-
-
-          rows.sort(
-            (a, b) => {
-              const pa =
-                Number(
-                  a.position
-                );
-
-              const pb =
-                Number(
-                  b.position
-                );
-
-
-              if (
-                Number.isFinite(pa) &&
-                Number.isFinite(pb)
-              ) {
-                return pa - pb;
-              }
-
-
-              if (
-                Number.isFinite(pa)
-              ) {
-                return -1;
-              }
-
-
-              if (
-                Number.isFinite(pb)
-              ) {
-                return 1;
-              }
-
-
-              return (
-                Number(
-                  a.apex_id
-                ) -
-                Number(
-                  b.apex_id
-                )
-              );
-            }
-          );
-
+          rows.sort((a, b) => {
+            if (a.position !== null && b.position !== null) return a.position - b.position;
+            if (a.position !== null) return -1;
+            if (b.position !== null) return 1;
+            return Number(a.apex_id) - Number(b.apex_id);
+          });
 
           return json({
             race_id:

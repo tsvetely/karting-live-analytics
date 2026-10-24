@@ -1739,6 +1739,19 @@ function apexField(row, types = []) {
     if (alt !== null && alt !== undefined && String(alt).trim() !== "") return alt;
   }
 
+  // Apex sometimes omits data-type attributes; use the documented
+  // grid column numbers only for fields with a known, stable mapping.
+  const columnByType = {
+    no: "3", kart: "3", num: "3", number: "3", kartnumber: "3",
+    nat: "4", nation: "4", country: "4", flag: "4"
+  };
+  for (const type of wanted) {
+    const column = columnByType[type];
+    if (!column) continue;
+    const cell = fields[`c${column}`] || Object.values(fields).find(v => String(v?.column) === column);
+    const value = cell?.value || cell?.image_alt;
+    if (value !== null && value !== undefined && String(value).trim()) return value;
+  }
   return null;
 }
 
@@ -1946,7 +1959,7 @@ function renderOverview() {
       .join("") ||
     `
 <tr class="empty">
-  <td colspan="27">
+  <td colspan="29">
     ${
       isLiveRace()
         ? "Waiting for current Apex race data."
