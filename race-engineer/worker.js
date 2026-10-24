@@ -4054,6 +4054,12 @@ export class ApexCollector {
         this.bestLaps = new Map(Object.entries(await state.storage.get("bestLaps") || {}));
         this.lastLaps = new Map(Object.entries(await state.storage.get("lastLaps") || {}));
         this.rawRows = new Map(Object.entries(await state.storage.get("rawRows") || {}));
+        // Resume outstanding detail requests after a Durable Object restart.
+        this.detailQueue = new Set(await state.storage.get("detailQueue") || []);
+        if (!this.detailQueue.size) {
+          for (const id of this.fieldApexIds) this.detailQueue.add(String(id));
+        }
+
 
 
         if (
@@ -4115,7 +4121,8 @@ export class ApexCollector {
       lapCounts: Object.fromEntries(this.lapCounts),
       bestLaps: Object.fromEntries(this.bestLaps),
       lastLaps: Object.fromEntries(this.lastLaps),
-      rawRows: Object.fromEntries(this.rawRows)
+      rawRows: Object.fromEntries(this.rawRows),
+      detailQueue: [...this.detailQueue]
     });
   }
 
@@ -4264,28 +4271,21 @@ export class ApexCollector {
 
 
   async alarm() {
-    if (
-      !this.ws ||
-      this.ws.readyState !==
-        WebSocket.OPEN
-    ) {
-      try {
-        await this.connect();
-      } catch {}
+    try {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        try { await this.connect(); }
+        catch (error) { console.error("APEX_RECONNECT_FAILED", String(error)); }
+      }
+      // One team per invocation: avoids large Supabase upsert bursts.
+      await this.drainDetailQueue(1);
+    } catch (error) {
+      console.error("APEX_DETAIL_ALARM_FAILED", String(error));
+    } finally {
+      // Persist the queue and always schedule the next attempt, even on errors.
+      await this.persist();
+      await this.state.storage.setAlarm(Date.now() + (this.detailQueue.size ? 10000 : 60000));
     }
-
-
-    // Bounded recovery: each alarm is a separate invocation. Never issue
-    // 66 Apex detail requests in one Worker invocation (subrequest limit).
-    try { await this.drainDetailQueue(3); }
-    catch (error) { console.error("DETAIL ALARM:", error); }
-
-    await this.state.storage.setAlarm(
-      Date.now() +
-      60000
-    );
   }
-
 
   async connect() {
     if (
@@ -4576,8 +4576,8 @@ export class ApexCollector {
       const expectedPits = Number(this.pitCounts.get(id)) || 0;
       const receivedLapNumbers = new Set(laps.map(r => Number(r.lap_number)));
       const receivedPitNumbers = new Set(pits.map(r => Number(r.pit_number)));
-      const completeLaps = receivedLapNumbers.has(lapCount);
-      const completePits = expectedPits === 0 || receivedPitNumbers.has(expectedPits);
+      const completeLaps = receivedLapNumbers.size >= lapCount && receivedLapNumbers.has(lapCount);
+      const completePits = expectedPits === 0 || (receivedPitNumbers.size >= expectedPits && receivedPitNumbers.has(expectedPits));
       console.log('APEX_DETAIL_AUDIT', JSON.stringify({id, lapCount, receivedLaps:laps.length, maxReceivedLap:Math.max(0,...receivedLapNumbers), expectedPits, receivedPits:pits.length, completeLaps, completePits}));
       // PRESERVE-FIRST: never reject real Apex detail rows because our own
       // expectation says the reply is "incomplete". Persist every lap/pit row
@@ -4605,19 +4605,21 @@ export class ApexCollector {
     }
   }
 
-  async drainDetailQueue(maxRequests = 3) {
-    // Use a bounded number of remote Apex requests per Durable Object alarm.
-    // Retry failed IDs later without discarding previously stored lap history.
+  async drainDetailQueue(maxRequests = 1) {
     if (!this.detailQueue.size) this.enqueueAllFieldDetails();
     const batch = [...this.detailQueue].slice(0, maxRequests);
-    for (const id of batch) this.detailQueue.delete(id);
     for (const id of batch) {
-      try { await this.refreshDetail(id, true); }
-      catch (error) {
+      // Rotate the queue: a repeatedly failing team cannot starve other teams.
+      this.detailQueue.delete(id);
+      try {
+        await this.refreshDetail(id, true);
+        console.log("APEX_DETAIL_ATTEMPT", JSON.stringify({id, queued:this.detailQueue.has(id)}));
+      } catch (error) {
         this.detailQueue.add(id);
-        console.error("DETAIL QUEUED REFRESH", id, String(error));
+        console.error("APEX_DETAIL_FAILED", JSON.stringify({id, error:String(error)}));
       }
     }
+    await this.persist();
   }
 
   async refreshAllFieldDetails(force = false) {
