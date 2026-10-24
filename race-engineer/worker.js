@@ -2331,9 +2331,14 @@ async function stintsPayload(env, rid, snapshot = null) {
     stableTeamNameMap(env, rid)
   ]);
 
-  const fieldIds = isCurrentRace
-    ? currentFieldIds(realSnapshot)
-    : new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+  // A temporarily unavailable live grid must not hide persisted race data.
+  // Only use the snapshot as the field authority when it contains actual rows.
+  const snapshotFieldIds = isCurrentRace ? currentFieldIds(realSnapshot) : new Set();
+  const persistedFieldIds = new Set([
+    ...entriesRaw.map(row => row.apex_id),
+    ...pitsRaw.map(row => row.apex_id)
+  ].map(value => String(value ?? "").trim()).filter(validApexId));
+  const fieldIds = snapshotFieldIds.size ? snapshotFieldIds : persistedFieldIds;
 
   if (!fieldIds.size) return [];
 
@@ -3008,7 +3013,15 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
   // The database is the durable source for already recorded participants.
   // Snapshot IDs take precedence whenever a real current grid is present.
   const snapshotIds = isCurrentRace ? currentFieldIds(snapshot) : new Set();
+  // Include persisted pit participants if entry rows are temporarily absent.
   const storedIds = new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+  if (!snapshotIds.size) {
+    const storedPits = await loadPits(env, rid).catch(() => []);
+    for (const row of storedPits) {
+      const id = String(row.apex_id ?? "").trim();
+      if (validApexId(id)) storedIds.add(id);
+    }
+  }
   const fieldIds = snapshotIds.size ? snapshotIds : storedIds;
 
   if (!fieldIds.size) return {
@@ -3019,9 +3032,9 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
   const entries=filterCurrentField(entriesRaw,fieldIds);
   const entryById=new Map(entries.map(r=>[String(r.apex_id),r]));
   const [stints, lapEvents, pits] = await Promise.all([
-    stintsPayload(env,rid,snapshot),
-    loadLapEventsForApexIds(env,rid,[...fieldIds]),
-    loadPits(env,rid)
+    stintsPayload(env,rid,snapshot).catch(error => { console.warn("LIVE STINTS:", error); return []; }),
+    loadLapEventsForApexIds(env,rid,[...fieldIds]).catch(error => { console.warn("LIVE LAPS:", error); return []; }),
+    loadPits(env,rid).catch(error => { console.warn("LIVE PITS:", error); return []; })
   ]);
 
   const finalStintById=new Map();
