@@ -4773,24 +4773,27 @@ function initReports() {
    */
   // Download raw lap records in bounded requests. Do not invoke the
   // all-race Worker report endpoint (it exceeds the subrequest quota).
-  async function downloadBoundedLapRecordsCsv() {
+  async function fetchBoundedReportRows(rid, table, button) {
+    const result = [];
+    for (let page = 0; ; page++) {
+      const url = `/api/archive/export-page?race_id=${encodeURIComponent(rid)}&table=${encodeURIComponent(table)}&page=${page}`;
+      const response = await fetch(apiUrl(url), {cache: "no-store"});
+      if (!response.ok) throw new Error(`Cannot read ${table} page ${page}: HTTP ${response.status}`);
+      const data = await response.json();
+      if (!Array.isArray(data.rows)) throw new Error(`Invalid ${table} page ${page}`);
+      result.push(...data.rows);
+      if (button) button.textContent = `LOADING ${table.replace('apex_', '').replaceAll('_', ' ').toUpperCase()}: ${result.length}`;
+      if (!data.has_more) break;
+      if (page > 500) throw new Error(`Too many pages for ${table}`);
+    }
+    return result;
+  }
+
+  async function downloadBoundedLapRecordsCsv(button) {
     const rid = selectedRaceId();
     if (rid === null || rid === undefined || rid === "") throw new Error("Select a race first.");
-    const getPages = async table => {
-      const result = [];
-      for (let page = 0; ; page++) {
-        const url = `/api/archive/export-page?race_id=${encodeURIComponent(rid)}&table=${encodeURIComponent(table)}&page=${page}`;
-        const response = await fetch(apiUrl(url), {cache: "no-store"});
-        if (!response.ok) throw new Error(`Cannot read ${table} page ${page}: HTTP ${response.status}`);
-        const data = await response.json();
-        if (!Array.isArray(data.rows)) throw new Error(`Invalid ${table} page ${page}`);
-        result.push(...data.rows);
-        if (!data.has_more) break;
-      }
-      return result;
-    };
-    const entries = await getPages("apex_entries");
-    const laps = await getPages("apex_lap_events");
+    const entries = await fetchBoundedReportRows(rid, "apex_entries", button);
+    const laps = await fetchBoundedReportRows(rid, "apex_lap_events", button);
     if (!laps.length) throw new Error("No recorded laps found for this race.");
     const names = new Map(entries.map(r => [String(r.apex_id), String(r.team_name || r.name || `APEX ${r.apex_id}`)]));
     const grouped = new Map();
@@ -4848,7 +4851,7 @@ function initReports() {
 
 
         try {
-          const result = await downloadBoundedLapRecordsCsv();
+          const result = await downloadBoundedLapRecordsCsv(button);
 
 
           console.log(
@@ -4927,6 +4930,39 @@ function initReports() {
     );
 
 
+  async function downloadBoundedPitStopsPdf(button) {
+    const rid = selectedRaceId();
+    if (rid === null || rid === undefined || rid === "") throw new Error("Select a race first.");
+    const [entries, pits, exclusions, laps] = await (async () => {
+      const entries = await fetchBoundedReportRows(rid, "apex_entries", button);
+      const pits = await fetchBoundedReportRows(rid, "apex_pit_stints", button);
+      const exclusions = await fetchBoundedReportRows(rid, "manual_lap_exclusions", button);
+      const laps = await fetchBoundedReportRows(rid, "apex_lap_events", button);
+      return [entries, pits, exclusions, laps];
+    })();
+    button.textContent = "GENERATING PDF...";
+    const response = await fetch(apiUrl(`/api/reports/pit-stops.pdf-bounded?race_id=${encodeURIComponent(rid)}`), {
+      method: "POST", cache: "no-store", headers: {"content-type": "application/json"},
+      body: JSON.stringify({race_id: Number(rid), entries, pits, exclusions, laps})
+    });
+    if (!response.ok) throw new Error((await response.text()) || `PDF generation failed: HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (!blob.size || !response.headers.get("content-type")?.includes("application/pdf")) {
+      throw new Error("The server did not return a PDF file.");
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `${reportBaseName()} - Pit stops.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    }
+  }
+
   $("organiserReport2Pdf")
     ?.addEventListener(
       "click",
@@ -4934,10 +4970,7 @@ function initReports() {
         const button = event.currentTarget;
         setReportButtonBusy(button, true, "PDF");
         try {
-          await downloadFileFromEndpoint(
-            "/api/reports/pit-stops.pdf",
-            `${reportBaseName()} - Pit stops.pdf`
-          );
+          await downloadBoundedPitStopsPdf(button);
         } catch (error) {
           console.error("PIT PDF DOWNLOAD ERROR", error);
           alert(`Pit Stops PDF download failed:\n\n${error.message}`);

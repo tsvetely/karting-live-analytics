@@ -2475,16 +2475,21 @@ function calculateRawStintStats(apexId, lapRows, startLap, endLap, exclusions, o
 // STINT DATASET
 // ============================================================
 
-async function stintsPayload(env, rid, snapshot = null) {
+async function stintsPayload(env, rid, snapshot = null, preloaded = null) {
   const isCurrentRace = Number(rid) === Number(raceId(env));
   const realSnapshot = isCurrentRace ? (snapshot || await collectorSnapshot(env).catch(() => null)) : null;
 
-  const [pitsRaw, entriesRaw, exclusionsRaw, teamMap] = await Promise.all([
-    loadPits(env, rid),
-    loadEntries(env, rid),
-    loadExclusions(env, rid),
-    stableTeamNameMap(env, rid)
-  ]);
+  const [pitsRaw, entriesRaw, exclusionsRaw, teamMap] = preloaded
+    ? [preloaded.pits, preloaded.entries, preloaded.exclusions,
+       new Map([...preloaded.entries, ...preloaded.pits]
+         .filter(row => !badTeamName(stripHtml(row.team_name), row.driver_name || row.current_driver || null))
+         .reverse().map(row => [String(row.apex_id), stripHtml(row.team_name)]))]
+    : await Promise.all([
+        loadPits(env, rid),
+        loadEntries(env, rid),
+        loadExclusions(env, rid),
+        stableTeamNameMap(env, rid)
+      ]);
 
   const fieldIds = isCurrentRace
     ? currentFieldIds(realSnapshot)
@@ -2492,7 +2497,7 @@ async function stintsPayload(env, rid, snapshot = null) {
 
   if (!fieldIds.size) return [];
 
-  const lapRaw = await loadLapEventsForApexIds(env, rid, [...fieldIds]);
+  const lapRaw = preloaded ? preloaded.laps : await loadLapEventsForApexIds(env, rid, [...fieldIds]);
   const entries = filterCurrentField(entriesRaw, fieldIds);
   const pits = isCurrentRace
     ? currentPitChain(filterCurrentField(pitsRaw, fieldIds), realSnapshot)
@@ -5295,6 +5300,27 @@ export default {
       if (url.pathname === "/api/raw/apex") {
         const rawSnapshot = Number(rid) === Number(raceId(env)) ? await collectorSnapshot(env).catch(() => null) : null;
         return json(await rawApexPayload(env, rid, rawSnapshot, url.searchParams.get("limit") || 200));
+      }
+
+      // Generate the existing pit report from bounded pages supplied by the client.
+      // No all-race Supabase scan is performed in this Worker invocation.
+      if (url.pathname === "/api/reports/pit-stops.pdf-bounded" && request.method === "POST") {
+        const body = await request.json();
+        const sourceId = Number(body?.race_id);
+        if (!Number.isSafeInteger(sourceId) || sourceId <= 0 || sourceId !== Number(rid) ||
+            !["entries", "pits", "exclusions", "laps"].every(k => Array.isArray(body[k]))) {
+          return json({error: "Invalid bounded pit report data"}, 400);
+        }
+        if (body.entries.length > 1000 || body.pits.length > 10000 ||
+            body.exclusions.length > 10000 || body.laps.length > 150000 ||
+            [...body.entries, ...body.pits, ...body.exclusions, ...body.laps]
+              .some(row => Number(row.race_id) !== sourceId)) {
+          return json({error: "Invalid race records for bounded pit report"}, 400);
+        }
+        const snapshot = sourceId === Number(raceId(env))
+          ? await collectorSnapshot(env).catch(() => null) : null;
+        const stints = await stintsPayload(env, sourceId, snapshot, body);
+        return createPitStopsPdfResponse(sourceId, stints);
       }
 
       // Bounded, read-only archive export. Each page uses ONE Supabase request.
