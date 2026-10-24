@@ -5194,37 +5194,54 @@ export default {
           })
         ]);
         const stats = lapAnalysisByKart(laps, pits, exclusions, [id]).get(id);
-        // The official BEST is the sole authority. Resolve its lap number
-        // from original timing lap records already loaded for this kart.
-        // This is an equality lookup, never a separately calculated best.
+        // Keep the timing identity intact: all records must carry the exact
+        // same entry id. The BL record is the source of the official best,
+        // and L records are the source of its lap number.
         const officialBest = Number(url.searchParams.get("official_best"));
         let officialLapNumber = null;
+        let officialLapSource = null;
         if (url.searchParams.has("official_best") &&
             Number.isFinite(officialBest) && officialBest > 0) {
-          const matchesOfficialTime = row =>
-            Number.isFinite(Number(row.lap_time)) &&
-            Math.round(Number(row.lap_time) * 1000) === Math.round(officialBest * 1000);
-          const original = laps.find(row =>
-            String(row.apex_id) === id && matchesOfficialTime(row) &&
-            Number.isInteger(Number(row.lap_number)) && Number(row.lap_number) > 0);
-          if (original) officialLapNumber = Number(original.lap_number);
-
-          // If the persisted timing feed is incomplete, ask the timing
-          // detail service for its original lap records. No derived fallback.
+          const millis = Math.round(officialBest * 1000);
+          const sameTime = value => Number.isFinite(Number(value)) &&
+            Math.round(Number(value) * 1000) === millis;
+          try {
+            const raw = await directApexDetail(env, id, 800);
+            // Verify the official BL record belongs to this exact entry.
+            const bl = String(raw).split(/\r?\n/).find(line =>
+              line.startsWith(`D${id}.BL#`));
+            const blParts = bl ? bl.slice(bl.indexOf("#") + 1).split("|") : [];
+            const blMillis = Number(blParts[3]);
+            if (Number.isFinite(blMillis) && blMillis === millis) {
+              // Read the original timing rows, without analytical filters.
+              const matching = parseLapRows(raw, rid).filter(row =>
+                String(row.apex_id) === id && sameTime(row.lap_time) &&
+                Number.isInteger(Number(row.lap_number)) && Number(row.lap_number) > 0);
+              if (matching.length) {
+                officialLapNumber = Number(matching[0].lap_number);
+                officialLapSource = "timing-detail";
+              }
+            } else {
+              console.warn("Official timing identity/best mismatch", id,
+                officialBest, Number.isFinite(blMillis) ? blMillis / 1000 : null);
+            }
+          } catch (error) {
+            console.warn("Official timing detail unavailable", id, String(error));
+          }
+          // Persisted original timing laps are safe only when they match
+          // this exact entry and official time. Never use analytical best.
           if (officialLapNumber === null) {
-            try {
-              const raw = await directApexDetail(env, id, 800);
-              const originalRows = parseLapRows(raw, rid);
-              const match = originalRows.find(row =>
-                String(row.apex_id) === id && matchesOfficialTime(row));
-              if (match) officialLapNumber = Number(match.lap_number);
-            } catch (error) {
-              console.warn("Official lap detail unavailable", id, String(error));
+            const matches = laps.filter(row => String(row.apex_id) === id &&
+              sameTime(row.lap_time) && Number.isInteger(Number(row.lap_number)) &&
+              Number(row.lap_number) > 0);
+            if (matches.length) {
+              officialLapNumber = Number(matches[0].lap_number);
+              officialLapSource = "persisted-timing-record";
             }
           }
         }
         return json({race_id:rid, apex_id:id, ...stats,
-          best_lap_number: officialLapNumber});
+          best_lap_number: officialLapNumber, best_lap_source: officialLapSource});
       }
 
       if (url.pathname === "/api/live") {
