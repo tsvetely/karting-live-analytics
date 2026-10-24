@@ -1630,25 +1630,24 @@ function updateRaceContext() {
       );
 
 
+    // "Current race" is the LIVE source/mode even after timing has stopped.
+    // Do not replace the LIVE badge with FINISHED; the separate status text
+    // already tells the user whether timing is active, waiting or finished.
     if (badge) {
       badge.textContent =
-        status;
+        "LIVE";
 
       badge.className =
-        status === "LIVE"
-          ? "raceModeBadge live"
-          : "raceModeBadge history";
+        "raceModeBadge live";
     }
 
 
     if (liveBadge) {
       liveBadge.textContent =
-        status;
+        "LIVE";
 
       liveBadge.className =
-        status === "LIVE"
-          ? "liveBadge live"
-          : "liveBadge history";
+        "liveBadge live";
     }
 
 
@@ -1721,6 +1720,28 @@ function updateRaceContext() {
 // OVERVIEW
 // ============================================================
 
+// Read a value from the unmodified Apex grid row. Prefer Apex semantic
+// data-type names and use the current grid column only as a compatibility
+// fallback. This is display-only: no analytics are reconstructed here.
+function apexField(row, types = []) {
+  const fields = row?.apex_fields;
+  if (!fields || typeof fields !== "object") return null;
+
+  const wanted = new Set(types.map(value => String(value || "").toLowerCase()));
+  for (const cell of Object.values(fields)) {
+    const type = String(cell?.type || "").toLowerCase();
+    if (!wanted.has(type)) continue;
+
+    const value = cell?.value;
+    if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+
+    const alt = cell?.image_alt;
+    if (alt !== null && alt !== undefined && String(alt).trim() !== "") return alt;
+  }
+
+  return null;
+}
+
 function renderOverview() {
   const body =
     $("overviewBody");
@@ -1759,6 +1780,14 @@ function renderOverview() {
   ${esc(row.position ?? "—")}
 </td>
 
+<td>
+  ${esc(apexField(row, ["no", "kart", "num", "number", "kartnumber"]) ?? "—")}
+</td>
+
+<td>
+  ${esc(apexField(row, ["nat", "nation", "country", "flag"]) ?? "—")}
+</td>
+
 <td class="team">
   ${esc(
     row.team_name ||
@@ -1775,6 +1804,26 @@ function renderOverview() {
 </td>
 
 <td>
+  ${esc(apexField(row, ["s1", "sector1", "sector_1"]) ?? "—")}
+</td>
+
+<td>
+  ${esc(apexField(row, ["s2", "sector2", "sector_2"]) ?? "—")}
+</td>
+
+<td>
+  ${esc(apexField(row, ["s3", "sector3", "sector_3"]) ?? "—")}
+</td>
+
+<td>
+  ${esc(apexField(row, ["gap", "gapleader", "gap_leader"]) ?? "—")}
+</td>
+
+<td>
+  ${esc(apexField(row, ["interval", "interv", "int", "gapnext", "gap_next"]) ?? "—")}
+</td>
+
+<td>
   ${esc(
     pick(
       row,
@@ -1786,7 +1835,19 @@ function renderOverview() {
 </td>
 
 <td>
+  ${esc(apexField(row, ["otr", "ontrack", "on_track", "tracktime", "trk"]) ?? "—")}
+</td>
+
+<td>
   ${esc(row.pit_count ?? "—")}
+</td>
+
+<td>
+  ${esc(apexField(row, ["pittime", "pit_time", "pt"]) ?? "—")}
+</td>
+
+<td>
+  ${esc(apexField(row, ["penalty", "pen", "penaltime"]) ?? "—")}
 </td>
 
 <td>
@@ -1885,7 +1946,7 @@ function renderOverview() {
       .join("") ||
     `
 <tr class="empty">
-  <td colspan="17">
+  <td colspan="29">
     ${
       isLiveRace()
         ? "Waiting for current Apex race data."
@@ -1960,7 +2021,7 @@ function renderOverviewSummary() {
       );
 
 
-  const liveSummary = isCurrentRaceSelected() ? S.liveMeta : null;
+  const liveSummary = isLiveRace() ? S.liveMeta : null;
   const authoritativeTeams = number(liveSummary?.team_count);
   const authoritativeLap = number(liveSummary?.race_lap);
   const authoritativePits = number(liveSummary?.pit_count);
@@ -1982,9 +2043,14 @@ function renderOverviewSummary() {
   }
 
   if ($("summaryBestLap")) {
+    const fallbackBest = best.length ? Math.min(...best) : null;
+    const value = authoritativeBest !== null && authoritativeBest > 0
+      ? authoritativeBest
+      : fallbackBest;
+
     $("summaryBestLap").textContent =
-      authoritativeBest && authoritativeBest > 0
-        ? time(authoritativeBest)
+      value !== null && value > 0
+        ? time(value)
         : "—";
   }
 }
@@ -3022,6 +3088,7 @@ async function loadCurrentView(
       break;
 
     case "reports":
+      await loadReportData(force);
       renderReports();
       break;
   }
@@ -3091,6 +3158,11 @@ async function switchView(view) {
     );
 
   } else {
+    try {
+      await loadReportData(false);
+    } catch (error) {
+      console.error("Report data load failed:", error);
+    }
     renderReports();
   }
 }
@@ -4438,6 +4510,18 @@ window.onload = () => window.print();
 // REPORTS
 // ============================================================
 
+async function loadReportData(force = false) {
+  const results = await Promise.allSettled([
+    loadStints(force),
+    loadDrivers(force),
+    loadTeams(force),
+    loadPits(force)
+  ]);
+  const failed = results.find(result => result.status === "rejected");
+  if (failed) throw failed.reason;
+}
+
+
 function renderReports() {
   const hasRace =
     raceHasData() ||
@@ -4570,39 +4654,37 @@ function initReports() {
     });
 
   $("downloadRaceCsv")
-    ?.addEventListener(
-      "click",
-      () => {
-        try {
-          downloadText(
-            `${reportBaseName()} - Race Analytics.csv`,
-            buildRaceAnalyticsCsv(),
-            "text/csv;charset=utf-8"
-          );
-
-        } catch (error) {
-          alert(
-            error.message
-          );
-        }
+    ?.addEventListener("click", event => {
+      const button = event.currentTarget;
+      setReportButtonBusy(button, true, "CSV");
+      try {
+        downloadFileFromEndpoint(
+          "/api/reports/race-analytics.csv",
+          `${reportBaseName()} - Race Analytics.csv`
+        );
+      } catch (error) {
+        alert(`Race Analytics CSV download failed:\n\n${error.message}`);
+      } finally {
+        window.setTimeout(() => setReportButtonBusy(button, false, "CSV"), 300);
       }
-    );
+    });
 
 
   $("downloadRacePdf")
-    ?.addEventListener(
-      "click",
-      () => {
-        try {
-          openAnalyticsPdf();
-
-        } catch (error) {
-          alert(
-            error.message
-          );
-        }
+    ?.addEventListener("click", event => {
+      const button = event.currentTarget;
+      setReportButtonBusy(button, true, "PDF");
+      try {
+        downloadFileFromEndpoint(
+          "/api/reports/race-analytics.pdf",
+          `${reportBaseName()} - Race Analytics.pdf`
+        );
+      } catch (error) {
+        alert(`Race Analytics PDF download failed:\n\n${error.message}`);
+      } finally {
+        window.setTimeout(() => setReportButtonBusy(button, false, "PDF"), 300);
       }
-    );
+    });
 
 
   /*
