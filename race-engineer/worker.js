@@ -4234,7 +4234,7 @@ export class ApexCollector {
 
       await this.connect();
 
-      this.state.waitUntil(this.refreshAllFieldDetails(true));
+      this.state.waitUntil(this.refreshAllFieldDetails(false));
 
       return json(
         await this.snapshot()
@@ -4263,10 +4263,21 @@ export class ApexCollector {
     }
 
 
-    await this.state.storage.setAlarm(
-      Date.now() +
-      60000
-    );
+    // Recover missing historical lap/pit rows incrementally, one kart per alarm.
+    // Never clear or overwrite the existing race history.
+    try {
+      const ids = [...this.fieldApexIds].map(String).filter(validApexId);
+      if (ids.length) {
+        const cursor = Number(await this.state.storage.get("historyBackfillCursor") || 0);
+        const id = ids[cursor % ids.length];
+        await this.state.storage.put("historyBackfillCursor", (cursor + 1) % ids.length);
+        await this.refreshDetail(id, true);
+      }
+    } catch (error) {
+      console.error("HISTORY BACKFILL:", error);
+    } finally {
+      await this.state.storage.setAlarm(Date.now() + 60000);
+    }
   }
 
 
