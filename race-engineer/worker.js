@@ -3507,70 +3507,66 @@ async function recoverMissingApexLaps(env, rid, fieldIds, existingRows) {
 }
 
 async function createLapRecordsCsvResponse(env, rid, snapshot) {
-  // Race IDs are local identifiers, not Apex session identifiers. Old rows
-  // in apex_lap_events can belong to an earlier session with the same race ID.
-  // For the active race, export only the authoritative Apex detail feed.
-  if (Number(rid) !== Number(raceId(env))) {
-    return json({error:"Historical Apex lap export requires a session-specific archive; refusing to mix sessions."},409);
+  // Fetch all laps for the race in bulk. Per-kart Apex requests exceed the
+  // Cloudflare Worker subrequest limit (observed error 26749).
+  // The hard bound prevents silently exporting an incomplete lap matrix.
+  const entries = await sbGet(env, "apex_entries", {
+    select: "apex_id,team_name", race_id: `eq.${rid}`, limit: "1000"
+  });
+  const names = new Map();
+  for (const entry of entries) {
+    const id = String(entry.apex_id ?? "").trim();
+    if (validApexId(id)) names.set(id, String(entry.team_name || "").trim());
   }
-  const live = snapshot || await collectorSnapshot(env).catch(() => null);
-  const ids = [...currentFieldIds(live)].filter(validApexId);
-  if (!ids.length) return json({error:"No current Apex field identifiers; refusing to export stale lap records."},503);
-  const endpoint = "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php";
   const grouped = new Map();
-  const errors = [];
-  // Bounded batches; never use persisted data as a silent fallback.
-  for (let i=0;i<ids.length;i+=8) {
-    const batch=ids.slice(i,i+8);
-    const result=await Promise.all(batch.map(async id=>{
-      const request=`D#-2000#D${id}.L`;
-      try {
-        const response=await fetch(endpoint,{
-          method:"POST",
-          headers:{"content-type":"application/x-www-form-urlencoded; charset=UTF-8"},
-          body:new URLSearchParams({port:env.APEX_DETAIL_PORT || "8910",request}),
-          signal:AbortSignal.timeout(7000)
-        });
-        if(!response.ok) throw new Error(`HTTP ${response.status}`);
-        const text=await response.text();
-        const parsed=parseLapRows(text,rid).filter(r=>String(r.apex_id)===String(id));
-        if(!parsed.length) throw new Error("No lap records in Apex response");
-        return {id,parsed};
-      } catch(error) {return {id,error:String(error)};}
-    }));
-    for(const item of result){
-      if(item.error){errors.push(`${item.id}: ${item.error}`);continue;}
-      const laps=new Map();
-      for(const row of item.parsed){
-        const lap=Math.trunc(Number(row.lap_number));
-        const time=Number(row.lap_time);
-        if(lap>0&&Number.isFinite(time)&&time>0)laps.set(lap,time);
+  // Supabase REST caps each page at 1000 rows. Fetch independent pages in
+  // bounded parallel batches instead of waiting for 42 serial round trips.
+  // Keep the request count below the Cloudflare subrequest ceiling.
+  const MAX_PAGES = 42;
+  const BATCH_SIZE = 6;
+  let complete = false;
+  for (let first = 0; first < MAX_PAGES && !complete; first += BATCH_SIZE) {
+    const pages = Array.from({length: Math.min(BATCH_SIZE, MAX_PAGES - first)}, (_, i) => first + i);
+    const batches = await Promise.all(pages.map(page => sbGet(env, "apex_lap_events", {
+      select: "apex_id,lap_number,lap_time",
+      race_id: `eq.${rid}`,
+      order: "apex_id.asc,lap_number.asc"
+    }, {from: page * PAGE_SIZE, to: (page + 1) * PAGE_SIZE - 1})));
+    for (let i = 0; i < batches.length; i++) {
+      const rows = batches[i];
+      for (const row of rows) {
+        const id = String(row.apex_id ?? "").trim();
+        const lap = Number(row.lap_number);
+        const time = Number(row.lap_time);
+        if (!validApexId(id) || !Number.isInteger(lap) || lap < 1 || !Number.isFinite(time) || time <= 0) continue;
+        if (!grouped.has(id)) grouped.set(id, new Map());
+        grouped.get(id).set(lap, time);
       }
-      if(laps.size)grouped.set(String(item.id),laps);
+      if (rows.length < PAGE_SIZE) { complete = true; break; }
     }
   }
-  if(errors.length || grouped.size !== ids.length){
-    return json({error:"Apex detail feed is incomplete. Refusing to generate a misleading CSV.",received:grouped.size,expected:ids.length,failures:errors.slice(0,12)},503);
-  }
-  const teamMap=await stableTeamNameMap(env,rid);
-  const meta=value=>[value,...Array(10).fill("")].join(",");
-  const out=[meta("\uFEFFApex Timing - drive your success https://www.apex-timing.com/"),"","",meta("Karting Events Bulgaria - Karting Track"),"","",meta(`Race ${rid} - live Apex lap records`),"","","","",""];
-  for(const id of [...grouped.keys()].sort((x,y)=>Number(x)-Number(y))){
-    const laps=grouped.get(id);
-    const team=resolveTeam(id,teamMap)||`APEX ${id}`;
-    out.push(meta(`${id} - ${team}`),"",["Laps",...Array.from({length:10},(_,i)=>i+1)].join(","));
-    const max=Math.max(...laps.keys());
-    for(let base=0;base<max;base+=10){
-      const cells=[base?String(base):""];
-      for(let n=1;n<=10;n++){
-        const value=laps.get(base+n);
-        cells.push(Number.isFinite(value)?value.toFixed(3):"-");
+  if (!complete) return json({error: "More than 42000 lap records; refusing to produce a truncated CSV."}, 413);
+  if (!grouped.size) return json({error: `No recorded lap times for race ${rid}.`}, 404);
+  const out = [
+    "\uFEFFApex Timing - drive your success https://www.apex-timing.com/",
+    "", "", "Karting Events Bulgaria - Karting Track", "", "",
+    `Race ${rid} - recorded lap times`, "", "", "", "", ""
+  ];
+  for (const id of [...grouped.keys()].sort((a,b)=>Number(a)-Number(b))) {
+    const laps = grouped.get(id);
+    out.push(`${id} - ${names.get(id) || `APEX ${id}`}`, "", "Laps,1,2,3,4,5,6,7,8,9,10");
+    const max = Math.max(...laps.keys());
+    for (let base=0; base<max; base+=10) {
+      const cells = [base ? String(base) : ""];
+      for (let n=1; n<=10; n++) {
+        const value = laps.get(base+n);
+        cells.push(Number.isFinite(value) ? value.toFixed(3) : "-");
       }
       out.push(cells.join(","));
     }
-    out.push("","");
+    out.push("", "");
   }
-  return new Response(out.join("\r\n"),{headers:{
+  return new Response(out.join("\r\n"), {headers:{
     "content-type":"text/csv; charset=utf-8",
     "content-disposition":`attachment; filename="${safeFilename(`Race ${rid} - Lap time records.csv`)}"`,
     "cache-control":"no-store", "x-content-type-options":"nosniff"
