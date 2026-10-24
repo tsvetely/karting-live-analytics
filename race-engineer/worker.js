@@ -3252,7 +3252,7 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
 
     const lastPitLap = pits.filter(p => String(p.apex_id) === id)
       .map(p => Number(p.pit_lap))
-      .filter(n => Number.isFinite(n) && n >= 0 && n <= (Number(lap) || 0))
+      .filter(n => Number.isFinite(n) && n >= 0 && n < (Number(lap) || 0))
       .reduce((max,n) => Math.max(max,n), 0);
 
     current.push({
@@ -3268,6 +3268,8 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       live_last_lap:isCurrentRace?(number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap)):number(entry.last_lap),
       apex_best_lap:isCurrentRace?(number(snapshot?.bestLaps?.[id]) ?? number(entry.best_lap)):number(entry.best_lap),
       apex_fields:isCurrentRace?(snapshot?.rawRows?.[id] || null):null,
+      pit_time:stint.pit_time ?? entry.pit_time ?? null,
+      penalty:entry.penalty ?? entry.penalty_time ?? null,
       avg_lap_time:stats.avg_lap_time,best_lap_time:stats.best_lap_time,
       best_lap_number:stats.best_lap_number,worst_lap_time:stats.worst_lap_time,
       worst_lap_number:stats.worst_lap_number,consistency:stats.consistency,updated_at:entry.updated_at||null
