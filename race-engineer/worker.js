@@ -4120,8 +4120,87 @@ function buildTextPdf(pages) {
   return new TextEncoder().encode(out);
 }
 
+// Pit report: preserve the tabular organiser layout rather than flattening rows into text.
+function buildFormattedPitPdf(stints, rid) {
+  const grouped = new Map();
+  for (const row of stints || []) {
+    const id = String(row.apex_id || '').trim();
+    if (!id) continue;
+    if (!grouped.has(id)) grouped.set(id, []);
+    grouped.get(id).push(row);
+  }
+  const objects = [null];
+  const add = body => { objects.push(body); return objects.length - 1; };
+  const regular = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const bold = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
+  const pageIds = [];
+  const contents = [];
+  const width = 842, height = 595;
+  const columns = [31, 34, 58, 60, 65, 36, 154, 61, 55, 47, 61, 69];
+  const headers = ['#', 'Lap', 'Hour', 'Total', 'On track', 'Laps', 'Driver', 'Total', 'Best lap', 'Avg', 'Pits', 'Out'];
+  const x = [16]; for (const w of columns) x.push(x[x.length - 1] + w);
+  const enc = new TextEncoder();
+  const fmt = v => v == null ? '' : String(v);
+  const time = v => { const n=Number(v); return Number.isFinite(n)&&n>0?n.toFixed(3):''; };
+  const drawText = (parts, value, px, py, size=8, heavy=false) => {
+    // Keep PDF text streams valid even for non-Latin driver names.
+    const ascii = fmt(value).normalize('NFKD').replace(/[^\x20-\x7e]/g, '?');
+    parts.push(`BT /${heavy?'F2':'F1'} ${size} Tf 1 0 0 1 ${px.toFixed(2)} ${py.toFixed(2)} Tm (${pdfEscape(ascii)}) Tj ET`);
+  };
+  const fill = (parts, x0, y0, w, h, shade) => parts.push(`${shade} g ${x0} ${y0} ${w} ${h} re f 0 g`);
+  const line = (parts, x0, y0, x1, y1) => parts.push(`0.65 G 0.35 w ${x0} ${y0} m ${x1} ${y1} l S 0 G`);
+  const ordered = [...grouped.values()]; // Input order is the current finishing order.
+  for (const teamRows of ordered) {
+    const rows = [...teamRows].sort((a,b) => Number(a.stint_number)-Number(b.stint_number));
+    const team = rows[0]?.team_name || `Team ${rows[0]?.apex_id || ''}`;
+    const kart = rows[0]?.kart_number || rows[0]?.kart || rows[0]?.kart_no || '';
+    const displayName = `${kart ? `${kart} - ` : ''}${team}`;
+    const pageSize = 28;
+    for (let start=0; start<rows.length; start+=pageSize) {
+      const segment = rows.slice(start,start+pageSize);
+      const c=[];
+      drawText(c, 'KARTING EVENTS BULGARIA', 20, 557, 18, true);
+      drawText(c, `Race ${rid} - Pit stops`, 20, 531, 14, true);
+      line(c, 18, 521, 824, 521);
+      drawText(c, displayName, 20, 500, 15, true);
+      const top=485, rowHeight=14;
+      fill(c, 16, top-rowHeight, 806, rowHeight, '0.82');
+      headers.forEach((h,i)=>drawText(c,h,x[i]+3,top-10,7,true));
+      for (let i=0;i<segment.length;i++) {
+        const r=segment[i], y=top-rowHeight*(i+2);
+        if (i%2===1) fill(c,16,y,806,rowHeight,'0.94');
+        const cells=[r.stint_number,r.end_lap_count??r.current_lap_count,r.pit_hour,r.total_time,r.on_track,r.total_laps,
+          cleanDriver(r.driver_name)||'',r.total_time,time(r.best_lap_time),time(r.avg_lap_time),r.pit_time,r.is_live?'(Finish)':r.pit_hour];
+        cells.forEach((v,j)=>drawText(c,fmt(v).slice(0,j===6?29:15),x[j]+3,y+4,7,j===4||j===6));
+      }
+      const bottom=top-rowHeight*(segment.length+1);
+      for (let i=0;i<=columns.length;i++) line(c,x[i],bottom,x[i],top);
+      for (let i=0;i<=segment.length+1;i++) line(c,16,top-i*rowHeight,822,top-i*rowHeight);
+      drawText(c,`Race ${rid} | ${displayName} | ${Math.floor(start/pageSize)+1}`,20,20,7);
+      const stream=c.join('\n');
+      const length=enc.encode(stream).length;
+      const contentId=add(`<< /Length ${length} >>\nstream\n${stream}\nendstream`);
+      contents.push(contentId);
+      pageIds.push(add('PENDING_PAGE'));
+    }
+  }
+  if (!pageIds.length) throw new Error('No pit stop rows for PDF report');
+  const pagesId=add('PENDING_PAGES');
+  for(let i=0;i<pageIds.length;i++) objects[pageIds[i]]=`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << /F1 ${regular} 0 R /F2 ${bold} 0 R >> >> /Contents ${contents[i]} 0 R >>`;
+  objects[pagesId]=`<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map(id=>`${id} 0 R`).join(' ')}] >>`;
+  const catalog=add(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+  const chunks=['%PDF-1.4\n']; const offsets=[0]; let length=enc.encode(chunks[0]).length;
+  for(let i=1;i<objects.length;i++){offsets[i]=length;const piece=`${i} 0 obj\n${objects[i]}\nendobj\n`;chunks.push(piece);length+=enc.encode(piece).length;}
+  const xref=length;
+  let trailer=`xref\n0 ${objects.length}\n0000000000 65535 f \n`;
+  for(let i=1;i<objects.length;i++)trailer+=`${String(offsets[i]).padStart(10,'0')} 00000 n \n`;
+  trailer+=`trailer\n<< /Size ${objects.length} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  chunks.push(trailer);
+  return enc.encode(chunks.join(''));
+}
+
 function createPitStopsPdfResponse(rid, stints) {
-  const bytes=buildTextPdf(pitReportSourcePages(stints));
+  const bytes=buildFormattedPitPdf(stints,rid);
   const filename=safeFilename(`Race ${rid} - Pit stops.pdf`);
   return new Response(bytes,{status:200,headers:{
     'content-type':'application/pdf','content-disposition':`attachment; filename="${filename}"`,
