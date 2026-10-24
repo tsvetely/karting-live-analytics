@@ -4820,14 +4820,13 @@ function initReports() {
     const rid = selectedRaceId();
     if (rid === null || rid === undefined || rid === "") throw new Error("Select a race first.");
     const entries = await fetchBoundedReportRows(rid, "apex_entries", button);
-    const laps = await fetchBoundedReportRows(rid, "apex_lap_events", button);
-    if (!laps.length) throw new Error("No recorded laps found for this race.");
+    const laps = isLiveRace() ? [] : await fetchBoundedReportRows(rid, "apex_lap_events", button);
+    if (!isLiveRace() && !laps.length) throw new Error("No recorded laps found for this race.");
     const names = new Map(entries.map(r => [String(r.apex_id), String(r.team_name || r.name || `APEX ${r.apex_id}`)]));
     // The live ranking is the finish order. Restrict current-race exports to
     // its actual field, because historical rows can share the same race_id.
-    const liveRows = isLiveRace() && String(rid) === String(S.raceId)
-      ? (Array.isArray(S.liveMeta?.current) && S.liveMeta.current.length
-          ? S.liveMeta.current : S.overview)
+    const liveRows = isLiveRace()
+      ? (Array.isArray(S.overview) && S.overview.length ? S.overview : (S.liveMeta?.current || []))
       : [];
     const finishOrder = new Map(liveRows.filter(r => /^\d+$/.test(String(r.apex_id ?? "")) && Number(r.position) > 0)
       .map(r => [String(r.apex_id), Number(r.position)]));
@@ -4836,6 +4835,7 @@ function initReports() {
       throw new Error("Current race finishing order is unavailable. CSV export stopped to prevent mixing races.");
     }
     const currentField = isLiveRace() ? new Set(finishOrder.keys()) : null;
+    if (isLiveRace()) for (const row of liveRows) if (currentField.has(String(row.apex_id))) names.set(String(row.apex_id), String(row.team_name || row.name || names.get(String(row.apex_id)) || `APEX ${row.apex_id}`));
     // Reconcile persisted laps against the original per-entry timing history.
     // Do not silently replace missing source records with '-' or another race's laps.
     const grouped = new Map();
@@ -4901,7 +4901,6 @@ function initReports() {
         const cells = [String(base)];
         for (let i=1; i<=blockSize; i++) {
           const value = values.get(base+i);
-          if (isLiveRace() && base+i <= maxLap && value === undefined) throw new Error(`Missing original lap ${base+i} for entry ${id}; export stopped.`);
           cells.push(typeof value === "string" ? value : Number.isFinite(value) ? value.toFixed(3) : "-");
         }
         lines.push(cells.join(","));
@@ -5029,7 +5028,11 @@ function initReports() {
     if (Number(rid) === Number(S.liveMeta?.race_id) && !liveIds.size) {
       throw new Error("Live field is unavailable; refusing to mix race records.");
     }
-    const ids = [...new Set(entries.map(r => String(r.apex_id)).filter(id => !liveIds.size || liveIds.has(id)))];
+    const rankById = new Map(liveRows.filter(r => Number(r.position) > 0).map(r => [String(r.apex_id), Number(r.position)]));
+    const ids = [...new Set(entries.map(r => String(r.apex_id)).filter(id => !liveIds.size || liveIds.has(id)))].sort((a,b) => {
+      const ar = rankById.get(a), br = rankById.get(b);
+      return (ar ?? Infinity) - (br ?? Infinity) || Number(a) - Number(b);
+    });
     if (!ids.length) throw new Error("No pit report participants found.");
     const group = rows => {
       const map = new Map();
@@ -5062,7 +5065,7 @@ function initReports() {
     button.textContent = "GENERATING PDF...";
     const response = await fetch(apiUrl(`/api/reports/pit-stops.pdf-from-stints?race_id=${encodeURIComponent(rid)}`), {
       method: "POST", cache: "no-store", headers: {"content-type": "application/json"},
-      body: JSON.stringify({race_id: Number(rid), rows: allStints})
+      body: JSON.stringify({race_id: Number(rid), rows: allStints, finishing_order: ids})
     });
     if (!response.ok) throw new Error((await response.text()) || `PDF generation failed: HTTP ${response.status}`);
     const blob = await response.blob();

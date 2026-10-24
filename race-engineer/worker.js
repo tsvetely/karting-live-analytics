@@ -5456,7 +5456,20 @@ export default {
             body.rows.some(row => Number(row.race_id) !== sourceId || !validApexId(String(row.apex_id)))) {
           return json({error: "Invalid pit report rows"}, 400);
         }
-        return createPitStopsPdfResponse(sourceId, body.rows);
+        // The client sends the official finishing order explicitly; rows arrive
+        // asynchronously from parallel per-team calculations.
+        const order = body.finishing_order;
+        if (!Array.isArray(order) || !order.length || order.length > 1000 ||
+            order.some(id => !validApexId(String(id))) ||
+            new Set(order.map(String)).size !== order.length ||
+            body.rows.some(row => !order.map(String).includes(String(row.apex_id)))) {
+          return json({error: "Invalid finishing order for pit report"}, 400);
+        }
+        const rank = new Map(order.map((id, i) => [String(id), i]));
+        const sortedRows = [...body.rows].sort((a,b) =>
+          rank.get(String(a.apex_id)) - rank.get(String(b.apex_id)) ||
+          Number(a.stint_number) - Number(b.stint_number));
+        return createPitStopsPdfResponse(sourceId, sortedRows);
       }
 
       // Generate the existing pit report from bounded pages supplied by the client.
