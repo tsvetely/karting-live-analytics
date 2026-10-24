@@ -692,22 +692,29 @@ function parseGridData(html) {
       const column = id[1];
       const explicitType = /data-type=["']([^"']+)["']/i.exec(cellMatch[1]);
       const type = explicitType?.[1] || columnTypes.get(`c${column}`) || "";
-      // Kart numbers and national flags can be image-backed Apex cells.
-      // Keep the original HTML attributes as text metadata; do not persist HTML.
+      // Apex can encode kart/flag data in element attributes rather than text.
       const innerHtml = cellMatch[2];
       const image = /<img\b([^>]*)>/i.exec(innerHtml);
       const imageAttrs = image?.[1] || "";
-      const attr = (source, name) => {
-        const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*["']([^"']*)["']`, "i").exec(source);
-        return m?.[1] || "";
+      const attr = (markup, name) => {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const m = new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(?:["']([^"']*)["']|([^\\s>]+))`, "i").exec(markup);
+        return m?.[1] || m?.[2] || "";
       };
+      const embedded = /<(?:span|div|svg|use)\b([^>]*)>/i.exec(innerHtml)?.[1] || "";
+      const textValue = stripHtml(innerHtml).trim();
+      const explicitValue = attr(cellMatch[1], "data-value") || attr(embedded, "data-value") ||
+        attr(innerHtml, "data-number") || attr(innerHtml, "data-kart") || "";
       fields[`c${column}`] = {
-        column,
-        type,
-        value: stripHtml(innerHtml),
+        column, type,
+        value: textValue || explicitValue,
         image_alt: attr(imageAttrs, "alt") || attr(imageAttrs, "title") || null,
-        image_src: attr(imageAttrs, "src") || null,
-        cell_title: attr(cellMatch[1], "title") || null
+        image_src: attr(imageAttrs, "src") || attr(imageAttrs, "data-src") || null,
+        cell_title: attr(cellMatch[1], "title") || attr(embedded, "title") || null,
+        data_value: explicitValue || null,
+        cell_class: attr(cellMatch[1], "class") || null,
+        cell_style: attr(cellMatch[1], "style") || null,
+        image_class: attr(imageAttrs, "class") || null
       };
     }
     rows.set(apexId, fields);
@@ -5030,6 +5037,19 @@ export default {
         });
       }
 
+
+      // Read-only inspection of actual Apex cells; no Supabase or DO writes.
+      if (url.pathname === "/api/collector/grid-cells") {
+        const id = String(url.searchParams.get("apex_id") || "");
+        if (!validApexId(id)) return json({ error: "Invalid apex_id" }, 400);
+        const snapshot = await directApexSnapshot(env);
+        const cells = snapshot?.rawRows?.[id] || null;
+        return json({ ok: !!cells, apex_id: id,
+          source: "direct-apex-grid", field_count: snapshot?.field_count || 0,
+          column_types: snapshot?.columnTypes || {},
+          kart: cells?.c3 || null, nation: cells?.c4 || null,
+          available_columns: cells ? Object.keys(cells) : [] });
+      }
 
       if (
         url.pathname ===

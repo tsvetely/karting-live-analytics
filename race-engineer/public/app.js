@@ -1735,12 +1735,12 @@ function apexField(row, types = []) {
   };
   const valueOf = cell => {
     if (!cell) return null;
-    for (const value of [cell.value, cell.image_alt, cell.cell_title]) {
+    for (const value of [cell.value, cell.data_value, cell.image_alt, cell.cell_title]) {
       if (value !== null && value !== undefined && String(value).trim()) return value;
     }
     // Apex uses image filenames for some flags. Never display a raw URL.
     if (wanted.has("nat") || wanted.has("nation") || wanted.has("country") || wanted.has("flag")) {
-      const src = String(cell.image_src || "");
+      const src = String(cell.image_src || "") || String(cell.cell_style || "");
       const file = src.split("/").pop()?.split("?")[0] || "";
       const match = /^(?:flag[_-]?)?([a-z]{2,3})\.(?:png|gif|svg|webp)$/i.exec(file);
       if (match) return match[1].toUpperCase();
