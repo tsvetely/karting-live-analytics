@@ -1442,7 +1442,6 @@ function currentFieldIds(
 
 function snapshotFromGrid(grid) {
   const fieldApexIds = [];
-  const rawRows = {};
   const positions = Object.fromEntries(grid?.positions || []);
   const pitCounts = {};
   const lapCounts = {};
@@ -1450,6 +1449,7 @@ function snapshotFromGrid(grid) {
   const lastLaps = {};
   const teamNames = {};
   const drivers = {};
+  const rawRows = {};
 
   for (const [rawId, fields] of grid?.rows || []) {
     const id = String(rawId);
@@ -1506,7 +1506,6 @@ function snapshotFromGrid(grid) {
     last_grid_at: stamp,
     field_count: fieldApexIds.length,
     fieldApexIds,
-    rawRows,
     positions,
     columnTypes: Object.fromEntries(grid?.columnTypes || []),
     pitCounts,
@@ -1514,7 +1513,8 @@ function snapshotFromGrid(grid) {
     bestLaps,
     lastLaps,
     teamNames,
-    drivers
+    drivers,
+    rawRows
   };
 }
 
