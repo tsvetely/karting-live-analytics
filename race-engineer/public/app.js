@@ -378,26 +378,18 @@ function apiUrl(path) {
 
 async function downloadFileFromEndpoint(
   path,
-  fallbackFilename = "download"
+  fallbackFilename =
+    "download"
 ) {
-  // Never leave the report button stuck in GENERATING when the API stalls.
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-  let response;
-  try {
-    response = await fetch(apiUrl(path), {
-      method: "GET",
-      cache: "no-store",
-      signal: controller.signal
-    });
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error(`Report request timed out after 30 seconds: ${path}. The server did not return the report.`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const response =
+    await fetch(
+      apiUrl(path),
+      {
+        method: "GET",
+        cache: "no-store"
+      }
+    );
+
 
   if (!response.ok) {
     let message = "";
@@ -415,14 +407,6 @@ async function downloadFileFromEndpoint(
     );
   }
 
-
-  const contentType = (response.headers.get("content-type") || "").toLowerCase();
-  if (contentType.includes("text/html") && !path.endsWith(".html")) {
-    throw new Error(`The report endpoint returned HTML instead of a file (HTTP ${response.status}). Check that the deployed Cloudflare Worker handles ${path}.`);
-  }
-  if (path.endsWith(".csv") && !contentType.includes("csv") && !contentType.includes("octet-stream")) {
-    throw new Error(`The report endpoint returned ${contentType || "an unknown content type"} instead of CSV (HTTP ${response.status}).`);
-  }
 
   const blob =
     await response.blob();
@@ -1962,7 +1946,7 @@ function renderOverview() {
       .join("") ||
     `
 <tr class="empty">
-  <td colspan="29">
+  <td colspan="27">
     ${
       isLiveRace()
         ? "Waiting for current Apex race data."
