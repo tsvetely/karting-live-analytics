@@ -5312,7 +5312,7 @@ export default {
           return json({error: "Invalid bounded pit report data"}, 400);
         }
         if (body.entries.length > 1000 || body.pits.length > 10000 ||
-            body.exclusions.length > 10000 || body.laps.length > 150000 ||
+            body.exclusions.length > 10000 || body.laps.length > 300000 ||
             [...body.entries, ...body.pits, ...body.exclusions, ...body.laps]
               .some(row => Number(row.race_id) !== sourceId)) {
           return json({error: "Invalid race records for bounded pit report"}, 400);

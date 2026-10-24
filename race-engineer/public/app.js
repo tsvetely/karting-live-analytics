@@ -4823,17 +4823,35 @@ function initReports() {
     const laps = await fetchBoundedReportRows(rid, "apex_lap_events", button);
     if (!laps.length) throw new Error("No recorded laps found for this race.");
     const names = new Map(entries.map(r => [String(r.apex_id), String(r.team_name || r.name || `APEX ${r.apex_id}`)]));
+    // The live ranking is the finish order. Restrict current-race exports to
+    // its actual field, because historical rows can share the same race_id.
+    const liveRows = Number(rid) === Number(S.liveMeta?.race_id) ? S.overview : [];
+    const finishOrder = new Map(liveRows.filter(r => Number(r.position) > 0)
+      .map(r => [String(r.apex_id), Number(r.position)]));
+    const currentField = finishOrder.size ? new Set(finishOrder.keys()) : null;
     const grouped = new Map();
     for (const row of laps) {
       const id = String(row.apex_id ?? "");
       const lap = Number(row.lap_number), value = Number(row.lap_time);
-      if (!/^\d+$/.test(id) || !Number.isInteger(lap) || lap <= 0 || !Number.isFinite(value) || value <= 0) continue;
+      if (!/^\d+$/.test(id) || (currentField && !currentField.has(id)) || !Number.isInteger(lap) || lap <= 0 || !Number.isFinite(value) || value <= 0) continue;
       if (!grouped.has(id)) grouped.set(id, new Map());
       grouped.get(id).set(lap, value);
     }
-    const blockSize = 50;
+    const blockSize = 10;
     const lines = ["\uFEFFApex Timing - drive your success https://www.apex-timing.com/", "", "Karting Events Bulgaria - Karting Track", "", `Race ${rid} - Lap time records`, ""];
-    for (const id of [...grouped.keys()].sort((a,b) => Number(a)-Number(b))) {
+    const entryById = new Map(entries.map(r => [String(r.apex_id), r]));
+    const orderedIds = [...grouped.keys()].sort((a, b) => {
+      const aRank = finishOrder.get(a) ?? Number(entryById.get(a)?.position);
+      const bRank = finishOrder.get(b) ?? Number(entryById.get(b)?.position);
+      const aValid = Number.isFinite(aRank) && aRank > 0;
+      const bValid = Number.isFinite(bRank) && bRank > 0;
+      if (aValid && bValid && aRank !== bRank) return aRank - bRank;
+      if (aValid !== bValid) return aValid ? -1 : 1;
+      const aLaps = Number(entryById.get(a)?.lap_count) || 0;
+      const bLaps = Number(entryById.get(b)?.lap_count) || 0;
+      return bLaps - aLaps || Number(a) - Number(b);
+    });
+    for (const id of orderedIds) {
       const values = grouped.get(id);
       lines.push(`${id} - ${names.get(id) || `APEX ${id}`}`);
       lines.push(["Laps", ...Array.from({length:blockSize}, (_,i)=>i+1)].join(","));
@@ -4967,10 +4985,13 @@ function initReports() {
       const laps = await fetchBoundedReportRows(rid, "apex_lap_events", button);
       return [entries, pits, exclusions, laps];
     })();
+    const liveRows = Number(rid) === Number(S.liveMeta?.race_id) ? S.overview : [];
+    const liveIds = new Set(liveRows.filter(r => Number(r.position) > 0).map(r => String(r.apex_id)));
+    const keep = rows => liveIds.size ? rows.filter(r => liveIds.has(String(r.apex_id))) : rows;
     button.textContent = "GENERATING PDF...";
     const response = await fetch(apiUrl(`/api/reports/pit-stops.pdf-bounded?race_id=${encodeURIComponent(rid)}`), {
       method: "POST", cache: "no-store", headers: {"content-type": "application/json"},
-      body: JSON.stringify({race_id: Number(rid), entries, pits, exclusions, laps})
+      body: JSON.stringify({race_id: Number(rid), entries: keep(entries), pits: keep(pits), exclusions: keep(exclusions), laps: keep(laps)})
     });
     if (!response.ok) throw new Error((await response.text()) || `PDF generation failed: HTTP ${response.status}`);
     const blob = await response.blob();
