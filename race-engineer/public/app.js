@@ -1738,6 +1738,13 @@ function apexField(row, types = []) {
     for (const value of [cell.value, cell.data_value, cell.image_alt, cell.cell_title]) {
       if (value !== null && value !== undefined && String(value).trim()) return value;
     }
+    // Apex encodes the nation in the TD class (for example "BUL nat"),
+    // while the cell text and image metadata are empty.
+    if (wanted.has("nat") || wanted.has("nation") || wanted.has("country") || wanted.has("flag")) {
+      const classes = String(cell.cell_class || "").split(/\s+/).filter(Boolean);
+      const nationClass = classes.find(token => /^[A-Z]{3}$/i.test(token) && !/^(nat|row|col|td)$/i.test(token));
+      if (nationClass) return nationClass.toUpperCase();
+    }
     // Apex uses image filenames for some flags. Never display a raw URL.
     if (wanted.has("nat") || wanted.has("nation") || wanted.has("country") || wanted.has("flag")) {
       const src = String(cell.image_src || "") || String(cell.cell_style || "");

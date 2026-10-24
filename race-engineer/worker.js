@@ -685,7 +685,7 @@ function parseGridData(html) {
 
     const fields = {};
     let cellMatch;
-    const cellRegex = /<td\b([^>]*)>([\s\S]*?)<\/td>/gi;
+    const cellRegex = /<(?:td|th)\b([^>]*)>([\s\S]*?)<\/(?:td|th)>/gi;
     while ((cellMatch = cellRegex.exec(match[4])) !== null) {
       const id = /data-id=["']r\d+c(\d+)["']/i.exec(cellMatch[1]);
       if (!id) continue;
