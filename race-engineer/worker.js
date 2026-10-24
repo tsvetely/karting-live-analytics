@@ -660,88 +660,18 @@ function parseRowId(id) {
 // GRID
 // ============================================================
 
-function gridHeaderType(label) {
-  const key = stripHtml(label).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  const compact = key.replace(/\s+/g, "");
-
-  if (compact === "rnk" || compact === "rank" || compact === "pos" || compact === "position") return "rk";
-  if (compact === "kart" || compact === "kartno" || compact === "kartnumber" || compact === "no" || compact === "number") return "no";
-  if (compact === "nation" || compact === "nat" || compact === "country") return "nat";
-  if (compact === "team" || compact === "driver") return "dr";
-  if (compact === "s1" || compact === "sector1") return "s1";
-  if (compact === "s2" || compact === "sector2") return "s2";
-  if (compact === "s3" || compact === "sector3") return "s3";
-  if (compact === "lastlap" || compact === "last") return "llp";
-  if (compact === "gap") return "gap";
-  if (compact === "interv" || compact === "interval") return "interval";
-  if (compact === "bestlap" || compact === "best") return "blp";
-  if (compact === "laps" || compact === "lap") return "tlp";
-  if (compact === "ontrack") return "otr";
-  if (compact === "pits" || compact === "pit") return "pit";
-  if (compact === "pittime") return "pittime";
-  if (compact === "penalty" || compact === "pen") return "penalty";
-  return "";
-}
-
-function gridImageMeta(html) {
-  const source = String(html || "");
-  const img = /<img\b([^>]*)>/i.exec(source);
-  if (!img) return { image_src: null, image_alt: null };
-
-  const attrs = img[1] || "";
-  const src = /\bsrc=["']([^"']+)["']/i.exec(attrs)?.[1] || null;
-  const alt = /\balt=["']([^"']*)["']/i.exec(attrs)?.[1] ||
-    /\btitle=["']([^"']*)["']/i.exec(attrs)?.[1] || null;
-
-  return {
-    image_src: src,
-    image_alt: alt ? stripHtml(alt) : null
-  };
-}
-
-function gridCellValue(html, type = "") {
-  const text = stripHtml(html);
-  if (text) return text;
-
-  const meta = gridImageMeta(html);
-  if (meta.image_alt) return meta.image_alt;
-
-  // Nation is often rendered by Apex as a flag image with no text node.
-  // If the image URL contains a country/flag filename, preserve that token
-  // instead of turning a real Apex cell into an empty value.
-  if (String(type).toLowerCase() === "nat" && meta.image_src) {
-    try {
-      const clean = decodeURIComponent(meta.image_src.split("?")[0]);
-      const name = clean.split("/").pop() || "";
-      const token = name.replace(/\.[a-z0-9]+$/i, "").replace(/^flag[-_]?/i, "").replace(/[-_]+/g, " ").trim();
-      if (token) return token;
-    } catch {}
-  }
-
-  return "";
-}
-
 function parseGridData(html) {
   const source = String(html || "");
   const columnTypes = new Map();
   const positions = new Map();
   const rows = new Map();
 
-  // Apex normally exposes semantic data-type values on the grid, but the
-  // exact element carrying data-id/data-type varies by field.  Read both TH
-  // and TD headers and also infer the semantic type from the visible header
-  // label when data-type is absent.
   let match;
-  const headerRegex = /<(?:th|td)\b([^>]*)>([\s\S]*?)<\/(?:th|td)>/gi;
+  const headerRegex = /<td\b([^>]*)>/gi;
   while ((match = headerRegex.exec(source)) !== null) {
-    const attrs = match[1] || "";
-    const id = /\bdata-id=["'](c\d+)["']/i.exec(attrs);
-    if (!id) continue;
-
-    const explicitType = /\bdata-type=["']([^"']+)["']/i.exec(attrs)?.[1] || "";
-    const inferredType = gridHeaderType(match[2]);
-    const type = explicitType || inferredType;
-    if (type) columnTypes.set(id[1], type);
+    const id = /data-id=["'](c\d+)["']/i.exec(match[1]);
+    const type = /data-type=["']([^"']+)["']/i.exec(match[1]);
+    if (id && type) columnTypes.set(id[1], type[1]);
   }
 
   const rowRegex = /<tr\b([^>]*)data-id=["']r(\d+)["']([^>]*)>([\s\S]*?)<\/tr>/gi;
@@ -750,37 +680,24 @@ function parseGridData(html) {
     if (!validApexId(apexId)) continue;
 
     const attrs = `${match[1]} ${match[3]}`;
-    const positionMatch = /\bdata-pos=["'](\d+)["']/i.exec(attrs);
+    const positionMatch = /data-pos=["'](\d+)["']/i.exec(attrs);
     if (positionMatch) positions.set(apexId, Number(positionMatch[1]));
 
     const fields = {};
     let cellMatch;
     const cellRegex = /<td\b([^>]*)>([\s\S]*?)<\/td>/gi;
     while ((cellMatch = cellRegex.exec(match[4])) !== null) {
-      const cellAttrs = cellMatch[1] || "";
-      const cellBody = cellMatch[2] || "";
-
-      // Some Apex columns (notably kart number) put rNcM/data-type on a
-      // nested DIV/SPAN rather than on the TD itself.  Search both places.
-      const idMatch = /\bdata-id=["']r\d+c(\d+)["']/i.exec(cellAttrs) ||
-        /\bdata-id=["']r\d+c(\d+)["']/i.exec(cellBody);
-      if (!idMatch) continue;
-
-      const column = idMatch[1];
-      const explicitType = /\bdata-type=["']([^"']+)["']/i.exec(cellAttrs)?.[1] ||
-        /\bdata-type=["']([^"']+)["']/i.exec(cellBody)?.[1] || "";
-      const type = explicitType || columnTypes.get(`c${column}`) || "";
-      const image = gridImageMeta(cellBody);
-
+      const id = /data-id=["']r\d+c(\d+)["']/i.exec(cellMatch[1]);
+      if (!id) continue;
+      const column = id[1];
+      const explicitType = /data-type=["']([^"']+)["']/i.exec(cellMatch[1]);
+      const type = explicitType?.[1] || columnTypes.get(`c${column}`) || "";
       fields[`c${column}`] = {
         column,
         type,
-        value: gridCellValue(cellBody, type),
-        image_src: image.image_src,
-        image_alt: image.image_alt
+        value: stripHtml(cellMatch[2])
       };
     }
-
     rows.set(apexId, fields);
   }
 
@@ -1398,85 +1315,30 @@ function collectorStub(env) {
 
 
 async function collectorSnapshot(env) {
-  // Keep the Durable Object snapshot because it contains the complete race
-  // history/state we have already collected.  For the CURRENT Apex field,
-  // however, also reconnect to Apex and read the latest full grid.  Apex
-  // sends the full table on a fresh connection even after timing has stopped,
-  // so this lets us backfill display-only fields (kart, nation, sectors, gap,
-  // interval, on-track, pit time, penalty...) that an older collector parser
-  // may not have preserved correctly.
-  let stored = null;
-
+  // The collector snapshot is the last raw Apex field state we actually
+  // received.  Its age determines LIVE/FINISHED status, but it must NEVER
+  // invalidate the data itself.  When timing stops at the end of a race the
+  // last packet naturally becomes old; throwing that snapshot away was the
+  // reason the UI lost teams/laps/pits and replaced real Apex values with
+  // dashes.
   try {
     if (env?.APEX_COLLECTOR) {
       const response = await collectorStub(env).fetch("https://collector/snapshot");
       if (response.ok) {
         const snapshot = await response.json();
-        if (currentFieldIds(snapshot).size > 0) stored = snapshot;
+        const ids = currentFieldIds(snapshot);
+        if (ids.size > 0) {
+          return snapshot;
+        }
       }
     }
   } catch (error) {
-    console.warn("COLLECTOR SNAPSHOT READ:", error?.message || error);
+    console.warn("COLLECTOR SNAPSHOT FALLBACK:", error?.message || error);
   }
 
-  let direct = null;
-  try {
-    direct = await directApexSnapshot(env);
-  } catch (error) {
-    console.warn("DIRECT APEX GRID REFRESH:", error?.message || error);
-  }
-
-  if (direct && currentFieldIds(direct).size > 0 && env?.APEX_COLLECTOR) {
-    // IMPORTANT: after a race has finished the Durable Object may no longer
-    // receive websocket grid messages. In that case its fieldApexIds/lapCounts
-    // can be empty or stale, so refreshAllFieldDetails() has nothing to fetch.
-    // Seed the collector from the final static Apex grid that we just read
-    // directly, then let the collector backfill every kart detail page.
-    try {
-      const seedPayload = {
-        fieldApexIds: [...currentFieldIds(direct)],
-        lapCounts: direct.lapCounts || {},
-        teamNames: direct.teamNames || {},
-        positions: direct.positions || {},
-        rawRows: direct.rawRows || {}
-      };
-      await collectorStub(env).fetch(
-        "https://collector/seed-final-field",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(seedPayload)
-        }
-      );
-    } catch (error) {
-      console.warn("FINAL FIELD SEED:", error?.message || error);
-    }
-  }
-
-  if (!stored) return direct;
-  if (!direct || currentFieldIds(direct).size === 0) return stored;
-
-  // The freshly fetched grid is authoritative for what Apex displays now.
-  // Merge only snapshot/grid state; persistent lap/pit history remains in the
-  // database and is not rebuilt or overwritten here.
-  return {
-    ...stored,
-    connected: direct.connected ?? stored.connected,
-    direct_live: direct.direct_live ?? stored.direct_live,
-    data_source: direct.data_source || stored.data_source,
-    last_grid_at: direct.last_grid_at || stored.last_grid_at,
-    field_count: direct.field_count || stored.field_count,
-    fieldApexIds: direct.fieldApexIds || stored.fieldApexIds,
-    positions: { ...(stored.positions || {}), ...(direct.positions || {}) },
-    columnTypes: { ...(stored.columnTypes || {}), ...(direct.columnTypes || {}) },
-    pitCounts: { ...(stored.pitCounts || {}), ...(direct.pitCounts || {}) },
-    lapCounts: { ...(stored.lapCounts || {}), ...(direct.lapCounts || {}) },
-    bestLaps: { ...(stored.bestLaps || {}), ...(direct.bestLaps || {}) },
-    lastLaps: { ...(stored.lastLaps || {}), ...(direct.lastLaps || {}) },
-    teamNames: { ...(stored.teamNames || {}), ...(direct.teamNames || {}) },
-    drivers: { ...(stored.drivers || {}), ...(direct.drivers || {}) },
-    rawRows: { ...(stored.rawRows || {}), ...(direct.rawRows || {}) }
-  };
+  // Only reconnect directly to Apex when we genuinely have no collected
+  // field at all, not merely because the last valid packet is old.
+  return directApexSnapshot(env);
 }
 
 
@@ -1587,16 +1449,11 @@ function snapshotFromGrid(grid) {
   const lastLaps = {};
   const teamNames = {};
   const drivers = {};
-  // Preserve the complete Apex grid row exactly as parsed.  The LIVE UI
-  // needs fields that are not part of our analytics model (kart, nation,
-  // sectors, gap, interval, on-track time, pit time, penalty, etc.).
-  const rawRows = {};
 
   for (const [rawId, fields] of grid?.rows || []) {
     const id = String(rawId);
     if (!validApexId(id)) continue;
     fieldApexIds.push(id);
-    rawRows[id] = fields || {};
 
     for (const cell of Object.values(fields || {})) {
       const type = String(cell?.type || "").toLowerCase();
@@ -1654,8 +1511,7 @@ function snapshotFromGrid(grid) {
     bestLaps,
     lastLaps,
     teamNames,
-    drivers,
-    rawRows
+    drivers
   };
 }
 
@@ -2205,12 +2061,13 @@ function currentPitChain(pits, snapshot) {
 
   const result = [];
   for (const [id, byNumber] of grouped) {
-    // PRESERVE-FIRST: never delete already collected Apex pit history
-    // because a later snapshot reports a lower/different pit count.
-    // Snapshot pitCounts are used only as an expected-count diagnostic.
-    const rows = [...byNumber.entries()]
-      .filter(([pitNumber]) => pitNumber >= 1)
+    const currentCount = Number(counts[id]);
+    let rows = [...byNumber.entries()]
       .sort((a,b) => a[0]-b[0]);
+    if (Number.isFinite(currentCount) && currentCount >= 0) {
+      const n = Math.trunc(currentCount);
+      rows = rows.filter(([pitNumber]) => pitNumber >= 1 && pitNumber <= n);
+    }
     result.push(...rows.map(([,row]) => row));
   }
   return result;
@@ -2517,11 +2374,6 @@ async function stintsPayload(env, rid, snapshot = null) {
     const entry=entriesById.get(id) || {};
     const teamPits=[...(pitsById.get(id)||[])].sort((a,b)=>Number(a.pit_number)-Number(b.pit_number));
     const laps=lapsById.get(id)||[];
-    const snapshotExpectedPitCount = isCurrentRace ? Number(realSnapshot?.pitCounts?.[id]) : teamPits.length;
-    const expectedPitCount = Number.isFinite(snapshotExpectedPitCount) ? Math.max(0, Math.trunc(snapshotExpectedPitCount)) : teamPits.length;
-    const storedPitCount = teamPits.length;
-    const missingPitCount = Math.max(0, expectedPitCount - storedPitCount);
-    const pitHistoryComplete = missingPitCount === 0;
     let start=0;
     let stintNumber=1;
 
@@ -2540,9 +2392,7 @@ async function stintsPayload(env, rid, snapshot = null) {
         current_lap_count:end, total_laps:end-start, ...stats,
         pit_hour:pit.pit_hour||null, on_track:pit.on_track||null,
         pit_time:pit.pit_time||null, total_time:pit.total_time||null,
-        is_live:false, status:pitHistoryComplete?"COMPLETED":"INCOMPLETE_PIT_HISTORY",
-        data_complete:pitHistoryComplete, expected_pit_count:expectedPitCount, stored_pit_count:storedPitCount, missing_pit_count:missingPitCount,
-        direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
+        is_live:false, status:"COMPLETED", direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
       start=end;
     }
@@ -2551,6 +2401,7 @@ async function stintsPayload(env, rid, snapshot = null) {
     const entryLap=Number(entry.lap_count);
     const lastRecordedLap = laps.reduce((max,row)=>Math.max(max,Number(row.lap_number)||0),0);
     const currentLap=isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap) ? entryLap : lastRecordedLap);
+    const expectedPitCount=isCurrentRace ? Number(realSnapshot?.pitCounts?.[id]) : teamPits.length;
     if (Number.isFinite(currentLap) && currentLap>=start) {
       const emptyStats={
         valid_laps:0, avg_lap_time:null, best_lap_time:null, best_lap_number:null,
@@ -2562,10 +2413,8 @@ async function stintsPayload(env, rid, snapshot = null) {
       const stats=currentLap>start
         ? (calculateRawStintStats(id,laps,start,currentLap,exclusions,{globalExcluded,splitRange:splitById.get(id),rainStartLap:rainStartById.get(id)}) || emptyStats)
         : emptyStats;
-      // Do not invent a later stint number from an expected pit count when
-      // the actual stored pit boundaries are incomplete.
-      const liveStintNumber=pitHistoryComplete
-        ? Math.max(1,storedPitCount+1)
+      const liveStintNumber=isCurrentRace && Number.isFinite(expectedPitCount)
+        ? Math.max(1,Math.trunc(expectedPitCount)+1)
         : stintNumber;
       result.push({
         race_id:Number(rid), apex_id:id,
@@ -2575,8 +2424,8 @@ async function stintsPayload(env, rid, snapshot = null) {
         end_lap_count:isCurrentRace?null:currentLap,
         current_lap_count:currentLap, total_laps:Math.max(0,currentLap-start), ...stats,
         pit_hour:null,on_track:null,pit_time:null,total_time:null,
-        is_live:isCurrentRace,status:pitHistoryComplete?(isCurrentRace?"LIVE":"COMPLETED"):"INCOMPLETE_PIT_HISTORY",
-        data_complete:pitHistoryComplete, expected_pit_count:expectedPitCount, stored_pit_count:storedPitCount, missing_pit_count:missingPitCount,
+        is_live:isCurrentRace,status:isCurrentRace?"LIVE":"COMPLETED",
+        data_complete:true, expected_pit_count:Number.isFinite(expectedPitCount)?Math.trunc(expectedPitCount):null, stored_pit_count:teamPits.length,
         direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
     }
@@ -3206,7 +3055,7 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       stint_number:number(stint.stint_number)||pitCount+1,start_lap_count:number(stint.start_lap_count)||0,
       stint_laps:number(stint.total_laps),total_stint_laps:number(stint.total_laps),
       valid_laps:number(stint.valid_laps) ?? 0,
-      stint_status:stint.status||null,data_complete:stint.data_complete!==false,expected_pit_count:number(stint.expected_pit_count),stored_pit_count:number(stint.stored_pit_count),missing_pit_count:number(stint.missing_pit_count),
+      stint_status:stint.status||null,data_complete:stint.data_complete!==false,expected_pit_count:number(stint.expected_pit_count),stored_pit_count:number(stint.stored_pit_count),
       live_last_lap:isCurrentRace?(number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap)):number(entry.last_lap),
       apex_best_lap:isCurrentRace?(number(snapshot?.bestLaps?.[id]) ?? number(entry.best_lap)):number(entry.best_lap),
       apex_fields:isCurrentRace?(snapshot?.rawRows?.[id] || null):null,
@@ -4340,7 +4189,7 @@ export class ApexCollector {
       // events, so rebuild all 72 current kart histories from Apex detail
       // exactly once instead of continuing to display old-session rows.
       const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.32-split-detail-requests";
+      const repairVersion = "v6.27";
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
@@ -4359,66 +4208,9 @@ export class ApexCollector {
       path === "/status" ||
       path === "/snapshot"
     ) {
-      // Keep detail history complete even when the race has already finished
-      // and Apex is no longer sending websocket changes. The helper itself is
-      // throttled to one full-field refresh every 5 minutes. This backfills
-      // late pit rows/laps that were visible on the final Apex detail page but
-      // were not persisted while the race was live.
-      this.state.waitUntil(
-        this.refreshAllFieldDetails(false)
-          .catch(e => console.error("DETAIL BACKFILL:", e))
-      );
-
       return json(
         await this.snapshot()
       );
-    }
-
-
-    if (path === "/seed-final-field" && request.method === "POST") {
-      let payload = {};
-      try { payload = await request.json(); } catch {}
-
-      const ids = Array.isArray(payload.fieldApexIds)
-        ? payload.fieldApexIds.map(String).filter(validApexId)
-        : [];
-
-      for (const id of ids) this.fieldApexIds.add(id);
-
-      for (const [id, value] of Object.entries(payload.lapCounts || {})) {
-        const n = Number(value);
-        if (validApexId(id) && Number.isFinite(n) && n > 0) this.lapCounts.set(String(id), n);
-      }
-      for (const [id, value] of Object.entries(payload.teamNames || {})) {
-        if (validApexId(id) && value != null) this.teamNames.set(String(id), String(value));
-      }
-      for (const [id, value] of Object.entries(payload.positions || {})) {
-        const n = Number(value);
-        if (validApexId(id) && Number.isFinite(n)) this.positions.set(String(id), n);
-      }
-      for (const [id, value] of Object.entries(payload.rawRows || {})) {
-        if (validApexId(id) && value && typeof value === "object") {
-          this.rawRows.set(String(id), { ...(this.rawRows.get(String(id)) || {}), ...value });
-        }
-      }
-
-      await this.persist();
-
-      // Force exactly one complete final-grid detail repair for this version.
-      // This is independent of websocket activity and therefore also works
-      // after the race is over.
-      const repairKey = "finalStaticDetailRepairVersion";
-      const repairVersion = "v6.32-split-detail-requests";
-      const repaired = await this.state.storage.get(repairKey);
-      if (repaired !== repairVersion) {
-        await this.state.storage.put(repairKey, repairVersion);
-        this.state.waitUntil(
-          this.refreshAllFieldDetails(true)
-            .catch(e => console.error("FINAL STATIC DETAIL BACKFILL:", e))
-        );
-      }
-
-      return json({ ok: true, seeded: ids.length, repair_started: repaired !== repairVersion });
     }
 
 
@@ -4684,37 +4476,60 @@ export class ApexCollector {
     apexId,
     lapCount
   ) {
-    const count = Math.max(1, Math.min(Number(lapCount) || 1, 800));
-    const endpoint = "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php";
-    const port = this.env.APEX_DETAIL_PORT || "8910";
+    const count =
+      Math.max(
+        1,
+        Math.min(
+          Number(
+            lapCount
+          ) ||
+          1,
+          800
+        )
+      );
 
-    // IMPORTANT: do not mix a full lap-history request and a full pit-history
-    // request behind a global D# limit equal to the lap count. Apex can truncate
-    // the combined reply before the last pit rows. Request laps and pits
-    // separately, each with a generous global envelope, then merge the raw
-    // protocol lines before parsing/persisting them.
-    const requests = [
-      `D#-999#D${apexId}.L#-${count}#D${apexId}.B#1#D${apexId}.INF`,
-      `D#-999#D${apexId}.P#-999#D${apexId}.INF`
-    ];
 
-    const bodies = [];
-    for (const request of requests) {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded; charset=UTF-8"
-        },
-        body: new URLSearchParams({ port, request })
-      });
+    const request =
+      `D#-${count}` +
+      `#D${apexId}.L#-${count}` +
+      `#D${apexId}.P#-999` +
+      `#D${apexId}.B#1` +
+      `#D${apexId}.INF`;
 
-      if (!response.ok) {
-        throw new Error(`Apex detail ${response.status}`);
-      }
-      bodies.push(await response.text());
+
+    const response =
+      await fetch(
+        "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php",
+        {
+          method:
+            "POST",
+
+          headers: {
+            "content-type":
+              "application/x-www-form-urlencoded; charset=UTF-8"
+          },
+
+          body:
+            new URLSearchParams({
+              port:
+                this.env
+                  .APEX_DETAIL_PORT ||
+                "8910",
+
+              request
+            })
+        }
+      );
+
+
+    if (!response.ok) {
+      throw new Error(
+        `Apex detail ${response.status}`
+      );
     }
 
-    return bodies.filter(Boolean).join("\n");
+
+    return response.text();
   }
 
 
