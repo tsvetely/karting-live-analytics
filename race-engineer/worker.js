@@ -3494,57 +3494,73 @@ async function recoverMissingApexLaps(env, rid, fieldIds, existingRows) {
 }
 
 async function createLapRecordsCsvResponse(env, rid, snapshot) {
-  // Export the race's persisted lap records, not the live field IDs: those
-  // IDs can change between sessions and previously caused false empty exports.
-  const rows=await sbGetAll(env,"apex_lap_events",{
-    select:"apex_id,lap_number,lap_time",
-    race_id:`eq.${rid}`,
-    order:"apex_id.asc,lap_number.asc"
-  });
-  if(!rows.length)return json({error:`No persisted lap records found for race ${rid}. The report cannot be reconstructed from the live grid.`},404);
-  const fieldIds=new Set(rows.map(r=>String(r.apex_id??"").trim()).filter(validApexId));
-  const teamMap=await stableTeamNameMap(env,rid);
-
-  const grouped=new Map();
-  for(const row of rows){
-    const id=String(row.apex_id??'').trim(), lap=Math.trunc(Number(row.lap_number)), time=Number(row.lap_time);
-    if(!fieldIds.has(id)||!validApexId(id)||!Number.isFinite(lap)||lap<=0||!Number.isFinite(time)||time<=0)continue;
-    if(!grouped.has(id))grouped.set(id,new Map());
-    if(!grouped.get(id).has(lap))grouped.get(id).set(lap,time);
+  // Race IDs are local identifiers, not Apex session identifiers. Old rows
+  // in apex_lap_events can belong to an earlier session with the same race ID.
+  // For the active race, export only the authoritative Apex detail feed.
+  if (Number(rid) !== Number(raceId(env))) {
+    return json({error:"Historical Apex lap export requires a session-specific archive; refusing to mix sessions."},409);
   }
-
-  // KartingNumbersXlsx/RaceParser.parseLapTimeCSV expects the official Apex matrix:
-  // first cell = base lap, following cells = base+1, base+2 ...
-  // Apex original exports exactly 10 lap columns per block.
-  const blockSize=10;
-  // Consistent 11-cell records from the first line prevent Numbers from
-  // incorrectly detecting whitespace as the CSV delimiter.
-  const csvMeta = value => [value, ...Array(10).fill("")].join(",");
-  const out=[csvMeta("\uFEFFApex Timing - drive your success https://www.apex-timing.com/"),"","",csvMeta("Karting Events Bulgaria - Karting Track"),"","",csvMeta(`Race ${rid} - Lap time records`),"","","","",""];
-  const ordered=[...fieldIds].map(String).sort((a,b)=>Number(a)-Number(b));
-  for(const id of ordered){
-    const laps=grouped.get(id); if(!laps||!laps.size)continue;
-    const team=resolveTeam(id,teamMap)||`APEX ${id}`;
-    out.push(csvMeta(`${id} - ${team}`), "", ["Laps",...Array.from({length:blockSize},(_,i)=>i+1)].join(','));
-    const maxLap=Math.max(...laps.keys());
-    // Official Apex format: the first row is labelled blank and covers laps 1-10;
-    // each subsequent row is labelled 10, 20, 30, etc.
-    for(let base=0;base<maxLap;base+=blockSize){
-      const cells=[base===0?"":String(base)];
-      for(let i=1;i<=blockSize;i++){
-        const value=laps.get(base+i);
-        cells.push(Number.isFinite(value)?Number(value).toFixed(3):"-");
+  const live = snapshot || await collectorSnapshot(env).catch(() => null);
+  const ids = [...currentFieldIds(live)].filter(validApexId);
+  if (!ids.length) return json({error:"No current Apex field identifiers; refusing to export stale lap records."},503);
+  const endpoint = "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php";
+  const grouped = new Map();
+  const errors = [];
+  // Bounded batches; never use persisted data as a silent fallback.
+  for (let i=0;i<ids.length;i+=8) {
+    const batch=ids.slice(i,i+8);
+    const result=await Promise.all(batch.map(async id=>{
+      const request=`D#-2000#D${id}.L`;
+      try {
+        const response=await fetch(endpoint,{
+          method:"POST",
+          headers:{"content-type":"application/x-www-form-urlencoded; charset=UTF-8"},
+          body:new URLSearchParams({port:env.APEX_DETAIL_PORT || "8910",request}),
+          signal:AbortSignal.timeout(7000)
+        });
+        if(!response.ok) throw new Error(`HTTP ${response.status}`);
+        const text=await response.text();
+        const parsed=parseLapRows(text,rid).filter(r=>String(r.apex_id)===String(id));
+        if(!parsed.length) throw new Error("No lap records in Apex response");
+        return {id,parsed};
+      } catch(error) {return {id,error:String(error)};}
+    }));
+    for(const item of result){
+      if(item.error){errors.push(`${item.id}: ${item.error}`);continue;}
+      const laps=new Map();
+      for(const row of item.parsed){
+        const lap=Math.trunc(Number(row.lap_number));
+        const time=Number(row.lap_time);
+        if(lap>0&&Number.isFinite(time)&&time>0)laps.set(lap,time);
       }
-      out.push(cells.join(','));
+      if(laps.size)grouped.set(String(item.id),laps);
     }
-    out.push("", "");
   }
-
-  const filename=safeFilename(`Race ${rid} - Lap time records.csv`);
-  return new Response(out.join("\r\n"),{status:200,headers:{
+  if(errors.length || grouped.size !== ids.length){
+    return json({error:"Apex detail feed is incomplete. Refusing to generate a misleading CSV.",received:grouped.size,expected:ids.length,failures:errors.slice(0,12)},503);
+  }
+  const teamMap=await stableTeamNameMap(env,rid);
+  const meta=value=>[value,...Array(10).fill("")].join(",");
+  const out=[meta("\uFEFFApex Timing - drive your success https://www.apex-timing.com/"),"","",meta("Karting Events Bulgaria - Karting Track"),"","",meta(`Race ${rid} - live Apex lap records`),"","","","",""];
+  for(const id of [...grouped.keys()].sort((x,y)=>Number(x)-Number(y))){
+    const laps=grouped.get(id);
+    const team=resolveTeam(id,teamMap)||`APEX ${id}`;
+    out.push(meta(`${id} - ${team}`),"",["Laps",...Array.from({length:10},(_,i)=>i+1)].join(","));
+    const max=Math.max(...laps.keys());
+    for(let base=0;base<max;base+=10){
+      const cells=[base?String(base):""];
+      for(let n=1;n<=10;n++){
+        const value=laps.get(base+n);
+        cells.push(Number.isFinite(value)?value.toFixed(3):"-");
+      }
+      out.push(cells.join(","));
+    }
+    out.push("","");
+  }
+  return new Response(out.join("\r\n"),{headers:{
     "content-type":"text/csv; charset=utf-8",
-    "content-disposition":`attachment; filename="${filename}"`,
-    "cache-control":"no-store, no-cache, must-revalidate",pragma:"no-cache",expires:"0","x-content-type-options":"nosniff"
+    "content-disposition":`attachment; filename="${safeFilename(`Race ${rid} - Lap time records.csv`)}"`,
+    "cache-control":"no-store", "x-content-type-options":"nosniff"
   }});
 }
 
