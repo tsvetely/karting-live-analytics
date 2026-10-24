@@ -5024,6 +5024,60 @@ export default {
       }
 
 
+      // Read-only diagnostic: compare live Apex grid, stored rows and API mapping.
+      if (url.pathname === "/api/debug/apex-integrity") {
+        const requestedId = String(url.searchParams.get("apex_id") || "").trim();
+        const snapshot = Number(rid) === Number(raceId(env))
+          ? await collectorSnapshot(env).catch(error => ({diagnostic_error:String(error)})) : null;
+        const ids = currentFieldIds(snapshot);
+        const apexId = requestedId || [...ids][0] || "";
+        if (!validApexId(apexId)) return json({error:"Provide a valid apex_id",race_id:rid},400);
+        const [entriesResult,lapsResult,pitsResult] = await Promise.allSettled([
+          sbGet(env,"apex_entries",{select:"*",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,limit:"5"}),
+          sbGetAll(env,"apex_lap_events",{select:"apex_id,lap_number,lap_time",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,order:"lap_number.asc"}),
+          sbGet(env,"apex_pit_stints",{select:"*",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,order:"pit_number.asc",limit:"100"})
+        ]);
+        const unpack = result => result.status === "fulfilled"
+          ? {ok:true,rows:result.value}
+          : {ok:false,error:String(result.reason)};
+        const entries = unpack(entriesResult), laps = unpack(lapsResult), pits = unpack(pitsResult);
+        const lapNumbers = laps.ok ? laps.rows.map(row=>Number(row.lap_number)).filter(Number.isFinite) : [];
+        const stored = new Set(lapNumbers);
+        const apexLapCount = snapshot?.lapCounts?.[apexId] ?? null;
+        const maxLap = Math.max(0,Number(apexLapCount)||0,...lapNumbers);
+        const missing = [];
+        for (let n=1;n<=Math.min(maxLap,3000);n++) if (!stored.has(n)) missing.push(n);
+        const cells = snapshot?.rawRows?.[apexId] || null;
+        const apiRow = {
+          apex_id:apexId,
+          team_name:snapshot?.teamNames?.[apexId] ?? null,
+          driver_name:snapshot?.drivers?.[apexId] ?? null,
+          race_lap:apexLapCount,
+          pits:snapshot?.pitCounts?.[apexId] ?? null,
+          last_lap:snapshot?.lastLaps?.[apexId] ?? null,
+          best_lap:snapshot?.bestLaps?.[apexId] ?? null,
+          apex_fields:cells
+        };
+        return json({
+          race_id:Number(rid),apex_id:apexId,
+          collector:{connected:snapshot?.connected ?? null,field_count:snapshot?.field_count ?? null,
+            has_raw_rows:!!snapshot?.rawRows,field_ids_count:ids.size,
+            column_types:snapshot?.columnTypes || null,
+            raw_cells:cells,position:snapshot?.positions?.[apexId] ?? null},
+          mapped_api_values:apiRow,
+          database:{entries,laps:{ok:laps.ok,error:laps.error || null,count:laps.ok?laps.rows.length:null,
+            max_lap:lapNumbers.length?Math.max(...lapNumbers):null,
+            missing_lap_numbers:missing,duplicate_lap_numbers:lapNumbers.filter((n,i)=>lapNumbers.indexOf(n)!==i),
+            sample_first:laps.ok?laps.rows.slice(0,5):[],sample_last:laps.ok?laps.rows.slice(-5):[]},
+            pits:{ok:pits.ok,error:pits.error || null,count:pits.ok?pits.rows.length:null,
+              rows:pits.ok?pits.rows:[]}},
+          comparison:{apex_lap_count:apexLapCount,stored_lap_count:laps.ok?laps.rows.length:null,
+            apex_pit_count:snapshot?.pitCounts?.[apexId] ?? null,
+            stored_pit_count:pits.ok?pits.rows.length:null},
+          note:"Read-only diagnostic. Missing lap numbers are relative to 1..max(Apex/stored); not proof that Apex sent those events."
+        });
+      }
+
       if (url.pathname === "/api/raw/apex") {
         const rawSnapshot = Number(rid) === Number(raceId(env)) ? await collectorSnapshot(env).catch(() => null) : null;
         return json(await rawApexPayload(env, rid, rawSnapshot, url.searchParams.get("limit") || 200));
