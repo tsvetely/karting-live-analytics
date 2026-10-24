@@ -5205,28 +5205,41 @@ export default {
           const millis = Math.round(officialBest * 1000);
           const sameTime = value => Number.isFinite(Number(value)) &&
             Math.round(Number(value) * 1000) === millis;
-          try {
-            const raw = await directApexDetail(env, id, 800);
-            // Verify the official BL record belongs to this exact entry.
-            const bl = String(raw).split(/\r?\n/).find(line =>
-              line.startsWith(`D${id}.BL#`));
-            const blParts = bl ? bl.slice(bl.indexOf("#") + 1).split("|") : [];
-            const blMillis = Number(blParts[3]);
-            if (Number.isFinite(blMillis) && blMillis === millis) {
-              // Read the original timing rows, without analytical filters.
-              const matching = parseLapRows(raw, rid).filter(row =>
+          // The live grid uses port 8913 by default. The historical detail
+          // endpoint previously used 8910, which can refer to a different
+          // session even when the numeric entry id happens to exist there.
+          // Accept a lap only if this entry's own BL agrees with the grid BEST.
+          const livePort = (() => {
+            try { return new URL(env.APEX_WS_URL || "wss://live-data.apex-timing.com:8913/").port || "8913"; }
+            catch { return "8913"; }
+          })();
+          const ports = [...new Set([livePort, env.APEX_DETAIL_PORT || "8910"])];
+          for (const port of ports) {
+            try {
+              const count = 800;
+              const request = `D#-${count}#D${id}.L#-${count}#D${id}.P#-999#D${id}.B#1#D${id}.INF`;
+              const response = await fetch("https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php", {
+                method: "POST",
+                headers: {"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
+                body: new URLSearchParams({port, request})
+              });
+              if (!response.ok) continue;
+              const raw = await response.text();
+              const bl = String(raw).split(/\r?\n/).find(line =>
+                line.startsWith(`D${id}.BL#`));
+              const blMillis = bl ? Number(bl.slice(bl.indexOf("#") + 1).split("|")[3]) : NaN;
+              if (blMillis !== millis) continue;
+              const match = parseLapRows(raw, rid).find(row =>
                 String(row.apex_id) === id && sameTime(row.lap_time) &&
                 Number.isInteger(Number(row.lap_number)) && Number(row.lap_number) > 0);
-              if (matching.length) {
-                officialLapNumber = Number(matching[0].lap_number);
-                officialLapSource = "timing-detail";
+              if (match) {
+                officialLapNumber = Number(match.lap_number);
+                officialLapSource = `timing-detail:${port}`;
+                break;
               }
-            } else {
-              console.warn("Official timing identity/best mismatch", id,
-                officialBest, Number.isFinite(blMillis) ? blMillis / 1000 : null);
+            } catch (error) {
+              console.warn("Official lap detail unavailable", id, port, String(error));
             }
-          } catch (error) {
-            console.warn("Official timing detail unavailable", id, String(error));
           }
           // Persisted original timing laps are safe only when they match
           // this exact entry and official time. Never use analytical best.
