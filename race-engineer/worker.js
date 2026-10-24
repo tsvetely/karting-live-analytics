@@ -3189,7 +3189,9 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
     loadEntries(env, rid),
     isCurrentRace ? (suppliedSnapshot ? Promise.resolve(suppliedSnapshot) : directApexSnapshot(env).catch(error => {
       console.warn("LIVE GRID UNAVAILABLE:", error?.message || error);
-      return null;
+      // A finished race may stop broadcasting its grid. Keep the last
+      // successfully received field instead of clearing the entire overview.
+      return directSnapshotCache;
     })) : Promise.resolve(null)
   ]);
   const teamMap = new Map();
@@ -3199,9 +3201,11 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
     if (id && name && !badTeamName(name, entry.current_driver)) teamMap.set(id, name);
   }
 
-  const fieldIds = isCurrentRace
-    ? currentFieldIds(snapshot)
-    : new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+  const persistedFieldIds = new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+  const liveFieldIds = isCurrentRace ? currentFieldIds(snapshot) : new Set();
+  // Never return an empty race just because the timing WebSocket is unavailable.
+  // The persisted entry list is the fallback, not a new collector or DB write.
+  const fieldIds = liveFieldIds.size ? liveFieldIds : persistedFieldIds;
 
   if (!fieldIds.size) return {
     race_id:Number(rid), session_name:"Apex Timing", active:false, data_available:false,
