@@ -5229,14 +5229,21 @@ export default {
                 line.startsWith(`D${id}.BL#`));
               const blMillis = bl ? Number(bl.slice(bl.indexOf("#") + 1).split("|")[3]) : NaN;
               if (blMillis !== millis) continue;
-              const match = parseLapRows(raw, rid).find(row =>
-                String(row.apex_id) === id && sameTime(row.lap_time) &&
-                Number.isInteger(Number(row.lap_number)) && Number(row.lap_number) > 0);
-              if (match) {
-                officialLapNumber = Number(match.lap_number);
+              // Detail cells can carry timing status prefixes (e.g. g52452).
+              // parseLapRows intentionally skips those records for analytics;
+              // read the official lap number from the raw record instead.
+              const lapPattern = new RegExp(`^D${id}\\.L0*(\\d+)#(.+)$`);
+              for (const line of raw.split(/\r?\n/)) {
+                const lap = lapPattern.exec(line.trim());
+                if (!lap) continue;
+                const timeCell = lap[2].split("|")[3]?.trim() || "";
+                const value = /^(?:[a-zA-Z]*)(\d+)$/.exec(timeCell);
+                if (!value || Number(value[1]) !== millis) continue;
+                officialLapNumber = Number(lap[1]);
                 officialLapSource = `timing-detail:${port}`;
                 break;
               }
+              if (officialLapNumber !== null) break;
             } catch (error) {
               console.warn("Official lap detail unavailable", id, port, String(error));
             }
