@@ -3461,12 +3461,15 @@ async function createLapRecordsCsvResponse(env, rid, snapshot) {
   // first cell = base lap, following cells = base+1, base+2 ...
   // Apex original exports exactly 10 lap columns per block.
   const blockSize=10;
-  const out=["\uFEFFApex Timing - drive your success https://www.apex-timing.com/","","","Karting Events Bulgaria - Karting Track","","",`Race ${rid} - Lap time records`,"","","","",""];
+  // Consistent 11-cell records from the first line prevent Numbers from
+  // incorrectly detecting whitespace as the CSV delimiter.
+  const csvMeta = value => [value, ...Array(10).fill("")].join(",");
+  const out=[csvMeta("\uFEFFApex Timing - drive your success https://www.apex-timing.com/"),"","",csvMeta("Karting Events Bulgaria - Karting Track"),"","",csvMeta(`Race ${rid} - Lap time records`),"","","","",""];
   const ordered=[...fieldIds].map(String).sort((a,b)=>Number(a)-Number(b));
   for(const id of ordered){
     const laps=grouped.get(id); if(!laps||!laps.size)continue;
     const team=resolveTeam(id,teamMap)||`APEX ${id}`;
-    out.push(`${id} - ${team}`, "", ["Laps",...Array.from({length:blockSize},(_,i)=>i+1)].join(','));
+    out.push(csvMeta(`${id} - ${team}`), "", ["Laps",...Array.from({length:blockSize},(_,i)=>i+1)].join(','));
     const maxLap=Math.max(...laps.keys());
     // Official Apex format: the first row is labelled blank and covers laps 1-10;
     // each subsequent row is labelled 10, 20, 30, etc.
@@ -3836,31 +3839,54 @@ ${content}
 
 
 // Structured pages: keep data in separate cells, never split on spaces in driver names.
-function pitReportSourcePages(stints) {
-  const groups=new Map();
-  for(const row of stints||[]){
-    const id=String(row.apex_id||'').trim();
-    if(!id || row.is_live)continue;
-    if(!groups.has(id))groups.set(id,[]);
-    groups.get(id).push(row);
+// Generate the organiser report from the authoritative Apex pit records.
+// Analytics/statistics are supplementary only: they must never replace raw pit values.
+function pitReportSourcePages(pits, stats = [], teamMap = new Map()) {
+  const byId = new Map();
+  const statsByPit = new Map();
+  for (const row of stats || []) {
+    if (row.is_live) continue;
+    const key = `${row.apex_id}:${row.end_lap_count}`;
+    if (!statsByPit.has(key)) statsByPit.set(key, row);
   }
-  const pages=[];
-  for(const [id,rows] of [...groups].sort((a,b)=>Number(a[0])-Number(b[0]))){
-    rows.sort((a,b)=>Number(a.stint_number)-Number(b.stint_number));
-    const team=String(rows[0]?.team_name||`APEX ${id}`);
-    const formatted=rows.map(row=>{
-      const best=Number(row.best_lap_time),avg=Number(row.avg_lap_time);
-      const asTime=v=>/^\d{1,2}:\d{2}:\d{2}$/.test(String(v||''))?String(v):'-';
+  for (const pit of pits || []) {
+    const id = String(pit.apex_id || '').trim();
+    if (!validApexId(id) || !Number.isFinite(Number(pit.pit_lap)) || Number(pit.pit_lap) <= 0) continue;
+    if (!byId.has(id)) byId.set(id, []);
+    byId.get(id).push(pit);
+  }
+  const duration = value => {
+    const match = String(value || '').match(/^(\d+):(\d{2}):(\d{2})$/);
+    return match ? Number(match[1])*3600+Number(match[2])*60+Number(match[3]) : null;
+  };
+  const clock = seconds => Number.isFinite(seconds) && seconds >= 0
+    ? `${String(Math.floor(seconds/3600)).padStart(2,'0')}:${String(Math.floor(seconds/60)%60).padStart(2,'0')}:${String(Math.floor(seconds)%60).padStart(2,'0')}` : '-';
+  const pages = [];
+  for (const [id, records] of [...byId].sort((a,b)=>Number(a[0])-Number(b[0]))) {
+    records.sort((a,b)=>Number(a.pit_number)-Number(b.pit_number));
+    const team = resolveTeam(id, teamMap, records[0]?.team_name) || `APEX ${id}`;
+    let cumulativeOnTrack = 0;
+    const formatted = records.map((pit, index) => {
+      const lap = Number(pit.pit_lap);
+      const previousLap = index ? Number(records[index-1].pit_lap) : 0;
+      const onTrack = duration(pit.on_track);
+      if (onTrack !== null) cumulativeOnTrack += onTrack;
+      const pitAt = duration(pit.pit_hour);
+      const pitDuration = /^\d+:\d{2}\.\d{3}$/.test(String(pit.pit_time || ''))
+        ? (()=>{const [m,sec]=String(pit.pit_time).split(':');return Number(m)*60+Number(sec)})()
+        : null;
+      const stat = statsByPit.get(`${id}:${lap}`) || {};
+      const best = Number(stat.best_lap_time), avg = Number(stat.avg_lap_time);
       return [
-        row.stint_number??'',row.end_lap_count??'',asTime(row.pit_hour),
-        asTime(row.total_time),asTime(row.on_track),row.total_laps??'',
-        cleanDriver(row.driver_name)||'-',asTime(row.total_time),
-        Number.isFinite(best)&&best>0?best.toFixed(3):'-',
-        Number.isFinite(avg)&&avg>0?avg.toFixed(3):'-',
-        String(row.pit_time??'-'),'-'
+        pit.pit_number ?? index+1, lap, pit.pit_hour || '-', pit.total_time || '-',
+        pit.on_track || '-', Math.max(0,lap-previousLap),
+        cleanDriver(pit.driver_name) || '-', clock(onTrack === null ? null : cumulativeOnTrack),
+        Number.isFinite(best)&&best>0 ? best.toFixed(3) : '-',
+        Number.isFinite(avg)&&avg>0 ? avg.toFixed(3) : '-',
+        pit.pit_time || '-', clock(pitAt !== null && pitDuration !== null ? pitAt+pitDuration : null)
       ];
     });
-    for(let start=0;start<formatted.length;start+=25){
+    for (let start=0;start<formatted.length;start+=25) {
       pages.push({title:`${id} - ${team}`,rows:formatted.slice(start,start+25)});
     }
   }
@@ -3884,7 +3910,7 @@ function buildTextPdf(pages) {
   for(const page of pages.length?pages:[{title:'No pit stop data available',rows:[]}]){
     const ops=[];
     const label=(x,y,v,size=9,isBold=false)=>{
-      ops.push(`BT /${isBold?'F2':'F1'} ${size} Tf 1 0 0 1 ${x} ${y} Tm (${pdfEscape(v)}) Tj ET`);
+      ops.push(`0 0 0 rg BT /${isBold?'F2':'F1'} ${size} Tf 1 0 0 1 ${x} ${y} Tm (${pdfEscape(v)}) Tj ET`);
     };
     const rect=(x,y,w,h,r,g,b)=>ops.push(`${r} ${g} ${b} rg ${x} ${y} ${w} ${h} re f`);
     label(36,775,'Pit stops',23,true);
@@ -3928,8 +3954,8 @@ function buildTextPdf(pages) {
   return encoder.encode(chunks.join(''));
 }
 
-function createPitStopsPdfResponse(rid, stints) {
-  const bytes=buildTextPdf(pitReportSourcePages(stints));
+function createPitStopsPdfResponse(rid, pits, stats, teamMap) {
+  const bytes=buildTextPdf(pitReportSourcePages(pits, stats, teamMap));
   return new Response(bytes,{status:200,headers:{
     'content-type':'application/pdf','content-disposition':`attachment; filename="${safeFilename(`Race ${rid} - Pit stops.pdf`)}"`,
     'cache-control':'no-store, no-cache, must-revalidate','x-content-type-options':'nosniff'
@@ -5580,12 +5606,15 @@ export default {
           url.pathname ===
           "/api/reports/pit-stops.pdf"
         ) {
-          // PDF needs completed pit records, not all live analytics and
-          // disruption/rain recomputations. Prefer the persisted report data.
-          const saved = await loadCompletedStints(env, rid);
-          const stints = saved.length ? saved.map(row => ({...row, is_live:false}))
-            : await stintsPayload(env, rid, snapshot);
-          return createPitStopsPdfResponse(rid, stints);
+          // The report must be based on actual stored Apex pit rows, not
+          // completed_stint_stats (which can omit Hour/On track/Pits/Out).
+          const [pits, teamMap] = await Promise.all([
+            loadPits(env, rid), stableTeamNameMap(env, rid)
+          ]);
+          // Statistics are optional; a failed analytics calculation must not
+          // hide the pit records or prevent the report from downloading.
+          const stats = await stintsPayload(env, rid, snapshot).catch(() => []);
+          return createPitStopsPdfResponse(rid, pits, stats, teamMap);
         }
 
 
