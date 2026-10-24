@@ -5,6 +5,7 @@ const PAGE_SIZE = 1000;
 let directSnapshotCache = null;
 let directSnapshotCacheAt = 0;
 let directSnapshotPending = null;
+let lapAnalysisReadCache = null;
 
 
 // ============================================================
@@ -2216,12 +2217,25 @@ function currentPitChain(pits, snapshot) {
 async function loadLapEventsForApexIds(env, rid, fieldIds) {
   const ids = [...(fieldIds || [])].map(String).filter(validApexId);
   if (!ids.length) return [];
-  return sbGetAll(env, "apex_lap_events", {
+  // Keep the read path bounded and share the same in-flight query between
+  // Overview and Teams. Never disguise a failed database request as zero laps.
+  const key = `${rid}:${ids.slice().sort().join(",")}`;
+  const now = Date.now();
+  if (lapAnalysisReadCache?.key === key && now - lapAnalysisReadCache.at < 20000) {
+    return lapAnalysisReadCache.promise;
+  }
+  const promise = sbGetAll(env, "apex_lap_events", {
     select: "apex_id,lap_number,lap_time",
     race_id: `eq.${rid}`,
     apex_id: `in.(${ids.join(",")})`,
     order: "apex_id.asc,lap_number.asc"
-  }).catch(() => []);
+  });
+  lapAnalysisReadCache = {key, at: now, promise};
+  try { return await promise; }
+  catch (error) {
+    if (lapAnalysisReadCache?.promise === promise) lapAnalysisReadCache = null;
+    throw error;
+  }
 }
 
 function manualExclusionSet(rows) {
