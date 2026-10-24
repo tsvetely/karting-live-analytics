@@ -4057,58 +4057,19 @@ export class ApexCollector {
         }
 
 
-        if (
-          await state.storage.getAlarm() ===
-          null
-        ) {
-          await state.storage.setAlarm(
-            Date.now() +
-            60000
-          );
-        }
+        // Free-tier DO write quota may already be exhausted. Do not write an alarm
+        // during construction: that prevents the object from serving requests.
+
       }
     );
   }
 
 
   async persist() {
-    await this.state.storage.put({
-      packetCount:
-        this.packetCount,
-
-      lastPacketAt:
-        this.lastPacketAt,
-
-      lastGridAt:
-        this.lastGridAt,
-
-      positions:
-        Object.fromEntries(
-          this.positions
-        ),
-
-      columnTypes:
-        Object.fromEntries(
-          this.columnTypes
-        ),
-
-      fieldApexIds:
-        [
-          ...this.fieldApexIds
-        ],
-
-      pitCounts:
-        Object.fromEntries(
-          this.pitCounts
-        ),
-
-      lapCounts: Object.fromEntries(this.lapCounts),
-      bestLaps: Object.fromEntries(this.bestLaps),
-      lastLaps: Object.fromEntries(this.lastLaps),
-      rawRows: Object.fromEntries(this.rawRows)
-    });
+    // Durable Object writes are intentionally disabled while the account's
+    // daily write quota is exhausted. Supabase remains the durable data store.
+    // Never allow DO bookkeeping to stop Apex -> Supabase ingestion.
   }
-
 
   async snapshot() {
     return {
@@ -4189,10 +4150,11 @@ export class ApexCollector {
       path === "/start"
     ) {
       await this.connect();
+      this.state.waitUntil(this.alarm().catch(error => console.error("CRON BACKFILL", error)));
 
       // Startup must not launch a full-field historical refresh.
       // History is synchronized by the bounded alarm, one kart at a time.
-      await this.state.storage.setAlarm(Date.now() + 1000);
+      // No DO alarm write: the free-tier write quota is exhausted.
 
       return json(
         await this.snapshot()
@@ -4248,7 +4210,7 @@ export class ApexCollector {
 
       await this.connect();
 
-      await this.state.storage.setAlarm(Date.now() + 1000);
+      // No DO alarm write: the free-tier write quota is exhausted.
 
       return json(
         await this.snapshot()
@@ -4282,15 +4244,15 @@ export class ApexCollector {
     try {
       const ids = [...this.fieldApexIds].map(String).filter(validApexId);
       if (ids.length) {
-        const cursor = Number(await this.state.storage.get("historyBackfillCursor") || 0);
+        const cursor = this.historyBackfillCursor || 0;
         const id = ids[cursor % ids.length];
-        await this.state.storage.put("historyBackfillCursor", (cursor + 1) % ids.length);
+        this.historyBackfillCursor = (cursor + 1) % ids.length;
         await this.refreshDetail(id, true);
       }
     } catch (error) {
       console.error("HISTORY BACKFILL:", error);
     } finally {
-      await this.state.storage.setAlarm(Date.now() + 60000);
+      // Backfill is driven by the existing cron -> /start route instead.
     }
   }
 
@@ -4375,10 +4337,7 @@ export class ApexCollector {
             false;
 
 
-          this.state.storage.setAlarm(
-            Date.now() +
-            5000
-          );
+          // Cron reconnects; do not attempt a DO storage write.
         };
 
 
