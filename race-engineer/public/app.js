@@ -5020,20 +5020,49 @@ function initReports() {
   async function downloadBoundedPitStopsPdf(button) {
     const rid = selectedRaceId();
     if (rid === null || rid === undefined || rid === "") throw new Error("Select a race first.");
-    const [entries, pits, exclusions, laps] = await (async () => {
-      const entries = await fetchBoundedReportRows(rid, "apex_entries", button);
-      const pits = await fetchBoundedReportRows(rid, "apex_pit_stints", button);
-      const exclusions = await fetchBoundedReportRows(rid, "manual_lap_exclusions", button);
-      const laps = await fetchBoundedReportRows(rid, "apex_lap_events", button);
-      return [entries, pits, exclusions, laps];
-    })();
+    const entries = await fetchBoundedReportRows(rid, "apex_entries", button);
+    const pits = await fetchBoundedReportRows(rid, "apex_pit_stints", button);
+    const exclusions = await fetchBoundedReportRows(rid, "manual_lap_exclusions", button);
+    const laps = await fetchBoundedReportRows(rid, "apex_lap_events", button);
     const liveRows = Number(rid) === Number(S.liveMeta?.race_id) ? S.overview : [];
     const liveIds = new Set(liveRows.filter(r => Number(r.position) > 0).map(r => String(r.apex_id)));
-    const keep = rows => liveIds.size ? rows.filter(r => liveIds.has(String(r.apex_id))) : rows;
+    if (Number(rid) === Number(S.liveMeta?.race_id) && !liveIds.size) {
+      throw new Error("Live field is unavailable; refusing to mix race records.");
+    }
+    const ids = [...new Set(entries.map(r => String(r.apex_id)).filter(id => !liveIds.size || liveIds.has(id)))];
+    if (!ids.length) throw new Error("No pit report participants found.");
+    const group = rows => {
+      const map = new Map();
+      for (const row of rows) {
+        const id = String(row.apex_id);
+        if (!map.has(id)) map.set(id, []);
+        map.get(id).push(row);
+      }
+      return map;
+    };
+    const byEntry = group(entries), byPit = group(pits), byExclusion = group(exclusions), byLap = group(laps);
+    const allStints = [];
+    let next = 0, completed = 0;
+    await Promise.all(Array.from({length: Math.min(4, ids.length)}, async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const response = await fetch(apiUrl(`/api/reports/pit-stops.stints-part?race_id=${encodeURIComponent(rid)}`), {
+          method: "POST", cache: "no-store", headers: {"content-type": "application/json"},
+          body: JSON.stringify({race_id: Number(rid), apex_id: id,
+            entries: byEntry.get(id) || [], pits: byPit.get(id) || [],
+            exclusions: byExclusion.get(id) || [], laps: byLap.get(id) || []})
+        });
+        if (!response.ok) throw new Error(`Pit stints ${id}: ${(await response.text()).slice(0, 400)}`);
+        const data = await response.json();
+        if (!Array.isArray(data.rows)) throw new Error(`Invalid pit stint response for ${id}`);
+        allStints.push(...data.rows);
+        button.textContent = `CALCULATING STINTS: ${++completed}/${ids.length}`;
+      }
+    }));
     button.textContent = "GENERATING PDF...";
-    const response = await fetch(apiUrl(`/api/reports/pit-stops.pdf-bounded?race_id=${encodeURIComponent(rid)}`), {
+    const response = await fetch(apiUrl(`/api/reports/pit-stops.pdf-from-stints?race_id=${encodeURIComponent(rid)}`), {
       method: "POST", cache: "no-store", headers: {"content-type": "application/json"},
-      body: JSON.stringify({race_id: Number(rid), entries: keep(entries), pits: keep(pits), exclusions: keep(exclusions), laps: keep(laps)})
+      body: JSON.stringify({race_id: Number(rid), rows: allStints})
     });
     if (!response.ok) throw new Error((await response.text()) || `PDF generation failed: HTTP ${response.status}`);
     const blob = await response.blob();

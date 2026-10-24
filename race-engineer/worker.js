@@ -2491,9 +2491,11 @@ async function stintsPayload(env, rid, snapshot = null, preloaded = null) {
         stableTeamNameMap(env, rid)
       ]);
 
-  const fieldIds = isCurrentRace
-    ? currentFieldIds(realSnapshot)
-    : new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+  const fieldIds = preloaded?.reportFieldIds
+    ? new Set(preloaded.reportFieldIds.map(String).filter(validApexId))
+    : isCurrentRace
+      ? currentFieldIds(realSnapshot)
+      : new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
 
   if (!fieldIds.size) return [];
 
@@ -5345,6 +5347,37 @@ export default {
       if (url.pathname === "/api/raw/apex") {
         const rawSnapshot = Number(rid) === Number(raceId(env)) ? await collectorSnapshot(env).catch(() => null) : null;
         return json(await rawApexPayload(env, rid, rawSnapshot, url.searchParams.get("limit") || 200));
+      }
+
+      // Report-only bounded calculation: one team per invocation, no all-race scan.
+      if (url.pathname === "/api/reports/pit-stops.stints-part" && request.method === "POST") {
+        const body = await request.json();
+        const sourceId = Number(body?.race_id);
+        const id = String(body?.apex_id || "");
+        const keys = ["entries", "pits", "exclusions", "laps"];
+        if (!Number.isSafeInteger(sourceId) || sourceId <= 0 || sourceId !== Number(rid) ||
+            !validApexId(id) || !keys.every(k => Array.isArray(body[k])) ||
+            body.entries.length > 20 || body.pits.length > 200 ||
+            body.exclusions.length > 1000 || body.laps.length > 3000 ||
+            keys.some(k => body[k].some(row => Number(row.race_id) !== sourceId || String(row.apex_id) !== id))) {
+          return json({error: "Invalid bounded pit stint data"}, 400);
+        }
+        const snapshot = sourceId === Number(raceId(env))
+          ? await collectorSnapshot(env).catch(() => null) : null;
+        const rows = await stintsPayload(env, sourceId, snapshot, {...body, reportFieldIds: [id]});
+        return json({race_id: sourceId, apex_id: id, rows});
+      }
+
+      // Assemble already calculated report rows without loading the race again.
+      if (url.pathname === "/api/reports/pit-stops.pdf-from-stints" && request.method === "POST") {
+        const body = await request.json();
+        const sourceId = Number(body?.race_id);
+        if (!Number.isSafeInteger(sourceId) || sourceId <= 0 || sourceId !== Number(rid) ||
+            !Array.isArray(body.rows) || body.rows.length > 5000 ||
+            body.rows.some(row => Number(row.race_id) !== sourceId || !validApexId(String(row.apex_id)))) {
+          return json({error: "Invalid pit report rows"}, 400);
+        }
+        return createPitStopsPdfResponse(sourceId, body.rows);
       }
 
       // Generate the existing pit report from bounded pages supplied by the client.
