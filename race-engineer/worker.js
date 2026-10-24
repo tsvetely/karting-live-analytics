@@ -3970,6 +3970,8 @@ export class ApexCollector {
       new Map();
 
     this.entryWriteCache = new Map();
+    this.pendingEntryChanges = new Map();
+    this.collectorErrors = [];
     this.lastEntryWrite = new Map();
 
 
@@ -4198,13 +4200,34 @@ export class ApexCollector {
     }
 
 
+    if (path === "/sync-check") {
+      const id = new URL(request.url).searchParams.get("apex_id");
+      if (!validApexId(id)) return json({ok:false,error:"Provide a valid apex_id"},400);
+      try {
+        const before = await sbGet(this.env,"apex_lap_events",{
+          select:"lap_number",race_id:`eq.${this.rid}`,apex_id:`eq.${id}`,
+          order:"lap_number.desc",limit:"1"
+        });
+        await this.refreshDetail(id,true);
+        await this.flushEntryWrites();
+        const after = await sbGet(this.env,"apex_lap_events",{
+          select:"lap_number",race_id:`eq.${this.rid}`,apex_id:`eq.${id}`,
+          order:"lap_number.desc",limit:"1"
+        });
+        return json({ok:true,apex_id:id,before_max_lap:before[0]?.lap_number ?? null,
+          after_max_lap:after[0]?.lap_number ?? null,
+          note:"Apex detail fetched, Supabase upsert and verification GET completed"});
+      } catch(error) {
+        this.recordSyncError("sync-check",id,error);
+        return json({ok:false,apex_id:id,error:String(error)},502);
+      }
+    }
+
     if (
       path === "/status" ||
       path === "/snapshot"
     ) {
-      return json(
-        await this.snapshot()
-      );
+      return json({...(await this.snapshot()),sync_errors:this.collectorErrors,pending_entries:this.pendingEntryChanges.size});
     }
 
 
@@ -4337,10 +4360,7 @@ export class ApexCollector {
               )
               .catch(
                 error =>
-                  console.error(
-                    "PACKET ERROR",
-                    error
-                  )
+                  (console.error("PACKET ERROR", error), this.recordSyncError("packet", "", error))
               );
         }
       );
@@ -4411,28 +4431,51 @@ export class ApexCollector {
   }
 
 
+  // Buffer live-grid changes so one Apex packet does not issue hundreds of
+  // serial GET/POST calls. A failed flush retains its pending changes.
   async upsertEntry(apexId, changes) {
     const id = String(apexId);
-    const cached = this.entryWriteCache.get(id);
-    // Avoid the former one GET + one POST for every incoming Apex grid cell.
-    // The database row is read only on first update of an entry in this DO lifetime.
-    const old = cached || await this.getEntry(id) || {};
-    const next = {
-      race_id: this.rid,
-      apex_id: id,
-      team_name: changes.team_name !== undefined ? changes.team_name : old.team_name ?? null,
-      current_driver: changes.current_driver !== undefined ? changes.current_driver : old.current_driver ?? null,
-      last_lap: changes.last_lap !== undefined ? changes.last_lap : old.last_lap ?? null,
-      best_lap: changes.best_lap !== undefined ? changes.best_lap : old.best_lap ?? null,
-      lap_count: changes.lap_count !== undefined ? changes.lap_count : old.lap_count ?? null
-    };
-    if (cached && ["team_name", "current_driver", "last_lap", "best_lap", "lap_count"]
-      .every(key => cached[key] === next[key])) return;
-    // Never mark a failed write as persisted. A subsequent Apex update retries it.
-    await sbUpsert(this.env, "apex_entries", {
-      ...next, updated_at: new Date().toISOString()
-    }, "race_id,apex_id");
-    this.entryWriteCache.set(id, next);
+    this.pendingEntryChanges.set(id, {
+      ...(this.pendingEntryChanges.get(id) || {}), ...changes
+    });
+  }
+
+  async flushEntryWrites() {
+    for (const [id, changes] of [...this.pendingEntryChanges]) {
+      try {
+        const cached = this.entryWriteCache.get(id);
+        const old = cached || await this.getEntry(id) || {};
+        const keys = ["team_name", "current_driver", "last_lap", "best_lap", "lap_count"];
+        const next = Object.fromEntries(keys.map(key => [key,
+          changes[key] !== undefined ? changes[key] : old[key] ?? null
+        ]));
+        if (!cached || !keys.every(key => cached[key] === next[key])) {
+          await sbUpsert(this.env, "apex_entries", {
+            race_id: this.rid, apex_id: id, ...next,
+            updated_at: new Date().toISOString()
+          }, "race_id,apex_id");
+          this.entryWriteCache.set(id, next);
+        }
+        // Remove only changes that have actually been persisted. Changes may
+        // have arrived during the awaited request.
+        const latest = this.pendingEntryChanges.get(id);
+        if (latest === changes) this.pendingEntryChanges.delete(id);
+        else if (latest) {
+          for (const [key, value] of Object.entries(changes)) {
+            if (latest[key] === value) delete latest[key];
+          }
+          if (!Object.keys(latest).length) this.pendingEntryChanges.delete(id);
+        }
+      } catch (error) {
+        console.error("APEX_ENTRY_WRITE_FAILED", { id, error: String(error) });
+        this.recordSyncError("entry", id, error);
+      }
+    }
+  }
+
+  recordSyncError(stage, id, error) {
+    this.collectorErrors.push({ at: new Date().toISOString(), stage, apex_id: id, error: String(error) });
+    if (this.collectorErrors.length > 15) this.collectorErrors.shift();
   }
 
   async requestDetail(
@@ -4507,13 +4550,13 @@ export class ApexCollector {
     try { entry = await this.getEntry(id); }
     catch (error) { console.error("APEX_ENTRY_READ_FAILED", {id, error: String(error)}); }
     const snapshotLap=Number(this.lapCounts.get(id));
-    const lapCount=Number.isFinite(snapshotLap)?snapshotLap:Number(entry?.lap_count);
-    if(!Number.isFinite(lapCount)||lapCount<=0)return;
+    const lapCount=Number.isFinite(snapshotLap) && snapshotLap > 0 ? snapshotLap : Number(entry?.lap_count);
+    const requestedLapCount = Number.isFinite(lapCount) && lapCount > 0 ? lapCount : 800;
 
     this.lastDetailFetch.set(id,now);
     this.detailRunning.add(id);
     try {
-      const raw=await this.requestDetail(id,lapCount);
+      const raw=await this.requestDetail(id,requestedLapCount);
       const laps=parseLapRows(raw,this.rid).filter(r=>String(r.apex_id)===id);
       const pits=parsePitRows(raw,entry?.team_name || this.rawRows.get(id)?.c5?.value || "",this.rid).filter(r=>String(r.apex_id)===id && Number(r.pit_number)>0);
       // PRESERVE-FIRST: never reject real Apex detail rows because our own
@@ -4530,6 +4573,7 @@ export class ApexCollector {
       await this.persist();
     } catch(error) {
       console.error("APEX_DETAIL_WRITE_FAILED", {id, error: String(error)});
+      this.recordSyncError("detail", id, error);
       this.lastDetailFetch.delete(id);
       throw error;
     } finally {
@@ -4685,6 +4729,7 @@ export class ApexCollector {
             }
           }
 
+          await this.flushEntryWrites();
           await this.persist();
         }
 
@@ -4734,6 +4779,7 @@ export class ApexCollector {
         row.column
       );
     }
+    await this.flushEntryWrites();
   }
 
 
@@ -4742,27 +4788,7 @@ export class ApexCollector {
     const previousPacketAt = this.lastPacketAt ? Date.parse(this.lastPacketAt) : NaN;
     const maxPreviousLap = Math.max(0, ...[...this.lapCounts.values()].map(value => Number(value) || 0));
 
-    // A long timing silence followed by new packets is the reliable boundary
-    // between organiser sessions. Archive race_id=1 BEFORE current-session
-    // detail refresh starts replacing its rows. This keeps every finished race
-    // available in the HISTORY selector without requiring a new Supabase table.
-    if (Number.isFinite(previousPacketAt) && now.getTime() - previousPacketAt >= 6 * 60 * 60 * 1000 && maxPreviousLap >= 10) {
-      try {
-        const archivedRid = await archiveCurrentRace(this.env, this.rid);
-        if (archivedRid) {
-          await clearCurrentRaceData(this.env, this.rid);
-          this.positions.clear();
-          this.fieldApexIds.clear();
-          this.pitCounts.clear();
-          this.lapCounts.clear();
-          this.bestLaps.clear();
-          this.lastLaps.clear();
-          await this.state.storage.put("lastArchivedRaceId", archivedRid);
-        }
-      } catch (error) {
-        console.error("SESSION ARCHIVE:", error);
-      }
-    }
+    // Never archive/clear active race data based only on a websocket silence.
 
     this.packetCount +=
       1;
@@ -4865,6 +4891,13 @@ export default {
         );
       }
 
+
+      if (url.pathname === "/api/collector/sync-check") {
+        const id = url.searchParams.get("apex_id");
+        if (!validApexId(id)) return json({ok:false,error:"Invalid apex_id"},400);
+        const result = await collectorStub(env).fetch(`https://collector/sync-check?apex_id=${encodeURIComponent(id)}`);
+        return new Response(result.body,{status:result.status,headers:{"content-type":"application/json","cache-control":"no-store"}});
+      }
 
       if (
         url.pathname ===
