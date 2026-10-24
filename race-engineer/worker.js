@@ -3522,7 +3522,10 @@ async function createLapRecordsCsvResponse(env, rid, snapshot) {
   // Supabase REST caps each page at 1000 rows. Fetch independent pages in
   // bounded parallel batches instead of waiting for 42 serial round trips.
   // Keep the request count below the Cloudflare subrequest ceiling.
-  const MAX_PAGES = 42;
+  // A 12-hour race with 66 teams can exceed 42,000 lap rows.
+  // Keep fetching until the database returns a short page, rather than
+  // incorrectly treating a full page 42 as an error.
+  const MAX_PAGES = 600;
   const BATCH_SIZE = 6;
   let complete = false;
   for (let first = 0; first < MAX_PAGES && !complete; first += BATCH_SIZE) {
@@ -3545,7 +3548,7 @@ async function createLapRecordsCsvResponse(env, rid, snapshot) {
       if (rows.length < PAGE_SIZE) { complete = true; break; }
     }
   }
-  if (!complete) return json({error: "More than 42000 lap records; refusing to produce a truncated CSV."}, 413);
+  if (!complete) return json({error: "Lap export exceeded the pagination safety limit; refusing to produce a truncated CSV."}, 413);
   if (!grouped.size) return json({error: `No recorded lap times for race ${rid}.`}, 404);
   const out = [
     "\uFEFFApex Timing - drive your success https://www.apex-timing.com/",
