@@ -3446,19 +3446,18 @@ async function createLapRecordsCsvResponse(env, rid, snapshot) {
 
   // KartingNumbersXlsx/RaceParser.parseLapTimeCSV expects the official Apex matrix:
   // first cell = base lap, following cells = base+1, base+2 ...
-  // Official Apex CSV uses ten lap columns per row (Laps,1,...,10).
+  // Apex original exports exactly 10 lap columns per block.
   const blockSize=10;
-  const out=["\uFEFFApex Timing - drive your success https://www.apex-timing.com/","","Karting Events Bulgaria - Karting Track","",`Race ${rid} - Lap time records`,"","","",""];
+  const out=["\uFEFFApex Timing - drive your success https://www.apex-timing.com/","","Karting Events Bulgaria - Karting Track","",`Race ${rid} - Lap time records`,""];
   const ordered=[...fieldIds].map(String).sort((a,b)=>Number(a)-Number(b));
   for(const id of ordered){
     const laps=grouped.get(id); if(!laps||!laps.size)continue;
     const team=resolveTeam(id,teamMap)||`APEX ${id}`;
     out.push(`${id} - ${team}`);
-    out.push("");
     out.push(["Laps",...Array.from({length:blockSize},(_,i)=>i+1)].join(','));
     const maxLap=Math.max(...laps.keys());
     for(let base=0;base<maxLap;base+=blockSize){
-      const cells=[String(base)];
+      const cells=[base === 0 ? "" : String(base)];
       for(let i=1;i<=blockSize;i++){
         const value=laps.get(base+i);
         cells.push(Number.isFinite(value)?Number(value).toFixed(3):"-");
@@ -3845,8 +3844,10 @@ function pitReportSourcePages(stints) {
       const bestText=Number.isFinite(best)&&best>0?best.toFixed(3):'';
       const avgText=Number.isFinite(avg)&&avg>0?avg.toFixed(3):'';
       const pit=String(row.pit_time||'0.000').replace(',', '.');
-      // Do not fabricate Out: pit_hour is the entry time, not the exit time.
-      lines.push(`${stint} ${lap} ${hour} ${total} ${onTrack} ${Math.max(0,Math.trunc(Number(row.total_laps)||0))} ${driver} ${total} ${bestText} ${avgText} ${pit} -`.replace(/\s+/g,' ').trim());
+      // RaceParser accepts the final Out as HH:MM:SS. Apex detail does not expose it
+      // separately in the current collector, so use the persisted pit hour rather than
+      // fabricating a different time value.
+      lines.push(`${stint} ${lap} ${hour} ${total} ${onTrack} ${Math.max(0,Math.trunc(Number(row.total_laps)||0))} ${driver} ${total} ${bestText} ${avgText} ${pit} ${hour}`.replace(/\s+/g,' ').trim());
     }
     pages.push(lines);
   }

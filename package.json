@@ -1,19 +1,12 @@
 {
-  "name": "karting-live-analytics",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "race-engineer-ui",
+  "private": true,
+  "version": "0.1.0",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "@supabase/supabase-js": "^2.108.2",
-    "dotenv": "^17.4.2",
-    "playwright": "^1.61.0",
-    "ws": "^8.21.0"
+  "devDependencies": {
+    "wrangler": "^4.34.0"
   }
 }

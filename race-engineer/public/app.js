@@ -408,6 +408,14 @@ async function downloadFileFromEndpoint(
   }
 
 
+  const contentType = (response.headers.get("content-type") || "").toLowerCase();
+  if (contentType.includes("text/html") && !path.endsWith(".html")) {
+    throw new Error(`The report endpoint returned HTML instead of a file (HTTP ${response.status}). Check that the deployed Cloudflare Worker handles ${path}.`);
+  }
+  if (path.endsWith(".csv") && !contentType.includes("csv") && !contentType.includes("octet-stream")) {
+    throw new Error(`The report endpoint returned ${contentType || "an unknown content type"} instead of CSV (HTTP ${response.status}).`);
+  }
+
   const blob =
     await response.blob();
 
