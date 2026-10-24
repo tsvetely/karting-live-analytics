@@ -3494,20 +3494,23 @@ async function recoverMissingApexLaps(env, rid, fieldIds, existingRows) {
 }
 
 async function createLapRecordsCsvResponse(env, rid, snapshot) {
-  const fieldIds=await reportFieldIds(env,rid,snapshot);
-  if(!fieldIds.size)return json({error:`No Apex field found for race ${rid}.`},404);
-
+  // Export the race's persisted lap records, not the live field IDs: those
+  // IDs can change between sessions and previously caused false empty exports.
+  const rows=await sbGetAll(env,"apex_lap_events",{
+    select:"apex_id,lap_number,lap_time",
+    race_id:`eq.${rid}`,
+    order:"apex_id.asc,lap_number.asc"
+  });
+  if(!rows.length)return json({error:`No persisted lap records found for race ${rid}. The report cannot be reconstructed from the live grid.`},404);
+  const fieldIds=new Set(rows.map(r=>String(r.apex_id??"").trim()).filter(validApexId));
   const teamMap=await stableTeamNameMap(env,rid);
-  const storedRows=await loadLapEventsForApexIds(env,rid,[...fieldIds]);
-  const rows=storedRows;
-  if(!rows.length)return json({error:`No lap records found for race ${rid}.`},404);
 
   const grouped=new Map();
   for(const row of rows){
     const id=String(row.apex_id??'').trim(), lap=Math.trunc(Number(row.lap_number)), time=Number(row.lap_time);
     if(!fieldIds.has(id)||!validApexId(id)||!Number.isFinite(lap)||lap<=0||!Number.isFinite(time)||time<=0)continue;
     if(!grouped.has(id))grouped.set(id,new Map());
-    grouped.get(id).set(lap,time);
+    if(!grouped.get(id).has(lap))grouped.get(id).set(lap,time);
   }
 
   // KartingNumbersXlsx/RaceParser.parseLapTimeCSV expects the official Apex matrix:
