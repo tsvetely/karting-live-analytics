@@ -4771,6 +4771,67 @@ function initReports() {
    * IMPORTANT:
    * This now uses fetch + Blob instead of window.location.href.
    */
+  // Download raw lap records in bounded requests. Do not invoke the
+  // all-race Worker report endpoint (it exceeds the subrequest quota).
+  async function downloadBoundedLapRecordsCsv() {
+    const rid = selectedRaceId();
+    if (rid === null || rid === undefined || rid === "") throw new Error("Select a race first.");
+    const getPages = async table => {
+      const result = [];
+      for (let page = 0; ; page++) {
+        const url = `/api/archive/export-page?race_id=${encodeURIComponent(rid)}&table=${encodeURIComponent(table)}&page=${page}`;
+        const response = await fetch(apiUrl(url), {cache: "no-store"});
+        if (!response.ok) throw new Error(`Cannot read ${table} page ${page}: HTTP ${response.status}`);
+        const data = await response.json();
+        if (!Array.isArray(data.rows)) throw new Error(`Invalid ${table} page ${page}`);
+        result.push(...data.rows);
+        if (!data.has_more) break;
+      }
+      return result;
+    };
+    const entries = await getPages("apex_entries");
+    const laps = await getPages("apex_lap_events");
+    if (!laps.length) throw new Error("No recorded laps found for this race.");
+    const names = new Map(entries.map(r => [String(r.apex_id), String(r.team_name || r.name || `APEX ${r.apex_id}`)]));
+    const grouped = new Map();
+    for (const row of laps) {
+      const id = String(row.apex_id ?? "");
+      const lap = Number(row.lap_number), value = Number(row.lap_time);
+      if (!/^\d+$/.test(id) || !Number.isInteger(lap) || lap <= 0 || !Number.isFinite(value) || value <= 0) continue;
+      if (!grouped.has(id)) grouped.set(id, new Map());
+      grouped.get(id).set(lap, value);
+    }
+    const blockSize = 50;
+    const lines = ["\uFEFFApex Timing - drive your success https://www.apex-timing.com/", "", "Karting Events Bulgaria - Karting Track", "", `Race ${rid} - Lap time records`, ""];
+    for (const id of [...grouped.keys()].sort((a,b) => Number(a)-Number(b))) {
+      const values = grouped.get(id);
+      lines.push(`${id} - ${names.get(id) || `APEX ${id}`}`);
+      lines.push(["Laps", ...Array.from({length:blockSize}, (_,i)=>i+1)].join(","));
+      const maxLap = Math.max(...values.keys());
+      for (let base=0; base<maxLap; base+=blockSize) {
+        const cells = [String(base)];
+        for (let i=1; i<=blockSize; i++) {
+          const value = values.get(base+i);
+          cells.push(Number.isFinite(value) ? value.toFixed(3) : "-");
+        }
+        lines.push(cells.join(","));
+      }
+      lines.push("");
+    }
+    const blob = new Blob([lines.join("\r\n")], {type:"text/csv;charset=utf-8"});
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `${reportBaseName()} - Lap time records.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    }
+  }
+
   $("organiserReport1Csv")
     ?.addEventListener(
       "click",
@@ -4787,11 +4848,7 @@ function initReports() {
 
 
         try {
-          const result =
-            await downloadFileFromEndpoint(
-              "/api/reports/lap-time-records.csv",
-              `${reportBaseName()} - Lap time records.csv`
-            );
+          const result = await downloadBoundedLapRecordsCsv();
 
 
           console.log(
