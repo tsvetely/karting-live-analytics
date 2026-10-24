@@ -1511,7 +1511,9 @@ function snapshotFromGrid(grid) {
     bestLaps,
     lastLaps,
     teamNames,
-    drivers
+    drivers,
+    // Forward original Apex cells to /api/live; otherwise the UI sees null apex_fields.
+    rawRows: Object.fromEntries(grid?.rows || [])
   };
 }
 
