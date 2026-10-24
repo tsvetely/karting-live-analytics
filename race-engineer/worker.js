@@ -3448,23 +3448,24 @@ async function createLapRecordsCsvResponse(env, rid, snapshot) {
   // first cell = base lap, following cells = base+1, base+2 ...
   // Apex original exports exactly 10 lap columns per block.
   const blockSize=10;
-  const out=["\uFEFFApex Timing - drive your success https://www.apex-timing.com/","","Karting Events Bulgaria - Karting Track","",`Race ${rid} - Lap time records`,""];
+  const out=["\uFEFFApex Timing - drive your success https://www.apex-timing.com/","","","Karting Events Bulgaria - Karting Track","","",`Race ${rid} - Lap time records`,"","","","",""];
   const ordered=[...fieldIds].map(String).sort((a,b)=>Number(a)-Number(b));
   for(const id of ordered){
     const laps=grouped.get(id); if(!laps||!laps.size)continue;
     const team=resolveTeam(id,teamMap)||`APEX ${id}`;
-    out.push(`${id} - ${team}`);
-    out.push(["Laps",...Array.from({length:blockSize},(_,i)=>i+1)].join(','));
+    out.push(`${id} - ${team}`, "", ["Laps",...Array.from({length:blockSize},(_,i)=>i+1)].join(','));
     const maxLap=Math.max(...laps.keys());
+    // Official Apex format: the first row is labelled blank and covers laps 1-10;
+    // each subsequent row is labelled 10, 20, 30, etc.
     for(let base=0;base<maxLap;base+=blockSize){
-      const cells=[base === 0 ? "" : String(base)];
+      const cells=[base===0?"":String(base)];
       for(let i=1;i<=blockSize;i++){
         const value=laps.get(base+i);
         cells.push(Number.isFinite(value)?Number(value).toFixed(3):"-");
       }
       out.push(cells.join(','));
     }
-    out.push("");
+    out.push("", "");
   }
 
   const filename=safeFilename(`Race ${rid} - Lap time records.csv`);
@@ -3821,78 +3822,103 @@ ${content}
 
 
 
+// Structured pages: keep data in separate cells, never split on spaces in driver names.
 function pitReportSourcePages(stints) {
-  const grouped=new Map();
+  const groups=new Map();
   for(const row of stints||[]){
-    if(row.is_live) continue; // Never invent Hour/Out values for an unfinished stint.
-    const id=String(row.apex_id||'').trim(); if(!id)continue;
-    if(!grouped.has(id))grouped.set(id,[]); grouped.get(id).push(row);
+    const id=String(row.apex_id||'').trim();
+    if(!id || row.is_live)continue;
+    if(!groups.has(id))groups.set(id,[]);
+    groups.get(id).push(row);
   }
   const pages=[];
-  for(const [id,rows] of [...grouped.entries()].sort((a,b)=>Number(a[0])-Number(b[0]))){
+  for(const [id,rows] of [...groups].sort((a,b)=>Number(a[0])-Number(b[0]))){
     rows.sort((a,b)=>Number(a.stint_number)-Number(b.stint_number));
-    const team=rows[0]?.team_name||`APEX ${id}`;
-    const lines=[`${id} - ${team}`,'Stint Lap Hour Total On track Laps Driver Total Best lap Avg Pits Out'];
-    for(const row of rows){
-      const stint=Math.trunc(Number(row.stint_number)||0), lap=Math.trunc(Number(row.end_lap_count)||0);
-      if(stint<=0||lap<=0)continue;
-      const hour=/^\d{2}:\d{2}:\d{2}$/.test(String(row.pit_hour||''))?String(row.pit_hour):'00:00:00';
-      const total=/^\d{2}:\d{2}:\d{2}$/.test(String(row.total_time||''))?String(row.total_time):'00:00:00';
-      const onTrack=/^\d{2}:\d{2}:\d{2}$/.test(String(row.on_track||''))?String(row.on_track):'00:00:00';
-      const driver=cleanDriver(row.driver_name)||'Unknown';
-      const best=Number(row.best_lap_time), avg=Number(row.avg_lap_time);
-      const bestText=Number.isFinite(best)&&best>0?best.toFixed(3):'';
-      const avgText=Number.isFinite(avg)&&avg>0?avg.toFixed(3):'';
-      const pit=String(row.pit_time||'0.000').replace(',', '.');
-      // RaceParser accepts the final Out as HH:MM:SS. Apex detail does not expose it
-      // separately in the current collector, so use the persisted pit hour rather than
-      // fabricating a different time value.
-      lines.push(`${stint} ${lap} ${hour} ${total} ${onTrack} ${Math.max(0,Math.trunc(Number(row.total_laps)||0))} ${driver} ${total} ${bestText} ${avgText} ${pit} ${hour}`.replace(/\s+/g,' ').trim());
+    const team=String(rows[0]?.team_name||`APEX ${id}`);
+    const formatted=rows.map(row=>{
+      const best=Number(row.best_lap_time),avg=Number(row.avg_lap_time);
+      const asTime=v=>/^\d{1,2}:\d{2}:\d{2}$/.test(String(v||''))?String(v):'-';
+      return [
+        row.stint_number??'',row.end_lap_count??'',asTime(row.pit_hour),
+        asTime(row.total_time),asTime(row.on_track),row.total_laps??'',
+        cleanDriver(row.driver_name)||'-',asTime(row.total_time),
+        Number.isFinite(best)&&best>0?best.toFixed(3):'-',
+        Number.isFinite(avg)&&avg>0?avg.toFixed(3):'-',
+        String(row.pit_time??'-'),'-'
+      ];
+    });
+    for(let start=0;start<formatted.length;start+=25){
+      pages.push({title:`${id} - ${team}`,rows:formatted.slice(start,start+25)});
     }
-    pages.push(lines);
   }
   return pages;
 }
 
-function pdfEscape(value){return String(value??'').replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');}
+function pdfEscape(value){
+  return String(value??'').normalize('NFKD').replace(/[^\x20-\x7e]/g,'?')
+    .replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
+}
 
 function buildTextPdf(pages) {
-  const objects=[null];
-  const add=body=>{objects.push(body);return objects.length-1;};
-  const fontId=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const encoder=new TextEncoder(),objects=[null];
+  const add=v=>{objects.push(v);return objects.length-1;};
+  const font=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const bold=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
   const pageIds=[];
-  const contentIds=[];
-  for(const lines of pages.length?pages:[['No pit stop data available.']]){
-    const commands=['BT','/F1 8 Tf','36 806 Td','10 TL'];
-    for(let i=0;i<lines.length;i++){
-      if(i>0)commands.push('T*');
-      commands.push(`(${pdfEscape(lines[i])}) Tj`);
+  const headers=['#','Lap','Hour','Total','On track','Laps','Driver','Total','Best lap','Avg','Pits','Out'];
+  const xs=[36,65,106,171,236,307,343,537,606,678,739,803];
+  const widths=[26,38,62,62,68,34,190,65,68,55,62,70];
+  for(const page of pages.length?pages:[{title:'No pit stop data available',rows:[]}]){
+    const ops=[];
+    const label=(x,y,v,size=9,isBold=false)=>{
+      ops.push(`BT /${isBold?'F2':'F1'} ${size} Tf 1 0 0 1 ${x} ${y} Tm (${pdfEscape(v)}) Tj ET`);
+    };
+    const rect=(x,y,w,h,r,g,b)=>ops.push(`${r} ${g} ${b} rg ${x} ${y} ${w} ${h} re f`);
+    label(36,775,'Pit stops',23,true);
+    label(36,739,page.title,17,true);
+    ops.push('0.15 0.15 0.15 RG 1 w 36 725 m 856 725 l S');
+    rect(36,686,820,27,.86,.86,.86);
+    for(let i=0;i<headers.length;i++)label(xs[i]+2,696,headers[i],8,true);
+    for(let j=0;j<page.rows.length;j++){
+      const y=663-j*23;
+      if(j%2===0)rect(36,y-7,820,22,.94,.94,.94);
+      for(let i=0;i<12;i++){
+        let value=String(page.rows[j][i]??'');
+        // Fit long names in their dedicated cell without spilling into next column.
+        const max=Math.floor((widths[i]-5)/(i===6?4.5:4.1));
+        if(value.length>max)value=value.slice(0,Math.max(0,max-1))+'~';
+        label(xs[i]+2,y,value,8,i===6);
+      }
     }
-    commands.push('ET');
-    const stream=commands.join('\n');
-    contentIds.push(add(`<< /Length ${new TextEncoder().encode(stream).length} >>\nstream\n${stream}\nendstream`));
-    pageIds.push(add('PENDING_PAGE'));
+    const stream=ops.join('\n');
+    const streamId=add(`<< /Length ${encoder.encode(stream).length} >>\nstream\n${stream}\nendstream`);
+    pageIds.push(add({streamId}));
   }
-  const pagesId=add('PENDING_PAGES');
-  for(let i=0;i<pageIds.length;i++){
-    objects[pageIds[i]]=`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentIds[i]} 0 R >>`;
+  const pagesId=add('PENDING');
+  for(const id of pageIds){
+    objects[id]=`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 892 842] /Resources << /Font << /F1 ${font} 0 R /F2 ${bold} 0 R >> >> /Contents ${objects[id].streamId} 0 R >>`;
   }
   objects[pagesId]=`<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map(id=>`${id} 0 R`).join(' ')}] >>`;
-  const catalogId=add(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
-  let out='%PDF-1.4\n'; const offsets=[0];
-  for(let i=1;i<objects.length;i++){offsets[i]=new TextEncoder().encode(out).length;out+=`${i} 0 obj\n${objects[i]}\nendobj\n`;}
-  const xref=new TextEncoder().encode(out).length;
-  out+=`xref\n0 ${objects.length}\n0000000000 65535 f \n`;
-  for(let i=1;i<objects.length;i++)out+=`${String(offsets[i]).padStart(10,'0')} 00000 n \n`;
-  out+=`trailer\n<< /Size ${objects.length} /Root ${catalogId} 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return new TextEncoder().encode(out);
+  const root=add(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+  // Linear byte accounting prevents quadratic encoding overhead on large reports.
+  const chunks=['%PDF-1.4\n'];let position=encoder.encode(chunks[0]).length;
+  const offsets=[0];
+  for(let i=1;i<objects.length;i++){
+    offsets[i]=position;
+    const chunk=`${i} 0 obj\n${objects[i]}\nendobj\n`;
+    chunks.push(chunk);position+=encoder.encode(chunk).length;
+  }
+  const xref=position;
+  chunks.push(`xref\n0 ${objects.length}\n0000000000 65535 f \n`);
+  for(let i=1;i<objects.length;i++)chunks.push(`${String(offsets[i]).padStart(10,'0')} 00000 n \n`);
+  chunks.push(`trailer\n<< /Size ${objects.length} /Root ${root} 0 R >>\nstartxref\n${xref}\n%%EOF`);
+  return encoder.encode(chunks.join(''));
 }
 
 function createPitStopsPdfResponse(rid, stints) {
   const bytes=buildTextPdf(pitReportSourcePages(stints));
-  const filename=safeFilename(`Race ${rid} - Pit stops.pdf`);
   return new Response(bytes,{status:200,headers:{
-    'content-type':'application/pdf','content-disposition':`attachment; filename="${filename}"`,
+    'content-type':'application/pdf','content-disposition':`attachment; filename="${safeFilename(`Race ${rid} - Pit stops.pdf`)}"`,
     'cache-control':'no-store, no-cache, must-revalidate','x-content-type-options':'nosniff'
   }});
 }
