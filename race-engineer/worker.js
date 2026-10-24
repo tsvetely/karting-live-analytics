@@ -3199,13 +3199,14 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
 
   const entries=filterCurrentField(entriesRaw,fieldIds);
   const entryById=new Map(entries.map(r=>[String(r.apex_id),r]));
-  const [stints, lapEvents, pits, exclusions] = await Promise.all([
+  // The full lap history is > 100k rows and cannot be read in one
+  // Cloudflare Worker invocation (subrequest limit). Keep live data available.
+  // Do not display zero valid laps when analytics have not been calculated.
+  const [stints, pits] = await Promise.all([
     stintsPayload(env,rid,snapshot),
-    loadLapEventsForApexIds(env,rid,[...fieldIds]),
-    loadPits(env,rid),
-    loadExclusions(env,rid)
+    loadPits(env,rid)
   ]);
-  const kartAnalysis = lapAnalysisByKart(lapEvents, pits, exclusions, fieldIds);
+  const kartAnalysis = new Map();
 
   const finalStintById=new Map();
   for (const stint of stints) {
@@ -3218,10 +3219,10 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
 
   for (const value of fieldIds) {
     const id=String(value), entry=entryById.get(id)||{}, stint=finalStintById.get(id)||{};
-    const stats = kartAnalysis.get(id) || lapStats([]);
+    const stats = kartAnalysis.get(id) || {valid_laps:null,avg_lap_time:null,best_lap_time:null,best_lap_number:null,worst_lap_time:null,worst_lap_number:null,consistency:null};
     const snapshotLap=Number(snapshot?.lapCounts?.[id]);
     const entryLap=Number(entry.lap_count);
-    const recordedLap=lapEvents.filter(row=>String(row.apex_id)===id).reduce((max,row)=>Math.max(max,Number(row.lap_number)||0),0);
+    const recordedLap=0;
     const lap=isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap)?entryLap:recordedLap);
     const snapshotPits=Number(snapshot?.pitCounts?.[id]);
     const pitCount=isCurrentRace && Number.isFinite(snapshotPits)
@@ -3252,16 +3253,6 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
     });
   }
 
-  if (raceBest === null) for (const lapRow of lapEvents || []) {
-    const id = String(lapRow.apex_id ?? "").trim();
-    if (!fieldIds.has(id)) continue;
-    const lapNo = Number(lapRow.lap_number);
-    const currentCount = isCurrentRace ? Number(snapshot?.lapCounts?.[id]) : Infinity;
-    if (!Number.isFinite(lapNo) || lapNo <= 0) continue;
-    if (Number.isFinite(currentCount) && currentCount >= 0 && lapNo > currentCount) continue;
-    const t = Number(lapRow.lap_time);
-    if (Number.isFinite(t) && t > 0 && (raceBest === null || t < raceBest)) raceBest = t;
-  }
 
   current.sort((a,b)=>{
     if(isCurrentRace&&Number.isFinite(a.position)&&Number.isFinite(b.position)&&a.position!==b.position)return a.position-b.position;
@@ -5286,11 +5277,9 @@ export default {
               ));
           const entries = filterCurrentField(entriesRaw, activeIds);
           const pits = filterCurrentField(pitsRaw, activeIds);
-          const [teamLapRows, teamExclusions] = await Promise.all([
-            loadLapEventsForApexIds(env, rid, [...activeIds]),
-            loadExclusions(env, rid)
-          ]);
-          const teamAnalysis = lapAnalysisByKart(teamLapRows, pits, teamExclusions, activeIds);
+          // Avoid loading the entire race history for a team listing.
+          // Analytics are unavailable until server-side aggregation is installed.
+          const teamAnalysis = new Map();
           const pitGroups = new Map();
           for (const pit of pits) {
             const id = String(pit.apex_id);
@@ -5311,7 +5300,7 @@ export default {
             if (currentDriver) drivers.add(currentDriver);
             const position = Number(snapshot?.positions?.[id]);
             const lapCount = Number(snapshot?.lapCounts?.[id] ?? entry.lap_count);
-            const stats = teamAnalysis.get(String(id)) || lapStats([]);
+            const stats = teamAnalysis.get(String(id)) || {valid_laps:null,avg_lap_time:null,best_lap_time:null,best_lap_number:null,worst_lap_time:null,worst_lap_number:null,consistency:null};
             rows.push({
               race_id: rid, apex_id: String(id),
               position: Number.isFinite(position) && position > 0 ? position : null,
