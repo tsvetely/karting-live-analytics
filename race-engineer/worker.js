@@ -3974,6 +3974,8 @@ export class ApexCollector {
 
     this.fullDetailRefreshRunning = false;
     this.lastFullDetailRefreshAt = 0;
+    this.detailQueue = new Set();
+    this.detailSweepCursor = 0;
     this.sessionResetting = false;
 
     this.detailRunning =
@@ -4206,9 +4208,9 @@ export class ApexCollector {
       const repaired = await this.state.storage.get(repairKey);
       if (repaired !== repairVersion) {
         await this.state.storage.put(repairKey, repairVersion);
-        this.state.waitUntil(this.refreshAllFieldDetails(true));
+        this.enqueueAllFieldDetails();
       } else {
-        this.state.waitUntil(this.refreshAllFieldDetails(false));
+        this.enqueueAllFieldDetails();
       }
 
       return json(
@@ -4244,7 +4246,7 @@ export class ApexCollector {
 
       await this.connect();
 
-      this.state.waitUntil(this.refreshAllFieldDetails(true));
+      this.enqueueAllFieldDetails();
 
       return json(
         await this.snapshot()
@@ -4272,6 +4274,11 @@ export class ApexCollector {
       } catch {}
     }
 
+
+    // Bounded recovery: each alarm is a separate invocation. Never issue
+    // 66 Apex detail requests in one Worker invocation (subrequest limit).
+    try { await this.drainDetailQueue(3); }
+    catch (error) { console.error("DETAIL ALARM:", error); }
 
     await this.state.storage.setAlarm(
       Date.now() +
@@ -4564,6 +4571,14 @@ export class ApexCollector {
       const raw=await this.requestDetail(id,lapCount);
       const laps=parseLapRows(raw,this.rid).filter(r=>String(r.apex_id)===id);
       const pits=parsePitRows(raw,entry.team_name,this.rid).filter(r=>String(r.apex_id)===id && Number(r.pit_number)>0);
+      // A successful HTTP response is not proof of a complete Apex history.
+      // Keep the team queued until the latest lap and pit numbers are present.
+      const expectedPits = Number(this.pitCounts.get(id)) || 0;
+      const receivedLapNumbers = new Set(laps.map(r => Number(r.lap_number)));
+      const receivedPitNumbers = new Set(pits.map(r => Number(r.pit_number)));
+      const completeLaps = receivedLapNumbers.has(lapCount);
+      const completePits = expectedPits === 0 || receivedPitNumbers.has(expectedPits);
+      console.log('APEX_DETAIL_AUDIT', JSON.stringify({id, lapCount, receivedLaps:laps.length, maxReceivedLap:Math.max(0,...receivedLapNumbers), expectedPits, receivedPits:pits.length, completeLaps, completePits}));
       // PRESERVE-FIRST: never reject real Apex detail rows because our own
       // expectation says the reply is "incomplete". Persist every lap/pit row
       // Apex actually returned. Do not delete older rows before merging.
@@ -4575,27 +4590,39 @@ export class ApexCollector {
       }
 
       await this.persist();
+      if (!completeLaps || !completePits) {
+        this.detailQueue.add(id);
+        console.warn('APEX_DETAIL_INCOMPLETE', id, 'lap', lapCount, 'pits', expectedPits);
+      }
     } finally {
       this.detailRunning.delete(id);
     }
   }
 
-  async refreshAllFieldDetails(force = false) {
-    const now=Date.now();
-    if(this.fullDetailRefreshRunning)return;
-    if(!force && now-this.lastFullDetailRefreshAt<300000)return;
-    const ids=[...this.fieldApexIds].map(String).filter(validApexId);
-    if(!ids.length)return;
-    this.fullDetailRefreshRunning=true;
-    this.lastFullDetailRefreshAt=now;
-    try {
-      for(let i=0;i<ids.length;i+=4){
-        const batch=ids.slice(i,i+4);
-        await Promise.all(batch.map(id=>this.refreshDetail(id,true).catch(e=>console.error(`DETAIL REFRESH ${id}:`,e))));
-      }
-    } finally {
-      this.fullDetailRefreshRunning=false;
+  enqueueAllFieldDetails() {
+    for (const id of this.fieldApexIds) {
+      if (validApexId(String(id))) this.detailQueue.add(String(id));
     }
+  }
+
+  async drainDetailQueue(maxRequests = 3) {
+    // Use a bounded number of remote Apex requests per Durable Object alarm.
+    // Retry failed IDs later without discarding previously stored lap history.
+    if (!this.detailQueue.size) this.enqueueAllFieldDetails();
+    const batch = [...this.detailQueue].slice(0, maxRequests);
+    for (const id of batch) this.detailQueue.delete(id);
+    for (const id of batch) {
+      try { await this.refreshDetail(id, true); }
+      catch (error) {
+        this.detailQueue.add(id);
+        console.error("DETAIL QUEUED REFRESH", id, String(error));
+      }
+    }
+  }
+
+  async refreshAllFieldDetails(force = false) {
+    this.enqueueAllFieldDetails();
+    // Detail collection is performed by bounded, independent alarm invocations.
   }
 
   async applyField(apexId, type, cls, value, column) {
@@ -4628,7 +4655,7 @@ export class ApexCollector {
         // A pit-count change changes the stint boundary immediately. Fetch the
         // Apex P/L detail now instead of waiting for the next lap or 5-minute sweep.
         if(!Number.isFinite(previous)||next!==previous){
-          this.state.waitUntil(this.refreshDetail(id,true).catch(e=>console.error(`PIT DETAIL REFRESH ${id}:`,e)));
+          this.detailQueue.add(id);
         }
       }
       return;
@@ -4657,7 +4684,7 @@ export class ApexCollector {
         // Do not manufacture a lap/time pair by combining independent live-grid
         // fields (TLP + the last cached LLP). Their update order is not guaranteed.
         // Fetch the kart detail and persist the exact lap-number/time pairs Apex returns.
-        this.state.waitUntil(this.refreshDetail(id,true).catch(e=>console.error(`LAP DETAIL REFRESH ${id}:`,e)));
+        this.detailQueue.add(id);
       }
     }
   }
