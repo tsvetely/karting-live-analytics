@@ -5169,8 +5169,9 @@ export default {
           })
         ]);
         const stats = lapAnalysisByKart(laps, pits, exclusions, [id]).get(id);
-        // The official timing detail feed is the sole source for BEST LAP.
-        // Never reuse the analytical best-lap number or the stored lap-history number.
+        // BEST is supplied by the official timing grid. BEST LAP is the lap
+        // number attached to that *same* time in the original timing records.
+        // Do not use the separately calculated analytical best lap number.
         const officialBest = Number(url.searchParams.get("official_best"));
         let officialLapNumber = null;
         if (url.searchParams.has("official_best") &&
@@ -5184,6 +5185,25 @@ export default {
             if (matching) officialLapNumber = Number(matching.lap_number);
           } catch (error) {
             console.warn("Official timing lap detail unavailable", id, String(error));
+          }
+          // The collector persists the original lap number and time supplied
+          // by the timing system. Use those original records if the detail
+          // service is unavailable or returns an incomplete history. This is
+          // an exact lookup, NOT a new best-lap calculation or validity filter.
+          if (officialLapNumber === null) {
+            try {
+              const originalRows = await sbGet(env, "apex_lap_events", {
+                select:"lap_number,lap_time", race_id:`eq.${rid}`,
+                apex_id:`eq.${id}`, lap_time:`eq.${officialBest.toFixed(3)}`,
+                order:"lap_number.asc", limit:"1"
+              });
+              if (originalRows.length &&
+                  Math.abs(Number(originalRows[0].lap_time) - officialBest) < 0.0005) {
+                officialLapNumber = Number(originalRows[0].lap_number);
+              }
+            } catch (error) {
+              console.warn("Original timing lap lookup unavailable", id, String(error));
+            }
           }
         }
         return json({race_id:rid, apex_id:id, ...stats,
