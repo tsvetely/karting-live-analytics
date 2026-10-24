@@ -2081,6 +2081,9 @@ async function loadLapEventsForApexIds(env, rid, fieldIds) {
     race_id: `eq.${rid}`,
     apex_id: `in.(${ids.join(",")})`,
     order: "apex_id.asc,lap_number.asc"
+  }).catch(error => {
+    console.error("loadLapEventsForApexIds failed", { race_id: rid, apex_id_count: ids.length, error: String(error) });
+    return [];
   });
 }
 
