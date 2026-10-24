@@ -378,18 +378,26 @@ function apiUrl(path) {
 
 async function downloadFileFromEndpoint(
   path,
-  fallbackFilename =
-    "download"
+  fallbackFilename = "download"
 ) {
-  const response =
-    await fetch(
-      apiUrl(path),
-      {
-        method: "GET",
-        cache: "no-store"
-      }
-    );
-
+  // Never leave the report button stuck in GENERATING when the API stalls.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  let response;
+  try {
+    response = await fetch(apiUrl(path), {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Report request timed out after 30 seconds: ${path}. The server did not return the report.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     let message = "";
