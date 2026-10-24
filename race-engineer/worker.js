@@ -692,10 +692,22 @@ function parseGridData(html) {
       const column = id[1];
       const explicitType = /data-type=["']([^"']+)["']/i.exec(cellMatch[1]);
       const type = explicitType?.[1] || columnTypes.get(`c${column}`) || "";
+      // Kart numbers and national flags can be image-backed Apex cells.
+      // Keep the original HTML attributes as text metadata; do not persist HTML.
+      const innerHtml = cellMatch[2];
+      const image = /<img\b([^>]*)>/i.exec(innerHtml);
+      const imageAttrs = image?.[1] || "";
+      const attr = (source, name) => {
+        const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*["']([^"']*)["']`, "i").exec(source);
+        return m?.[1] || "";
+      };
       fields[`c${column}`] = {
         column,
         type,
-        value: stripHtml(cellMatch[2])
+        value: stripHtml(innerHtml),
+        image_alt: attr(imageAttrs, "alt") || attr(imageAttrs, "title") || null,
+        image_src: attr(imageAttrs, "src") || null,
+        cell_title: attr(cellMatch[1], "title") || null
       };
     }
     rows.set(apexId, fields);
