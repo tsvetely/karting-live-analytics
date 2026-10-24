@@ -5169,40 +5169,32 @@ export default {
           })
         ]);
         const stats = lapAnalysisByKart(laps, pits, exclusions, [id]).get(id);
-        // BEST is supplied by the official timing grid. BEST LAP is the lap
-        // number attached to that *same* time in the original timing records.
-        // Do not use the separately calculated analytical best lap number.
+        // The official BEST is the sole authority. Resolve its lap number
+        // from original timing lap records already loaded for this kart.
+        // This is an equality lookup, never a separately calculated best.
         const officialBest = Number(url.searchParams.get("official_best"));
         let officialLapNumber = null;
         if (url.searchParams.has("official_best") &&
             Number.isFinite(officialBest) && officialBest > 0) {
-          try {
-            const raw = await directApexDetail(env, id, 800);
-            const officialRows = parseLapRows(raw, rid)
-              .filter(row => String(row.apex_id) === id);
-            const matching = officialRows.find(row =>
-              Math.abs(Number(row.lap_time) - officialBest) < 0.0005);
-            if (matching) officialLapNumber = Number(matching.lap_number);
-          } catch (error) {
-            console.warn("Official timing lap detail unavailable", id, String(error));
-          }
-          // The collector persists the original lap number and time supplied
-          // by the timing system. Use those original records if the detail
-          // service is unavailable or returns an incomplete history. This is
-          // an exact lookup, NOT a new best-lap calculation or validity filter.
+          const matchesOfficialTime = row =>
+            Number.isFinite(Number(row.lap_time)) &&
+            Math.round(Number(row.lap_time) * 1000) === Math.round(officialBest * 1000);
+          const original = laps.find(row =>
+            String(row.apex_id) === id && matchesOfficialTime(row) &&
+            Number.isInteger(Number(row.lap_number)) && Number(row.lap_number) > 0);
+          if (original) officialLapNumber = Number(original.lap_number);
+
+          // If the persisted timing feed is incomplete, ask the timing
+          // detail service for its original lap records. No derived fallback.
           if (officialLapNumber === null) {
             try {
-              const originalRows = await sbGet(env, "apex_lap_events", {
-                select:"lap_number,lap_time", race_id:`eq.${rid}`,
-                apex_id:`eq.${id}`, lap_time:`eq.${officialBest.toFixed(3)}`,
-                order:"lap_number.asc", limit:"1"
-              });
-              if (originalRows.length &&
-                  Math.abs(Number(originalRows[0].lap_time) - officialBest) < 0.0005) {
-                officialLapNumber = Number(originalRows[0].lap_number);
-              }
+              const raw = await directApexDetail(env, id, 800);
+              const originalRows = parseLapRows(raw, rid);
+              const match = originalRows.find(row =>
+                String(row.apex_id) === id && matchesOfficialTime(row));
+              if (match) officialLapNumber = Number(match.lap_number);
             } catch (error) {
-              console.warn("Original timing lap lookup unavailable", id, String(error));
+              console.warn("Official lap detail unavailable", id, String(error));
             }
           }
         }

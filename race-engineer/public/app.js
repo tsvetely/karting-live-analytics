@@ -2621,7 +2621,13 @@ let overviewLapStatsPending = null;
 
 async function fillOverviewLapStats(raceId, rows) {
   const ids = [...new Set(rows.map(r => String(r.apex_id || "")).filter(Boolean))];
+  const officialBestById = new Map(rows.map(r => [String(r.apex_id || ""), number(r.apex_best_lap)]));
   const keyPrefix = `${raceId}:`;
+  for (const row of rows) {
+    const key = keyPrefix + row.apex_id;
+    const cached = overviewLapStatsCache.get(key);
+    if (cached && cached.official_best !== number(row.apex_best_lap)) overviewLapStatsCache.delete(key);
+  }
   const apply = () => {
     if (String(S.raceId) !== String(raceId)) return;
     for (const row of S.overview) {
@@ -2640,12 +2646,22 @@ async function fillOverviewLapStats(raceId, rows) {
       while (next < missing.length) {
         const id = missing[next++];
         try {
-          const stats = await api(`/api/overview/lap-stats?race_id=${encodeURIComponent(raceId)}&apex_id=${encodeURIComponent(id)}`, {raceId:null});
+          const officialBest = officialBestById.get(id);
+          const officialParam = officialBest != null && officialBest > 0
+            ? `&official_best=${encodeURIComponent(officialBest)}` : "";
+          const stats = await api(`/api/overview/lap-stats?race_id=${encodeURIComponent(raceId)}&apex_id=${encodeURIComponent(id)}${officialParam}`, {raceId:null});
+          // Do not cache an unresolved official lap number indefinitely:
+          // it may become available when missing timing records are synced.
+          if (officialBest != null && officialBest > 0 &&
+              (!Number.isInteger(Number(stats.best_lap_number)) || Number(stats.best_lap_number) <= 0)) {
+            console.warn("Official BEST LAP unresolved", id, officialBest);
+          }
           overviewLapStatsCache.set(keyPrefix + id, {
             valid_laps:stats.valid_laps, avg_lap_time:stats.avg_lap_time,
             best_lap_time:stats.best_lap_time, best_lap_number:stats.best_lap_number,
             worst_lap_time:stats.worst_lap_time, worst_lap_number:stats.worst_lap_number,
-            consistency:stats.consistency
+            consistency:stats.consistency,
+            official_best:officialBest
           });
           apply();
         } catch (error) { console.warn("Overview lap statistics:", id, error); }
@@ -2679,6 +2695,13 @@ async function loadLiveOverview() {
     )
       ? data.current
       : [];
+  // Keep a verified official lap number across live refreshes. Never
+  // display the separately calculated analytics lap number as BEST LAP.
+  for (const row of S.overview) {
+    const cached = overviewLapStatsCache.get(`${S.raceId}:${row.apex_id}`);
+    row.best_lap_number = cached && cached.official_best === number(row.apex_best_lap)
+      ? cached.best_lap_number : null;
+  }
 
 
   S.loaded.overview =
