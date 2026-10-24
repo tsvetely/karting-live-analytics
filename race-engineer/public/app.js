@@ -1843,11 +1843,11 @@ function renderOverview() {
 </td>
 
 <td>
-  ${esc(apexField(row, ["pittime", "pit_time", "pt"]) ?? row.pit_time ?? "—")}
+  ${esc(row.pit_time ?? apexField(row, ["pittime", "pit_time", "pt"]) ?? "—")}
 </td>
 
 <td>
-  ${esc(apexField(row, ["penalty", "pen", "penaltime"]) ?? row.penalty ?? "—")}
+  ${esc(row.penalty ?? apexField(row, ["penalty", "pen", "penaltime"]) ?? "—")}
 </td>
 
 <td>

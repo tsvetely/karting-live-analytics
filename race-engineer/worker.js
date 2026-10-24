@@ -1579,7 +1579,8 @@ function snapshotFromGrid(grid) {
   const knownColumnTypes = {
     "1": "sta", "2": "rk", "3": "no", "4": "nat", "5": "dr",
     "6": "s1", "7": "s2", "8": "s3", "9": "llp", "10": "gap",
-    "11": "int", "12": "blp", "13": "tlp", "14": "otr", "15": "pit"
+    "11": "int", "12": "blp", "13": "tlp", "14": "otr", "15": "pit",
+    "16": "pt", "17": "pen"
   };
 
   for (const [rawId, fields] of grid?.rows || []) {
@@ -3230,6 +3231,25 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
     }
   }
 
+  // Race-wide pit time and penalties are live-grid fields, not the
+  // duration of the most recent pit stop or an entry-level fallback.
+  const gridValue = (id, types, columns) => {
+    const cells = snapshot?.rawRows?.[id] || {};
+    const accepted = new Set(types);
+    for (const cell of Object.values(cells)) {
+      if (accepted.has(String(cell?.type || "").toLowerCase())) {
+        const value = String(cell?.value ?? cell?.data_value ?? "").trim();
+        if (value && value !== "—" && value !== "-") return value;
+      }
+    }
+    for (const column of columns) {
+      const cell = cells[`c${column}`];
+      const value = String(cell?.value ?? cell?.data_value ?? "").trim();
+      if (value && value !== "—" && value !== "-") return value;
+    }
+    return null;
+  };
+
   const current=[];
   let raceLap=0,pitTotal=0,raceBest=null;
 
@@ -3268,8 +3288,8 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       live_last_lap:isCurrentRace?(number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap)):number(entry.last_lap),
       apex_best_lap:isCurrentRace?(number(snapshot?.bestLaps?.[id]) ?? number(entry.best_lap)):number(entry.best_lap),
       apex_fields:isCurrentRace?(snapshot?.rawRows?.[id] || null):null,
-      pit_time:stint.pit_time ?? entry.pit_time ?? null,
-      penalty:entry.penalty ?? entry.penalty_time ?? null,
+      pit_time:isCurrentRace ? gridValue(id,["pt","pittime","pit_time"],[16]) : (entry.pit_time ?? null),
+      penalty:isCurrentRace ? gridValue(id,["pen","penalty","penaltime"],[17]) : (entry.penalty ?? entry.penalty_time ?? null),
       avg_lap_time:stats.avg_lap_time,best_lap_time:stats.best_lap_time,
       best_lap_number:stats.best_lap_number,worst_lap_time:stats.worst_lap_time,
       worst_lap_number:stats.worst_lap_number,consistency:stats.consistency,updated_at:entry.updated_at||null
