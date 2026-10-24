@@ -5153,6 +5153,31 @@ export default {
           kart_source: cells?.c3 ? "grid-cell-or-row-attribute" : "not-present-in-grid" });
       }
 
+      // Read-only diagnostic of the actual timing detail response. This lets us
+      // verify the upstream record layout before changing BEST LAP parsing.
+      if (url.pathname === "/api/collector/lap-detail-inspect") {
+        const id = String(url.searchParams.get("apex_id") || "").trim();
+        if (!validApexId(id)) return json({error:"Invalid apex_id"}, 400);
+        const raw = await directApexDetail(env, id, 800);
+        const lines = String(raw).split(/\r?\n/).filter(Boolean);
+        const relevant = lines.filter(line =>
+          line.includes(`D${id}.L`) || line.includes(`D${id}.B`) ||
+          /(?:^|[#\s])(?:L|B)\d*[#=]/.test(line));
+        const parsed = parseLapRows(raw, rid).filter(row => String(row.apex_id) === id);
+        const official = Number(url.searchParams.get("official_best"));
+        const matching = Number.isFinite(official) && official > 0
+          ? parsed.filter(row => Math.round(Number(row.lap_time)*1000) === Math.round(official*1000))
+          : [];
+        return json({apex_id:id, raw_length:raw.length, line_count:lines.length,
+          relevant_line_count:relevant.length, parsed_lap_count:parsed.length,
+          parsed_first:parsed.slice(0,3).map(row=>({lap_number:row.lap_number,lap_time:row.lap_time})),
+          parsed_last:parsed.slice(-3).map(row=>({lap_number:row.lap_number,lap_time:row.lap_time})),
+          official_best:Number.isFinite(official)?official:null,
+          matched_laps:matching.map(row=>row.lap_number),
+          // Include only a small number of raw timing records for parser inspection.
+          raw_samples:relevant.slice(0,5).concat(relevant.slice(-5)).map(line=>line.slice(0,350))});
+      }
+
       // Per-kart read: one small, indexed lap history instead of a race-wide
       // scan that exceeds the Worker subrequest budget.
       if (url.pathname === "/api/overview/lap-stats") {
