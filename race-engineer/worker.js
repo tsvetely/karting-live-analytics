@@ -3250,14 +3250,19 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
     if (apexBest !== null && apexBest > 0 && (raceBest === null || apexBest < raceBest)) raceBest = apexBest;
     const pos=Number(snapshot?.positions?.[id]);
 
+    const lastPitLap = pits.filter(p => String(p.apex_id) === id)
+      .map(p => Number(p.pit_lap))
+      .filter(n => Number.isFinite(n) && n >= 0 && n <= (Number(lap) || 0))
+      .reduce((max,n) => Math.max(max,n), 0);
+
     current.push({
       race_id:Number(rid),apex_id:id,position:isCurrentRace&&Number.isFinite(pos)?pos:null,
       team_name:resolveTeam(id,teamMap,entry.team_name,stint.team_name),
       driver_name:(isCurrentRace?snapshot?.drivers?.[id]:null)||stint.driver_name||entry.current_driver||null,
       current_driver:(isCurrentRace?snapshot?.drivers?.[id]:null)||stint.driver_name||entry.current_driver||null,
       race_lap:Number(lap)||0,live_lap_count:Number(lap)||0,pit_count:pitCount,
-      stint_number:pitCount+1,start_lap_count:number(stint.pit_lap)||0,
-      stint_laps:Math.max(0,(Number(lap)||0)-(number(stint.pit_lap)||0)),total_stint_laps:Math.max(0,(Number(lap)||0)-(number(stint.pit_lap)||0)),
+      stint_number:pitCount+1,start_lap_count:lastPitLap,
+      stint_laps:Math.max(0,(Number(lap)||0)-lastPitLap),total_stint_laps:Math.max(0,(Number(lap)||0)-lastPitLap),
       valid_laps:stats.valid_laps,
       stint_status:stint.status||null,data_complete:stint.data_complete!==false,expected_pit_count:number(stint.expected_pit_count),stored_pit_count:number(stint.stored_pit_count),
       live_last_lap:isCurrentRace?(number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap)):number(entry.last_lap),
@@ -5120,6 +5125,25 @@ export default {
           kart: cells?.c3 || null, nation: cells?.c4 || null,
           available_columns: cells ? Object.keys(cells) : [],
           kart_source: cells?.c3 ? "grid-cell-or-row-attribute" : "not-present-in-grid" });
+      }
+
+      // Per-kart read: one small, indexed lap history instead of a race-wide
+      // scan that exceeds the Worker subrequest budget.
+      if (url.pathname === "/api/overview/lap-stats") {
+        const id = String(url.searchParams.get("apex_id") || "").trim();
+        if (!validApexId(id)) return json({error:"Invalid apex_id"}, 400);
+        const [laps, pits, exclusions] = await Promise.all([
+          sbGetAll(env, "apex_lap_events", {
+            select:"apex_id,lap_number,lap_time", race_id:`eq.${rid}`,
+            apex_id:`eq.${id}`, order:"lap_number.asc"
+          }),
+          loadPits(env, rid, id),
+          sbGetAll(env, "manual_lap_exclusions", {
+            select:"apex_id,lap_number", race_id:`eq.${rid}`, apex_id:`eq.${id}`
+          })
+        ]);
+        const stats = lapAnalysisByKart(laps, pits, exclusions, [id]).get(id);
+        return json({race_id:rid, apex_id:id, ...stats});
       }
 
       if (url.pathname === "/api/live") {
