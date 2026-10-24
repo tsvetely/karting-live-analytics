@@ -4627,7 +4627,7 @@ function renderReports() {
 
         if (button) {
           button.disabled =
-            !hasRace;
+            !hasRace || button.dataset.reportBusy === "true";
         }
       }
     );
@@ -4673,8 +4673,8 @@ function setReportButtonBusy(
     return;
   }
 
-  button.disabled =
-    busy;
+  button.dataset.reportBusy = busy ? "true" : "false";
+  button.disabled = busy;
 
   button.dataset.idleText =
     idleText ||
@@ -4774,19 +4774,46 @@ function initReports() {
   // Download raw lap records in bounded requests. Do not invoke the
   // all-race Worker report endpoint (it exceeds the subrequest quota).
   async function fetchBoundedReportRows(rid, table, button) {
-    const result = [];
-    for (let page = 0; ; page++) {
+    // Request independent pages concurrently, but never exceed six active
+    // Worker invocations. Preserve page order and stop on the first short page.
+    const pages = new Map();
+    const batchSize = 6;
+    const maxPages = 501;
+    let count = 0;
+    const label = table.replace("apex_", "").replaceAll("_", " ").toUpperCase();
+    const fetchPage = async page => {
       const url = `/api/archive/export-page?race_id=${encodeURIComponent(rid)}&table=${encodeURIComponent(table)}&page=${page}`;
-      const response = await fetch(apiUrl(url), {cache: "no-store"});
-      if (!response.ok) throw new Error(`Cannot read ${table} page ${page}: HTTP ${response.status}`);
-      const data = await response.json();
-      if (!Array.isArray(data.rows)) throw new Error(`Invalid ${table} page ${page}`);
-      result.push(...data.rows);
-      if (button) button.textContent = `LOADING ${table.replace('apex_', '').replaceAll('_', ' ').toUpperCase()}: ${result.length}`;
-      if (!data.has_more) break;
-      if (page > 500) throw new Error(`Too many pages for ${table}`);
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 30000);
+      try {
+        const response = await fetch(apiUrl(url), {cache: "no-store", signal: controller.signal});
+        if (!response.ok) throw new Error(`${table} page ${page}: HTTP ${response.status} - ${(await response.text()).slice(0, 300)}`);
+        const data = await response.json();
+        if (!Array.isArray(data.rows) || typeof data.has_more !== "boolean") {
+          throw new Error(`Invalid ${table} page ${page}`);
+        }
+        return data;
+      } catch (error) {
+        if (error.name === "AbortError") throw new Error(`${table} page ${page} timed out after 30 seconds`);
+        throw error;
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    };
+    if (button) button.textContent = `LOADING ${label}: 0`;
+    for (let start = 0; start < maxPages; start += batchSize) {
+      const batch = await Promise.all(Array.from({length: Math.min(batchSize, maxPages - start)}, (_, i) => fetchPage(start + i)));
+      let lastPage = false;
+      for (let i = 0; i < batch.length; i++) {
+        const page = start + i;
+        pages.set(page, batch[i].rows);
+        count += batch[i].rows.length;
+        if (!batch[i].has_more) { lastPage = true; break; }
+      }
+      if (button) button.textContent = `LOADING ${label}: ${count}`;
+      if (lastPage) return [...pages.keys()].sort((a,b) => a-b).flatMap(page => pages.get(page));
     }
-    return result;
+    throw new Error(`Exceeded ${maxPages} pages for ${table}; export stopped to avoid incomplete data`);
   }
 
   async function downloadBoundedLapRecordsCsv(button) {
