@@ -1449,13 +1449,11 @@ function snapshotFromGrid(grid) {
   const lastLaps = {};
   const teamNames = {};
   const drivers = {};
-  const rawRows = {};
 
   for (const [rawId, fields] of grid?.rows || []) {
     const id = String(rawId);
     if (!validApexId(id)) continue;
     fieldApexIds.push(id);
-    rawRows[id] = fields || {};
 
     for (const cell of Object.values(fields || {})) {
       const type = String(cell?.type || "").toLowerCase();
@@ -1513,8 +1511,7 @@ function snapshotFromGrid(grid) {
     bestLaps,
     lastLaps,
     teamNames,
-    drivers,
-    rawRows
+    drivers
   };
 }
 
@@ -3449,14 +3446,15 @@ async function createLapRecordsCsvResponse(env, rid, snapshot) {
 
   // KartingNumbersXlsx/RaceParser.parseLapTimeCSV expects the official Apex matrix:
   // first cell = base lap, following cells = base+1, base+2 ...
-  // A block size of 50 keeps the file readable and preserves every raw lap.
-  const blockSize=50;
-  const out=["\uFEFFApex Timing - drive your success https://www.apex-timing.com/","","Karting Events Bulgaria - Karting Track","",`Race ${rid} - Lap time records`,""];
+  // Official Apex CSV uses ten lap columns per row (Laps,1,...,10).
+  const blockSize=10;
+  const out=["\uFEFFApex Timing - drive your success https://www.apex-timing.com/","","Karting Events Bulgaria - Karting Track","",`Race ${rid} - Lap time records`,"","","",""];
   const ordered=[...fieldIds].map(String).sort((a,b)=>Number(a)-Number(b));
   for(const id of ordered){
     const laps=grouped.get(id); if(!laps||!laps.size)continue;
     const team=resolveTeam(id,teamMap)||`APEX ${id}`;
     out.push(`${id} - ${team}`);
+    out.push("");
     out.push(["Laps",...Array.from({length:blockSize},(_,i)=>i+1)].join(','));
     const maxLap=Math.max(...laps.keys());
     for(let base=0;base<maxLap;base+=blockSize){
@@ -3847,10 +3845,8 @@ function pitReportSourcePages(stints) {
       const bestText=Number.isFinite(best)&&best>0?best.toFixed(3):'';
       const avgText=Number.isFinite(avg)&&avg>0?avg.toFixed(3):'';
       const pit=String(row.pit_time||'0.000').replace(',', '.');
-      // RaceParser accepts the final Out as HH:MM:SS. Apex detail does not expose it
-      // separately in the current collector, so use the persisted pit hour rather than
-      // fabricating a different time value.
-      lines.push(`${stint} ${lap} ${hour} ${total} ${onTrack} ${Math.max(0,Math.trunc(Number(row.total_laps)||0))} ${driver} ${total} ${bestText} ${avgText} ${pit} ${hour}`.replace(/\s+/g,' ').trim());
+      // Do not fabricate Out: pit_hour is the entry time, not the exit time.
+      lines.push(`${stint} ${lap} ${hour} ${total} ${onTrack} ${Math.max(0,Math.trunc(Number(row.total_laps)||0))} ${driver} ${total} ${bestText} ${avgText} ${pit} -`.replace(/\s+/g,' ').trim());
     }
     pages.push(lines);
   }
