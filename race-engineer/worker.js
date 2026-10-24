@@ -3441,12 +3441,65 @@ async function reportFieldIds(env, rid, snapshot) {
   return ids;
 }
 
+// Recover only missing lap numbers from the authoritative Apex detail feed.
+// Do not interpolate or invent timing values for gaps.
+async function recoverMissingApexLaps(env, rid, fieldIds, existingRows) {
+  if (Number(rid) !== Number(raceId(env))) return existingRows;
+  const byId = new Map();
+  for (const row of existingRows) {
+    const id = String(row.apex_id ?? "");
+    if (!byId.has(id)) byId.set(id, new Set());
+    byId.get(id).add(Number(row.lap_number));
+  }
+  const missingIds = [...fieldIds].filter(id => {
+    const seen = byId.get(String(id));
+    if (!seen || !seen.size) return true;
+    const max = Math.max(...seen);
+    for (let lap = 1; lap <= max; lap++) if (!seen.has(lap)) return true;
+    return false;
+  });
+  if (!missingIds.length) return existingRows;
+  const recovered = [];
+  const endpoint = "https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php";
+  // Bound concurrency and time so a failed upstream cannot hang the report.
+  for (let offset = 0; offset < missingIds.length; offset += 6) {
+    const batch = missingIds.slice(offset, offset + 6);
+    const results = await Promise.all(batch.map(async id => {
+      const seen = byId.get(String(id));
+      const max = seen && seen.size ? Math.max(...seen) : 0;
+      const count = Math.max(1, Math.min(800, max + 20));
+      const request = `D#-${count}#D${id}.L#-${count}#D${id}.P#-999#D${id}.B#1#D${id}.INF`;
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {"content-type":"application/x-www-form-urlencoded; charset=UTF-8"},
+          body: new URLSearchParams({port:env.APEX_DETAIL_PORT || "8910", request}),
+          signal: AbortSignal.timeout(4500)
+        });
+        if (!response.ok) return [];
+        return parseLapRows(await response.text(), rid).filter(row => String(row.apex_id) === String(id));
+      } catch (error) {
+        console.warn("Apex missing-lap recovery failed", id, String(error));
+        return [];
+      }
+    }));
+    for (const group of results) recovered.push(...group);
+  }
+  const originalKeys = new Set(existingRows.map(row => `${row.apex_id}:${row.lap_number}`));
+  const additions = recovered.filter(row => !originalKeys.has(`${row.apex_id}:${row.lap_number}`));
+  for (let offset = 0; offset < additions.length; offset += 250) {
+    await sbUpsert(env, "apex_lap_events", additions.slice(offset, offset + 250), "race_id,apex_id,lap_number");
+  }
+  return [...existingRows, ...additions];
+}
+
 async function createLapRecordsCsvResponse(env, rid, snapshot) {
   const fieldIds=await reportFieldIds(env,rid,snapshot);
   if(!fieldIds.size)return json({error:`No Apex field found for race ${rid}.`},404);
 
   const teamMap=await stableTeamNameMap(env,rid);
-  const rows=await loadLapEventsForApexIds(env,rid,[...fieldIds]);
+  const storedRows=await loadLapEventsForApexIds(env,rid,[...fieldIds]);
+  const rows=await recoverMissingApexLaps(env,rid,fieldIds,storedRows);
   if(!rows.length)return json({error:`No lap records found for race ${rid}.`},404);
 
   const grouped=new Map();
@@ -5086,6 +5139,20 @@ export default {
         return createRawApexJsonResponse(env, rid, rawSnapshot);
       }
 
+      // The pit report is built from persisted completed stints. Do not fetch
+      // the live collector snapshot or recalculate every team's analytics.
+      // Both operations can block the download long enough for the UI timeout.
+      if (url.pathname === "/api/reports/pit-stops.pdf") {
+        const saved = await loadCompletedStints(env, rid);
+        if (!saved.length) {
+          return json({error: "No persisted completed pit stints for this race"}, 404);
+        }
+        return createPitStopsPdfResponse(
+          rid,
+          saved.map(row => ({...row, is_live: false}))
+        );
+      }
+
       if (url.pathname === "/api/reports/apex-raw.txt") {
         return createRawApexTextResponse(env, rid);
       }
@@ -5599,22 +5666,6 @@ export default {
         ) {
           const stints = await stintsPayload(env, rid, snapshot);
           return createPitStopsCsvResponse(rid, stints);
-        }
-
-
-        if (
-          url.pathname ===
-          "/api/reports/pit-stops.pdf"
-        ) {
-          // The report must be based on actual stored Apex pit rows, not
-          // completed_stint_stats (which can omit Hour/On track/Pits/Out).
-          const [pits, teamMap] = await Promise.all([
-            loadPits(env, rid), stableTeamNameMap(env, rid)
-          ]);
-          // Statistics are optional; a failed analytics calculation must not
-          // hide the pit records or prevent the report from downloading.
-          const stats = await stintsPayload(env, rid, snapshot).catch(() => []);
-          return createPitStopsPdfResponse(rid, pits, stats, teamMap);
         }
 
 
