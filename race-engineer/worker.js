@@ -3499,7 +3499,7 @@ async function createLapRecordsCsvResponse(env, rid, snapshot) {
 
   const teamMap=await stableTeamNameMap(env,rid);
   const storedRows=await loadLapEventsForApexIds(env,rid,[...fieldIds]);
-  const rows=await recoverMissingApexLaps(env,rid,fieldIds,storedRows);
+  const rows=storedRows;
   if(!rows.length)return json({error:`No lap records found for race ${rid}.`},404);
 
   const grouped=new Map();
@@ -4008,7 +4008,9 @@ function buildTextPdf(pages) {
 }
 
 function createPitStopsPdfResponse(rid, pits, stats, teamMap) {
-  const bytes=buildTextPdf(pitReportSourcePages(pits, stats, teamMap));
+  const pages=pitReportSourcePages(pits, stats, teamMap);
+  if (!pages.length) return new Response(JSON.stringify({error:'No valid Apex pit rows available for this race'}), {status:404,headers:{'content-type':'application/json'}});
+  const bytes=buildTextPdf(pages);
   return new Response(bytes,{status:200,headers:{
     'content-type':'application/pdf','content-disposition':`attachment; filename="${safeFilename(`Race ${rid} - Pit stops.pdf`)}"`,
     'cache-control':'no-store, no-cache, must-revalidate','x-content-type-options':'nosniff'
@@ -5139,18 +5141,27 @@ export default {
         return createRawApexJsonResponse(env, rid, rawSnapshot);
       }
 
-      // The pit report is built from persisted completed stints. Do not fetch
-      // the live collector snapshot or recalculate every team's analytics.
-      // Both operations can block the download long enough for the UI timeout.
+      // Report routes must not wait for a live collector snapshot.
+      // Pit report uses the actual persisted Apex pit events, not the
+      // analytics completed_stint_stats table (different schema).
       if (url.pathname === "/api/reports/pit-stops.pdf") {
-        const saved = await loadCompletedStints(env, rid);
-        if (!saved.length) {
-          return json({error: "No persisted completed pit stints for this race"}, 404);
+        const [pits, entries] = await Promise.all([
+          loadPits(env, rid),
+          loadEntries(env, rid).catch(() => [])
+        ]);
+        if (!pits.length) {
+          return json({error: `No recorded Apex pit stops for race ${rid}.`}, 404);
         }
-        return createPitStopsPdfResponse(
-          rid,
-          saved.map(row => ({...row, is_live: false}))
-        );
+        const names = new Map();
+        for (const entry of entries) {
+          const id = String(entry.apex_id ?? "").trim();
+          if (validApexId(id)) names.set(id, String(entry.team_name || entry.name || "").trim());
+        }
+        return createPitStopsPdfResponse(rid, pits, [], names);
+      }
+
+      if (url.pathname === "/api/reports/lap-time-records.csv") {
+        return createLapRecordsCsvResponse(env, rid, null);
       }
 
       if (url.pathname === "/api/reports/apex-raw.txt") {
