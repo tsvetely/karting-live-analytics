@@ -5053,6 +5053,46 @@ export default {
       }
 
 
+      // Read-only end-to-end probe: Apex detail HTTP -> parser -> Supabase SELECT.
+      // Does not mutate race data and never returns API credentials.
+      if (url.pathname === "/api/debug/apex-detail") {
+        const apexId = String(url.searchParams.get("apex_id") || "").trim();
+        if (!validApexId(apexId)) return json({error:"Valid apex_id required"},400);
+        const snapshot = Number(rid) === Number(raceId(env))
+          ? await collectorSnapshot(env).catch(error => ({error:String(error)})) : null;
+        const expectedLaps = Number(snapshot?.lapCounts?.[apexId]) || 0;
+        const expectedPits = Number(snapshot?.pitCounts?.[apexId]) || 0;
+        const count = Math.max(1,Math.min(expectedLaps || 1,800));
+        const requestBody = `D#-${count}#D${apexId}.L#-${count}#D${apexId}.P#-999#D${apexId}.B#1#D${apexId}.INF`;
+        const results = {race_id:Number(rid),apex_id:apexId,expected:{laps:expectedLaps,pits:expectedPits},apex:{},parser:{},database:{}};
+        try {
+          const response = await fetch("https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php",{
+            method:"POST",headers:{"content-type":"application/x-www-form-urlencoded; charset=UTF-8"},
+            body:new URLSearchParams({port:env.APEX_DETAIL_PORT || "8910",request:requestBody})
+          });
+          const raw = await response.text();
+          results.apex = {http_status:response.status,ok:response.ok,content_type:response.headers.get("content-type"),body_length:raw.length,body_prefix:raw.slice(0,160)};
+          if(response.ok){
+            const laps=parseLapRows(raw,rid).filter(row=>String(row.apex_id)===apexId);
+            const pits=parsePitRows(raw,"",rid).filter(row=>String(row.apex_id)===apexId);
+            const numbers=laps.map(row=>Number(row.lap_number)).filter(Number.isFinite);
+            const unique=new Set(numbers);
+            results.parser={laps:laps.length,unique_laps:unique.size,max_lap:numbers.length?Math.max(...numbers):null,
+              missing_laps:Array.from({length:Math.min(expectedLaps,800)},(_,i)=>i+1).filter(n=>!unique.has(n)).slice(0,50),
+              pits:pits.length,pit_numbers:pits.map(row=>row.pit_number),last_laps:laps.slice(-3)};
+          }
+        } catch(error) { results.apex.error=String(error); }
+        for (const [key,table,order] of [["entries","apex_entries",null],["laps","apex_lap_events","lap_number.desc"],["pits","apex_pit_stints","pit_number.desc"]]){
+          try {
+            const params={select:key==="laps"?"lap_number,lap_time":key==="pits"?"pit_number,pit_lap":"lap_count,updated_at,last_lap,best_lap",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,limit:"1"};
+            if(order)params.order=order;
+            const rows=await sbGet(env,table,params);
+            results.database[key]={read_ok:true,latest:rows[0] || null};
+          } catch(error) { results.database[key]={read_ok:false,error:String(error)}; }
+        }
+        return json(results);
+      }
+
       // Read-only diagnostic: compare live Apex grid, stored rows and API mapping.
       if (url.pathname === "/api/debug/apex-integrity") {
         const requestedId = String(url.searchParams.get("apex_id") || "").trim();
