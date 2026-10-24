@@ -3004,9 +3004,12 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
     stableTeamNameMap(env, rid)
   ]);
 
-  const fieldIds = isCurrentRace
-    ? currentFieldIds(snapshot)
-    : new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+  // Do not make the entire UI disappear when the Apex collector reconnects.
+  // The database is the durable source for already recorded participants.
+  // Snapshot IDs take precedence whenever a real current grid is present.
+  const snapshotIds = isCurrentRace ? currentFieldIds(snapshot) : new Set();
+  const storedIds = new Set(entriesRaw.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+  const fieldIds = snapshotIds.size ? snapshotIds : storedIds;
 
   if (!fieldIds.size) return {
     race_id:Number(rid), session_name:"Apex Timing", active:false, data_available:false,
@@ -3032,12 +3035,12 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
 
   for (const value of fieldIds) {
     const id=String(value), entry=entryById.get(id)||{}, stint=finalStintById.get(id)||{};
-    const snapshotLap=Number(snapshot?.lapCounts?.[id]);
-    const entryLap=Number(entry.lap_count);
+    const snapshotLap=number(snapshot?.lapCounts?.[id]);
+    const entryLap=number(entry.lap_count);
     const recordedLap=lapEvents.filter(row=>String(row.apex_id)===id).reduce((max,row)=>Math.max(max,Number(row.lap_number)||0),0);
-    const lap=isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap)?entryLap:recordedLap);
-    const snapshotPits=Number(snapshot?.pitCounts?.[id]);
-    const pitCount=isCurrentRace && Number.isFinite(snapshotPits)
+    const lap=isCurrentRace && snapshotIds.has(id) && snapshotLap !== null ? snapshotLap : (entryLap ?? recordedLap);
+    const snapshotPits=number(snapshot?.pitCounts?.[id]);
+    const pitCount=isCurrentRace && snapshotIds.has(id) && snapshotPits !== null
       ? Math.max(0,Math.trunc(snapshotPits))
       : pits.filter(row=>String(row.apex_id)===id).reduce((max,row)=>Math.max(max,Number(row.pit_number)||0),0);
     raceLap=Math.max(raceLap,Number(lap)||0);
@@ -3069,7 +3072,7 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
     const id = String(lapRow.apex_id ?? "").trim();
     if (!fieldIds.has(id)) continue;
     const lapNo = Number(lapRow.lap_number);
-    const currentCount = isCurrentRace ? Number(snapshot?.lapCounts?.[id]) : Infinity;
+    const currentCount = isCurrentRace && snapshotIds.has(id) ? number(snapshot?.lapCounts?.[id]) : Infinity;
     if (!Number.isFinite(lapNo) || lapNo <= 0) continue;
     if (Number.isFinite(currentCount) && currentCount >= 0 && lapNo > currentCount) continue;
     const t = Number(lapRow.lap_time);
