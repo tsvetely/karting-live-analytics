@@ -3423,9 +3423,19 @@ function safeFilename(value) {
 
 
 async function reportFieldIds(env, rid, snapshot) {
-  if (Number(rid) === Number(raceId(env))) return currentFieldIds(snapshot);
-  const entries = await loadEntries(env, rid).catch(() => []);
-  return new Set(entries.map(row => String(row.apex_id ?? "").trim()).filter(validApexId));
+  // The collector can temporarily have no fieldApexIds while the database
+  // still contains the complete race. Never turn that into a false 404.
+  const ids = Number(rid) === Number(raceId(env)) ? currentFieldIds(snapshot) : new Set();
+  if (ids.size) return ids;
+  const [entries, pits] = await Promise.all([
+    loadEntries(env, rid).catch(() => []),
+    loadPits(env, rid).catch(() => [])
+  ]);
+  for (const row of [...entries, ...pits]) {
+    const id = String(row.apex_id ?? '').trim();
+    if (validApexId(id)) ids.add(id);
+  }
+  return ids;
 }
 
 async function createLapRecordsCsvResponse(env, rid, snapshot) {
@@ -5567,7 +5577,11 @@ export default {
           url.pathname ===
           "/api/reports/pit-stops.pdf"
         ) {
-          const stints = await stintsPayload(env, rid, snapshot);
+          // PDF needs completed pit records, not all live analytics and
+          // disruption/rain recomputations. Prefer the persisted report data.
+          const saved = await loadCompletedStints(env, rid);
+          const stints = saved.length ? saved.map(row => ({...row, is_live:false}))
+            : await stintsPayload(env, rid, snapshot);
           return createPitStopsPdfResponse(rid, stints);
         }
 
