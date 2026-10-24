@@ -4825,10 +4825,17 @@ function initReports() {
     const names = new Map(entries.map(r => [String(r.apex_id), String(r.team_name || r.name || `APEX ${r.apex_id}`)]));
     // The live ranking is the finish order. Restrict current-race exports to
     // its actual field, because historical rows can share the same race_id.
-    const liveRows = Number(rid) === Number(S.liveMeta?.race_id) ? S.overview : [];
-    const finishOrder = new Map(liveRows.filter(r => Number(r.position) > 0)
+    const liveRows = isLiveRace() && String(rid) === String(S.raceId)
+      ? (Array.isArray(S.liveMeta?.current) && S.liveMeta.current.length
+          ? S.liveMeta.current : S.overview)
+      : [];
+    const finishOrder = new Map(liveRows.filter(r => /^\d+$/.test(String(r.apex_id ?? "")) && Number(r.position) > 0)
       .map(r => [String(r.apex_id), Number(r.position)]));
-    const currentField = finishOrder.size ? new Set(finishOrder.keys()) : null;
+    // Never export historical teams when the current live field is unavailable.
+    if (isLiveRace() && !finishOrder.size) {
+      throw new Error("Current race finishing order is unavailable. CSV export stopped to prevent mixing races.");
+    }
+    const currentField = isLiveRace() ? new Set(finishOrder.keys()) : null;
     const grouped = new Map();
     for (const row of laps) {
       const id = String(row.apex_id ?? "");
@@ -4836,6 +4843,10 @@ function initReports() {
       if (!/^\d+$/.test(id) || (currentField && !currentField.has(id)) || !Number.isInteger(lap) || lap <= 0 || !Number.isFinite(value) || value <= 0) continue;
       if (!grouped.has(id)) grouped.set(id, new Map());
       grouped.get(id).set(lap, value);
+    }
+    if (isLiveRace() && grouped.size !== currentField.size) {
+      const missing = [...currentField].filter(id => !grouped.has(id));
+      if (missing.length) throw new Error(`Missing lap records for ${missing.length} current-race teams; export stopped to avoid an incomplete report.`);
     }
     const blockSize = 10;
     const lines = ["\uFEFFApex Timing - drive your success https://www.apex-timing.com/", "", "Karting Events Bulgaria - Karting Track", "", `Race ${rid} - Lap time records`, ""];
