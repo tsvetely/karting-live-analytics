@@ -4188,18 +4188,9 @@ export class ApexCollector {
     ) {
       await this.connect();
 
-      // One-time repair for this deployment. race_id=1 is reused between
-      // events, so rebuild all 72 current kart histories from Apex detail
-      // exactly once instead of continuing to display old-session rows.
-      const repairKey = "currentSessionRepairVersion";
-      const repairVersion = "v6.27";
-      const repaired = await this.state.storage.get(repairKey);
-      if (repaired !== repairVersion) {
-        await this.state.storage.put(repairKey, repairVersion);
-        this.state.waitUntil(this.refreshAllFieldDetails(false));
-      } else {
-        this.state.waitUntil(this.refreshAllFieldDetails(false));
-      }
+      // Startup must not launch a full-field historical refresh.
+      // History is synchronized by the bounded alarm, one kart at a time.
+      await this.state.storage.setAlarm(Date.now() + 1000);
 
       return json(
         await this.snapshot()
@@ -4234,7 +4225,7 @@ export class ApexCollector {
 
       await this.connect();
 
-      this.state.waitUntil(this.refreshAllFieldDetails(false));
+      await this.state.storage.setAlarm(Date.now() + 1000);
 
       return json(
         await this.snapshot()
@@ -4512,17 +4503,19 @@ export class ApexCollector {
     const now=Date.now();
     if(!force && now-(this.lastDetailFetch.get(id)||0)<60000)return;
 
-    const entry=await this.getEntry(id);
+    let entry = null;
+    try { entry = await this.getEntry(id); }
+    catch (error) { console.error("APEX_ENTRY_READ_FAILED", {id, error: String(error)}); }
     const snapshotLap=Number(this.lapCounts.get(id));
     const lapCount=Number.isFinite(snapshotLap)?snapshotLap:Number(entry?.lap_count);
-    if(!entry||!Number.isFinite(lapCount)||lapCount<=0)return;
+    if(!Number.isFinite(lapCount)||lapCount<=0)return;
 
     this.lastDetailFetch.set(id,now);
     this.detailRunning.add(id);
     try {
       const raw=await this.requestDetail(id,lapCount);
       const laps=parseLapRows(raw,this.rid).filter(r=>String(r.apex_id)===id);
-      const pits=parsePitRows(raw,entry.team_name,this.rid).filter(r=>String(r.apex_id)===id && Number(r.pit_number)>0);
+      const pits=parsePitRows(raw,entry?.team_name || this.rawRows.get(id)?.c5?.value || "",this.rid).filter(r=>String(r.apex_id)===id && Number(r.pit_number)>0);
       // PRESERVE-FIRST: never reject real Apex detail rows because our own
       // expectation says the reply is "incomplete". Persist every lap/pit row
       // Apex actually returned. Do not delete older rows before merging.
@@ -4533,7 +4526,12 @@ export class ApexCollector {
         await sbUpsert(this.env,"apex_pit_stints",pits,"race_id,apex_id,pit_number");
       }
 
+      console.log("APEX_DETAIL_SAVED", {id, laps: laps.length, pits: pits.length, max_lap: Math.max(0,...laps.map(x=>Number(x.lap_number)||0))});
       await this.persist();
+    } catch(error) {
+      console.error("APEX_DETAIL_WRITE_FAILED", {id, error: String(error)});
+      this.lastDetailFetch.delete(id);
+      throw error;
     } finally {
       this.detailRunning.delete(id);
     }
