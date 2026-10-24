@@ -5262,6 +5262,47 @@ export default {
         return createPitStopsPdfResponse(rid, pits, [], names);
       }
 
+      // Read-only diagnostic: inspect one Apex participant end-to-end.
+      // Never invokes the collector, backfills, or mutates race records.
+      if (url.pathname === "/api/debug/apex-laps") {
+        const apexId = String(url.searchParams.get("apex_id") || "").trim();
+        if (!/^[0-9]{1,12}$/.test(apexId)) {
+          return json({error: "Specify numeric apex_id, e.g. ?race_id=1&apex_id=24558"}, 400);
+        }
+        const requestedFrom = Number(url.searchParams.get("from") || 1);
+        const fromLap = Number.isInteger(requestedFrom) && requestedFrom > 0 ? requestedFrom : 1;
+        const toLap = Math.min(fromLap + 249, Number(url.searchParams.get("to") || (fromLap + 99)));
+        if (!Number.isInteger(toLap) || toLap < fromLap) return json({error:"Invalid lap range"},400);
+        try {
+          const [entries, laps, pits] = await Promise.all([
+            sbGet(env, "apex_entries", {select:"*", race_id:`eq.${rid}`, apex_id:`eq.${apexId}`, limit:"5"}),
+            sbGet(env, "apex_lap_events", {select:"*", race_id:`eq.${rid}`, apex_id:`eq.${apexId}`, lap_number:`gte.${fromLap}`, order:"lap_number.asc", limit:"1000"}),
+            sbGet(env, "apex_pit_stints", {select:"*", race_id:`eq.${rid}`, apex_id:`eq.${apexId}`, limit:"100"})
+          ]);
+          const selected = laps.filter(row => Number(row.lap_number) <= toLap);
+          const byLap = new Map();
+          for (const row of selected) {
+            const n = Number(row.lap_number);
+            if (!byLap.has(n)) byLap.set(n, []);
+            byLap.get(n).push(row);
+          }
+          const missing = [], duplicates = [], invalid = [];
+          for (let lap = fromLap; lap <= toLap; lap++) {
+            const matches = byLap.get(lap) || [];
+            if (!matches.length) missing.push(lap);
+            if (matches.length > 1) duplicates.push({lap, count:matches.length});
+            for (const row of matches) if (!(Number(row.lap_time) > 0)) invalid.push({lap, lap_time:row.lap_time});
+          }
+          return json({race_id:rid, apex_id:apexId, range:{from:fromLap,to:toLap},
+            counts:{entries:entries.length, laps_in_range:selected.length, pits_sample:pits.length},
+            missing_laps:missing, duplicate_laps:duplicates, invalid_lap_times:invalid,
+            entry_rows:entries, lap_rows:selected, pit_rows:pits,
+            note:"Read-only persisted records; missing laps here may still exist in upstream Apex. Compare with the same Apex ID and lap numbers."});
+        } catch (error) {
+          return json({error:"Diagnostic query failed", detail:String(error?.message || error).slice(0,350)}, 502);
+        }
+      }
+
       if (url.pathname === "/api/reports/lap-gaps.csv") {
         return createLapGapsAuditResponse(env, rid);
       }
