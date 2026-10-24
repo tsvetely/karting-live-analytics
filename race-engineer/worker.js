@@ -3506,6 +3506,62 @@ async function recoverMissingApexLaps(env, rid, fieldIds, existingRows) {
   return [...existingRows, ...additions];
 }
 
+// Independent, read-only audit: distinguish missing stored lap numbers from
+// an export formatting issue. Does not invent or alter any lap data.
+async function createLapGapsAuditResponse(env, rid) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const emit = values => controller.enqueue(encoder.encode(values.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",") + "\r\n"));
+      try {
+        emit(["apex_id", "team", "missing_lap", "last_recorded_lap", "stored_laps"]);
+        const entries = await sbGet(env, "apex_entries", {
+          select: "apex_id,team_name", race_id: `eq.${rid}`, limit: "1000"
+        });
+        const names = new Map(entries.map(e => [String(e.apex_id), String(e.team_name || "")]));
+        let currentId = null, seen = new Set(), maximum = 0, count = 0;
+        const flush = () => {
+          if (currentId === null) return;
+          for (let lap = 1; lap <= maximum; lap++) {
+            if (!seen.has(lap)) emit([currentId, names.get(currentId) || "", lap, maximum, count]);
+          }
+        };
+        let cursorId = null, cursorLap = 0;
+        for (let page = 0; page < 2000; page++) {
+          const params = {
+            select: "apex_id,lap_number", race_id: `eq.${rid}`,
+            order: "apex_id.asc,lap_number.asc", limit: "1000"
+          };
+          if (cursorId !== null) params.or = `(apex_id.gt.${cursorId},and(apex_id.eq.${cursorId},lap_number.gt.${cursorLap}))`;
+          const rows = await sbGet(env, "apex_lap_events", params);
+          if (!rows.length) break;
+          for (const row of rows) {
+            const id = String(row.apex_id ?? "").trim();
+            const lap = Number(row.lap_number);
+            if (!validApexId(id) || !Number.isInteger(lap) || lap < 1) continue;
+            if (currentId !== id) {
+              flush(); currentId = id; seen = new Set(); maximum = 0; count = 0;
+            }
+            seen.add(lap); maximum = Math.max(maximum, lap); count++;
+          }
+          const last = rows[rows.length - 1];
+          cursorId = String(last.apex_id); cursorLap = Number(last.lap_number);
+          if (rows.length < 1000) break;
+          if (page === 1999) throw new Error("Gap audit exceeded pagination limit");
+        }
+        flush(); controller.close();
+      } catch (error) {
+        console.error("LAP GAP AUDIT ERROR", error); controller.error(error);
+      }
+    }
+  });
+  return new Response(stream, {headers: {
+    "content-type": "text/csv; charset=utf-8",
+    "content-disposition": `attachment; filename="Race-${rid}-missing-laps.csv"`,
+    "cache-control": "no-store", "x-content-type-options": "nosniff"
+  }});
+}
+
 async function createLapRecordsCsvResponse(env, rid, snapshot) {
   // Stream pages instead of accumulating the full 12-hour race in Worker memory.
   // Only one kart's laps are retained at a time; no upstream Apex subrequests.
@@ -5204,6 +5260,10 @@ export default {
           if (validApexId(id)) names.set(id, String(entry.team_name || entry.name || "").trim());
         }
         return createPitStopsPdfResponse(rid, pits, [], names);
+      }
+
+      if (url.pathname === "/api/reports/lap-gaps.csv") {
+        return createLapGapsAuditResponse(env, rid);
       }
 
       if (url.pathname === "/api/reports/lap-time-records.csv") {
