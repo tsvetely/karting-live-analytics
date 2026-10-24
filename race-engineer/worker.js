@@ -5297,6 +5297,32 @@ export default {
         return json(await rawApexPayload(env, rid, rawSnapshot, url.searchParams.get("limit") || 200));
       }
 
+      // Bounded, read-only archive export. Each page uses ONE Supabase request.
+      // Export pages BEFORE changing DEFAULT_RACE_ID. Never silently omit failures.
+      if (url.pathname === "/api/archive/export-page") {
+        const table = String(url.searchParams.get("table") || "");
+        const allowed = new Set([
+          "apex_entries", "apex_lap_events", "apex_pit_stints",
+          "manual_lap_exclusions"
+        ]);
+        if (!allowed.has(table)) return json({ error: "Unsupported archive table" }, 400);
+        const sourceId = Number(url.searchParams.get("race_id"));
+        const page = Number(url.searchParams.get("page") || 0);
+        if (!Number.isSafeInteger(sourceId) || sourceId <= 0 ||
+            !Number.isSafeInteger(page) || page < 0 || page > 100000) {
+          return json({ error: "Invalid race_id or page" }, 400);
+        }
+        const pageSize = 500;
+        const ordering = table === "apex_lap_events" ? "apex_id.asc,lap_number.asc" :
+          table === "apex_pit_stints" ? "apex_id.asc,pit_number.asc" :
+          table === "manual_lap_exclusions" ? "apex_id.asc,lap_number.asc" : "apex_id.asc";
+        const rows = await sbGet(env, table, {
+          select: "*", race_id: `eq.${sourceId}`, order: ordering
+        }, { from: page * pageSize, to: (page + 1) * pageSize - 1 });
+        return json({ race_id: sourceId, table, page, page_size: pageSize,
+          count: rows.length, has_more: rows.length === pageSize, rows });
+      }
+
       if (url.pathname === "/api/reports/apex-raw.json") {
         const rawSnapshot = Number(rid) === Number(raceId(env)) ? await collectorSnapshot(env).catch(() => null) : null;
         return createRawApexJsonResponse(env, rid, rawSnapshot);
