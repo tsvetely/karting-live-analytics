@@ -5093,6 +5093,61 @@ export default {
         return json(results);
       }
 
+      // Explicit, non-destructive recovery: Apex detail -> upsert -> read-back.
+      // POST only; does not delete existing rows or invent missing lap numbers.
+      if (url.pathname === "/api/debug/repair-apex-detail") {
+        if (request.method !== "POST") return json({error:"POST required; no changes made"},405);
+        if (Number(rid) !== Number(raceId(env))) return json({error:"Only current race may be repaired"},400);
+        const apexId=String(url.searchParams.get("apex_id")||"").trim();
+        if (!validApexId(apexId)) return json({error:"Valid apex_id required"},400);
+        const snapshot=await collectorSnapshot(env);
+        if (!currentFieldIds(snapshot).has(apexId)) return json({error:"Apex ID not present in current live field"},400);
+        const expectedLaps=Number(snapshot?.lapCounts?.[apexId])||0;
+        const expectedPits=Number(snapshot?.pitCounts?.[apexId])||0;
+        if (!expectedLaps) return json({error:"No Apex lap count available"},409);
+        const count=Math.min(expectedLaps,800);
+        const detailRequest=`D#-${count}#D${apexId}.L#-${count}#D${apexId}.P#-999#D${apexId}.B#1#D${apexId}.INF`;
+        const apexResponse=await fetch("https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php",{
+          method:"POST",headers:{"content-type":"application/x-www-form-urlencoded; charset=UTF-8"},
+          body:new URLSearchParams({port:env.APEX_DETAIL_PORT||"8910",request:detailRequest})
+        });
+        if(!apexResponse.ok) return json({error:"Apex detail HTTP error",status:apexResponse.status},502);
+        const raw=await apexResponse.text();
+        const laps=parseLapRows(raw,rid).filter(r=>String(r.apex_id)===apexId);
+        const pits=parsePitRows(raw,String(snapshot?.teamNames?.[apexId]||""),rid)
+          .filter(r=>String(r.apex_id)===apexId && Number(r.pit_number)>0);
+        const result={race_id:Number(rid),apex_id:apexId,expected:{laps:expectedLaps,pits:expectedPits},
+          parsed:{laps:laps.length,pits:pits.length},writes:[],verification:{}};
+        if(!laps.length || (expectedPits>0&&!pits.length)) return json({...result,error:"Apex response missing lap or pit history; nothing written"},409);
+        for(const [table,rows,conflict] of [
+          ["apex_lap_events",laps,"race_id,apex_id,lap_number"],
+          ["apex_pit_stints",pits,"race_id,apex_id,pit_number"]]){
+          for(let i=0;i<rows.length;i+=100){
+            try{
+              await sbUpsert(env,table,rows.slice(i,i+100),conflict);
+              result.writes.push({table,from:i,count:Math.min(100,rows.length-i),ok:true});
+            }catch(error){
+              result.writes.push({table,from:i,ok:false,error:String(error)});
+              return json({...result,error:"Supabase write failed; existing records were not deleted"},502);
+            }
+          }
+        }
+        try{
+          const [storedLaps,storedPits]=await Promise.all([
+            sbGetAll(env,"apex_lap_events",{select:"lap_number",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,order:"lap_number.asc"}),
+            sbGetAll(env,"apex_pit_stints",{select:"pit_number",race_id:`eq.${rid}`,apex_id:`eq.${apexId}`,order:"pit_number.asc"})
+          ]);
+          const lapNumbers=new Set(storedLaps.map(r=>Number(r.lap_number)));
+          const pitNumbers=new Set(storedPits.map(r=>Number(r.pit_number)));
+          result.verification={stored_laps:lapNumbers.size,max_lap:Math.max(0,...lapNumbers),
+            stored_pits:pitNumbers.size,max_pit:Math.max(0,...pitNumbers),
+            missing_parsed_laps:laps.map(r=>Number(r.lap_number)).filter(n=>!lapNumbers.has(n)).slice(0,30),
+            missing_parsed_pits:pits.map(r=>Number(r.pit_number)).filter(n=>!pitNumbers.has(n)).slice(0,30)};
+        }catch(error){result.verification={error:String(error)};}
+        result.ok=!result.verification.error && !result.verification.missing_parsed_laps?.length && !result.verification.missing_parsed_pits?.length;
+        return json(result,result.ok?200:500);
+      }
+
       // Read-only diagnostic: compare live Apex grid, stored rows and API mapping.
       if (url.pathname === "/api/debug/apex-integrity") {
         const requestedId = String(url.searchParams.get("apex_id") || "").trim();
