@@ -3182,11 +3182,21 @@ function lapAnalysisByKart(lapRows, pitRows, exclusionRows, ids) {
 
 async function livePayload(env, rid, suppliedSnapshot = null) {
   const isCurrentRace = Number(rid) === Number(raceId(env));
-  const [entriesRaw, snapshot, teamMap] = await Promise.all([
+  // The live endpoint must remain bounded: no Durable Object calls and no
+  // historical lap/stint scans. One grid request plus small database reads.
+  const [entriesRaw, snapshot] = await Promise.all([
     loadEntries(env, rid),
-    isCurrentRace ? (suppliedSnapshot ? Promise.resolve(suppliedSnapshot) : collectorSnapshot(env).catch(() => null)) : Promise.resolve(null),
-    stableTeamNameMap(env, rid)
+    isCurrentRace ? (suppliedSnapshot ? Promise.resolve(suppliedSnapshot) : directApexSnapshot(env).catch(error => {
+      console.warn("LIVE GRID UNAVAILABLE:", error?.message || error);
+      return null;
+    })) : Promise.resolve(null)
   ]);
+  const teamMap = new Map();
+  for (const entry of entriesRaw) {
+    const id = String(entry.apex_id || "");
+    const name = stripHtml(entry.team_name);
+    if (id && name && !badTeamName(name, entry.current_driver)) teamMap.set(id, name);
+  }
 
   const fieldIds = isCurrentRace
     ? currentFieldIds(snapshot)
@@ -3202,18 +3212,24 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
   // The full lap history is > 100k rows and cannot be read in one
   // Cloudflare Worker invocation (subrequest limit). Keep live data available.
   // Do not display zero valid laps when analytics have not been calculated.
-  const [stints, pits] = await Promise.all([
-    stintsPayload(env,rid,snapshot),
-    loadPits(env,rid)
-  ]);
+  const pits = await loadPits(env, rid);
   const kartAnalysis = new Map();
-
-  const finalStintById=new Map();
-  for (const stint of stints) {
-    const id=String(stint.apex_id);
-    const previous=finalStintById.get(id);
-    if (!previous || Number(stint.stint_number)>Number(previous.stint_number)) finalStintById.set(id,stint);
+  const finalStintById = new Map();
+  const pitCountById = new Map();
+  for (const pit of pits) {
+    const id = String(pit.apex_id || "");
+    if (!fieldIds.has(id)) continue;
+    const n = Number(pit.pit_number) || 0;
+    if (n > (pitCountById.get(id) || 0)) {
+      pitCountById.set(id, n);
+      finalStintById.set(id, pit);
+    }
+    if (!teamMap.has(id)) {
+      const name = stripHtml(pit.team_name);
+      if (name && !badTeamName(name, pit.driver_name)) teamMap.set(id, name);
+    }
   }
+
   const current=[];
   let raceLap=0,pitTotal=0,raceBest=null;
 
@@ -3227,7 +3243,7 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
     const snapshotPits=Number(snapshot?.pitCounts?.[id]);
     const pitCount=isCurrentRace && Number.isFinite(snapshotPits)
       ? Math.max(0,Math.trunc(snapshotPits))
-      : pits.filter(row=>String(row.apex_id)===id).reduce((max,row)=>Math.max(max,Number(row.pit_number)||0),0);
+      : (pitCountById.get(id) || 0);
     raceLap=Math.max(raceLap,Number(lap)||0);
     pitTotal+=pitCount;
     const apexBest = isCurrentRace ? number(snapshot?.bestLaps?.[id]) : number(entry.best_lap);
@@ -3240,8 +3256,8 @@ async function livePayload(env, rid, suppliedSnapshot = null) {
       driver_name:(isCurrentRace?snapshot?.drivers?.[id]:null)||stint.driver_name||entry.current_driver||null,
       current_driver:(isCurrentRace?snapshot?.drivers?.[id]:null)||stint.driver_name||entry.current_driver||null,
       race_lap:Number(lap)||0,live_lap_count:Number(lap)||0,pit_count:pitCount,
-      stint_number:number(stint.stint_number)||pitCount+1,start_lap_count:number(stint.start_lap_count)||0,
-      stint_laps:number(stint.total_laps),total_stint_laps:number(stint.total_laps),
+      stint_number:pitCount+1,start_lap_count:number(stint.pit_lap)||0,
+      stint_laps:Math.max(0,(Number(lap)||0)-(number(stint.pit_lap)||0)),total_stint_laps:Math.max(0,(Number(lap)||0)-(number(stint.pit_lap)||0)),
       valid_laps:stats.valid_laps,
       stint_status:stint.status||null,data_complete:stint.data_complete!==false,expected_pit_count:number(stint.expected_pit_count),stored_pit_count:number(stint.stored_pit_count),
       live_last_lap:isCurrentRace?(number(snapshot?.lastLaps?.[id]) ?? number(entry.last_lap)):number(entry.last_lap),
@@ -5106,28 +5122,8 @@ export default {
           kart_source: cells?.c3 ? "grid-cell-or-row-attribute" : "not-present-in-grid" });
       }
 
-      if (
-        url.pathname ===
-        "/api/live"
-      ) {
-        ctx.waitUntil(
-          startCollector(
-            env
-          )
-            .catch(
-              console.error
-            )
-        );
-
-
-        const snapshot = await collectorSnapshot(env).catch(() => null);
-        return json(
-          await livePayload(
-            env,
-            raceId(env),
-            snapshot
-          )
-        );
+      if (url.pathname === "/api/live") {
+        return json(await livePayload(env, raceId(env)));
       }
 
 
@@ -5135,7 +5131,7 @@ export default {
         url.pathname ===
         "/api/overview"
       ) {
-        const snapshot = await collectorSnapshot(env).catch(() => null);
+        const snapshot = null;
         const payload =
           await livePayload(
             env,
