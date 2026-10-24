@@ -1907,10 +1907,6 @@ function renderOverview() {
   )}
 </td>
 
-<td class="good">
-  ${time(row.apex_best_lap)}
-</td>
-
 <td>
   ${time(
     pick(
@@ -1922,20 +1918,16 @@ function renderOverview() {
 </td>
 
 <td class="good">
-  ${time(
-    pick(
-      row,
-      "best_lap_time",
-      "best_lap",
-      "live_best_lap"
-    )
-  )}
+  ${time(row.apex_best_lap)}
 </td>
 
 <td>
   ${esc(
-    row.best_lap_number ??
-    "—"
+    number(row.apex_best_lap) !== null &&
+    number(row.best_lap_time) !== null &&
+    Math.abs(number(row.apex_best_lap) - number(row.best_lap_time)) < 0.0005
+      ? (row.best_lap_number ?? "—")
+      : "—"
   )}
 </td>
 
