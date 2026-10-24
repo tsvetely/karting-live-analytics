@@ -5183,6 +5183,51 @@ export default {
           raw_samples:relevant.slice(0,5).concat(relevant.slice(-5)).map(line=>line.slice(0,350))});
       }
 
+      // Read-only, complete timing history for a single current-race entry.
+      // Keep status-prefixed laps, which the analytics parser intentionally omits.
+      if (url.pathname === "/api/reports/raw-entry-laps") {
+        const id = String(url.searchParams.get("apex_id") || "").trim();
+        const officialMillis = Math.round(Number(url.searchParams.get("official_best")) * 1000);
+        if (!validApexId(id) || !Number.isSafeInteger(officialMillis) || officialMillis <= 0) {
+          return json({error:"Invalid entry or official best"}, 400);
+        }
+        const livePort = (() => {
+          try { return new URL(env.APEX_WS_URL || "wss://live-data.apex-timing.com:8913/").port || "8913"; }
+          catch { return "8913"; }
+        })();
+        const ports = [...new Set([livePort, env.APEX_DETAIL_PORT || "8910"])];
+        for (const port of ports) {
+          const request = `D#-800#D${id}.L#-800#D${id}.P#-999#D${id}.B#1#D${id}.INF`;
+          try {
+            const response = await fetch("https://live-data.apex-timing.com/live-timing/commonv2/functions/request.php", {
+              method:"POST", headers:{"content-type":"application/x-www-form-urlencoded; charset=UTF-8"},
+              body:new URLSearchParams({port,request})
+            });
+            if (!response.ok) continue;
+            const raw = await response.text();
+            const lines = raw.split(/\r?\n/);
+            const best = lines.find(line => line.startsWith(`D${id}.BL#`));
+            const bestCell = best?.split("#")[1]?.split("|")[3] || "";
+            const bestMatch = /^[a-zA-Z]*(\d+)$/.exec(bestCell.trim());
+            if (!bestMatch || Number(bestMatch[1]) !== officialMillis) continue;
+            const pattern = new RegExp(`^D${id}\\.L0*(\\d+)#(.+)$`);
+            const laps = [];
+            for (const line of lines) {
+              const match = pattern.exec(line.trim());
+              if (!match) continue;
+              const cells = match[2].split("|");
+              const timeCell = (cells[3] || "").trim();
+              const numeric = /^[a-zA-Z]*(\d+)$/.exec(timeCell);
+              laps.push({lap_number:Number(match[1]), raw_time:timeCell,
+                lap_time:numeric ? Number(numeric[1])/1000 : null});
+            }
+            if (!laps.length) continue;
+            return json({apex_id:id, port, official_best:officialMillis/1000, laps});
+          } catch (error) { console.warn("Raw entry history unavailable", id, port, String(error)); }
+        }
+        return json({error:"No matching official timing history for this entry"}, 409);
+      }
+
       // Per-kart read: one small, indexed lap history instead of a race-wide
       // scan that exceeds the Worker subrequest budget.
       if (url.pathname === "/api/overview/lap-stats") {

@@ -4836,6 +4836,8 @@ function initReports() {
       throw new Error("Current race finishing order is unavailable. CSV export stopped to prevent mixing races.");
     }
     const currentField = isLiveRace() ? new Set(finishOrder.keys()) : null;
+    // Reconcile persisted laps against the original per-entry timing history.
+    // Do not silently replace missing source records with '-' or another race's laps.
     const grouped = new Map();
     for (const row of laps) {
       const id = String(row.apex_id ?? "");
@@ -4843,6 +4845,34 @@ function initReports() {
       if (!/^\d+$/.test(id) || (currentField && !currentField.has(id)) || !Number.isInteger(lap) || lap <= 0 || !Number.isFinite(value) || value <= 0) continue;
       if (!grouped.has(id)) grouped.set(id, new Map());
       grouped.get(id).set(lap, value);
+    }
+    if (isLiveRace()) {
+      const officialBest = new Map(liveRows.map(r => [String(r.apex_id), Number(r.apex_best_lap)]));
+      const ids = [...currentField];
+      let next = 0;
+      await Promise.all(Array.from({length:Math.min(4,ids.length)}, async () => {
+        while (next < ids.length) {
+          const id = ids[next++];
+          const best = officialBest.get(id);
+          if (!Number.isFinite(best) || best <= 0) throw new Error(`Missing official BEST for entry ${id}`);
+          const response = await fetch(apiUrl(`/api/reports/raw-entry-laps?apex_id=${encodeURIComponent(id)}&official_best=${encodeURIComponent(best)}`), {cache:"no-store"});
+          if (!response.ok) throw new Error(`Original lap history for ${id}: HTTP ${response.status} - ${(await response.text()).slice(0,200)}`);
+          const detail = await response.json();
+          if (String(detail.apex_id) !== id || !Array.isArray(detail.laps) || !detail.laps.length) {
+            throw new Error(`Invalid original lap history for ${id}`);
+          }
+          const original = new Map();
+          for (const row of detail.laps) {
+            const lap = Number(row.lap_number);
+            if (!Number.isInteger(lap) || lap <= 0) continue;
+            // Preserve the original timing cell, including its status marker.
+            original.set(lap, String(row.raw_time || ""));
+          }
+          if (!original.size) throw new Error(`No original laps for ${id}`);
+          grouped.set(id, original);
+          if (button) button.textContent = `VERIFYING ORIGINAL LAPS: ${next}/${ids.length}`;
+        }
+      }));
     }
     if (isLiveRace() && grouped.size !== currentField.size) {
       const missing = [...currentField].filter(id => !grouped.has(id));
@@ -4871,7 +4901,8 @@ function initReports() {
         const cells = [String(base)];
         for (let i=1; i<=blockSize; i++) {
           const value = values.get(base+i);
-          cells.push(Number.isFinite(value) ? value.toFixed(3) : "-");
+          if (isLiveRace() && base+i <= maxLap && value === undefined) throw new Error(`Missing original lap ${base+i} for entry ${id}; export stopped.`);
+          cells.push(typeof value === "string" ? value : Number.isFinite(value) ? value.toFixed(3) : "-");
         }
         lines.push(cells.join(","));
       }
