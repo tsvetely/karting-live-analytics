@@ -5169,7 +5169,25 @@ export default {
           })
         ]);
         const stats = lapAnalysisByKart(laps, pits, exclusions, [id]).get(id);
-        return json({race_id:rid, apex_id:id, ...stats});
+        // The official timing detail feed is the sole source for BEST LAP.
+        // Never reuse the analytical best-lap number or the stored lap-history number.
+        const officialBest = Number(url.searchParams.get("official_best"));
+        let officialLapNumber = null;
+        if (url.searchParams.has("official_best") &&
+            Number.isFinite(officialBest) && officialBest > 0) {
+          try {
+            const raw = await directApexDetail(env, id, 800);
+            const officialRows = parseLapRows(raw, rid)
+              .filter(row => String(row.apex_id) === id);
+            const matching = officialRows.find(row =>
+              Math.abs(Number(row.lap_time) - officialBest) < 0.0005);
+            if (matching) officialLapNumber = Number(matching.lap_number);
+          } catch (error) {
+            console.warn("Official timing lap detail unavailable", id, String(error));
+          }
+        }
+        return json({race_id:rid, apex_id:id, ...stats,
+          best_lap_number: officialLapNumber});
       }
 
       if (url.pathname === "/api/live") {
