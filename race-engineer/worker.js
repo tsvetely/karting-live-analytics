@@ -717,6 +717,22 @@ function parseGridData(html) {
         image_class: attr(imageAttrs, "class") || null
       };
     }
+    // Some timing layouts render the kart number outside a TD/TH data-id cell.
+    // Inspect only this row's markup; never infer a kart number from the Apex ID.
+    if (!fields.c3) {
+      const rowAttrs = attrs;
+      const attrValue = (name) => {
+        const safe = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const m = new RegExp(`(?:^|\\s)${safe}\\s*=\\s*(?:["']([^"']+)["']|([^\\s>]+))`, "i").exec(rowAttrs);
+        return m?.[1] || m?.[2] || "";
+      };
+      const explicitKart = ["data-kart", "data-kart-number", "data-number", "data-no"]
+        .map(attrValue).find(v => /^\d{1,3}$/.test(String(v).trim()));
+      const embeddedKart = /<[^>]+\bdata-id=["']r\d+c3["'][^>]*>([\s\S]*?)<\/[^>]+>/i.exec(match[4]);
+      const embeddedValue = embeddedKart ? stripHtml(embeddedKart[1]).trim() : "";
+      const kart = explicitKart || (/^\d{1,3}$/.test(embeddedValue) ? embeddedValue : "");
+      if (kart) fields.c3 = { column: "3", type: "no", value: kart };
+    }
     rows.set(apexId, fields);
   }
 
@@ -5048,7 +5064,8 @@ export default {
           source: "direct-apex-grid", field_count: snapshot?.field_count || 0,
           column_types: snapshot?.columnTypes || {},
           kart: cells?.c3 || null, nation: cells?.c4 || null,
-          available_columns: cells ? Object.keys(cells) : [] });
+          available_columns: cells ? Object.keys(cells) : [],
+          kart_source: cells?.c3 ? "grid-cell-or-row-attribute" : "not-present-in-grid" });
       }
 
       if (
