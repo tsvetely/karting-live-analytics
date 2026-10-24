@@ -1537,13 +1537,29 @@ function snapshotFromGrid(grid) {
   const lastLaps = {};
   const teamNames = {};
   const drivers = {};
+  // Preserve the original Apex grid cells for Live Field rendering.
+  // This is an in-memory snapshot only: no Durable Object storage writes.
+  const rawRows = {};
+  const knownColumnTypes = {
+    "1": "sta", "2": "rk", "3": "no", "4": "nat", "5": "dr",
+    "6": "s1", "7": "s2", "8": "s3", "9": "llp", "10": "gap",
+    "11": "int", "12": "blp", "13": "tlp", "14": "otr", "15": "pit"
+  };
 
   for (const [rawId, fields] of grid?.rows || []) {
     const id = String(rawId);
     if (!validApexId(id)) continue;
     fieldApexIds.push(id);
+    rawRows[id] = {};
+    for (const [key, cell] of Object.entries(fields || {})) {
+      const column = String(cell?.column || key.replace(/^c/, ""));
+      rawRows[id][key] = {
+        ...cell,
+        type: cell?.type || grid?.columnTypes?.get(`c${column}`) || knownColumnTypes[column] || ""
+      };
+    }
 
-    for (const cell of Object.values(fields || {})) {
+    for (const cell of Object.values(rawRows[id])) {
       const type = String(cell?.type || "").toLowerCase();
       const column = String(cell?.column || "");
       const value = cell?.value;
@@ -1594,6 +1610,7 @@ function snapshotFromGrid(grid) {
     fieldApexIds,
     positions,
     columnTypes: Object.fromEntries(grid?.columnTypes || []),
+    rawRows,
     pitCounts,
     lapCounts,
     bestLaps,
