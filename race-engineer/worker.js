@@ -3458,6 +3458,35 @@ const ARCHIVE_TABLES = [
   ["manual_lap_exclusions", "race_id,apex_id,lap_number"]
 ];
 
+// Resolve the complete event roster from the authoritative timing grid.
+// Refuse to infer membership from the mixed historical race_id=1 rows.
+async function archiveVratsaFromLiveGrid(env) {
+  const snapshot = await directApexSnapshot(env);
+  const ids = [...currentFieldIds(snapshot)].sort((a, b) => Number(a) - Number(b));
+  const markers = ["26710", "26715", "26707"];
+  if (ids.length !== 66 || markers.some(id => !ids.includes(id))) {
+    throw new Error(`Live grid is not the verified Vratsa event (teams=${ids.length}, known markers=${markers.filter(id => ids.includes(id)).length}/3). Nothing copied.`);
+  }
+  const source = 1;
+  const target = 2;
+  const current = Number(env.DEFAULT_RACE_ID || 1);
+  if (current !== source) {
+    throw new Error(`Current race ID is ${current}; refusing to archive an unexpected active race`);
+  }
+  const existing = await sbGetAll(env, "apex_entries", {
+    select: "apex_id", race_id: `eq.${source}`
+  });
+  const stored = new Set(existing.map(row => String(row.apex_id)));
+  const missing = ids.filter(id => !stored.has(id));
+  if (missing.length) throw new Error(`Vratsa roster has ${missing.length} entries missing from database: ${missing.join(",")}`);
+  return archiveVerifiedRoster(env, {
+    source_race_id: source,
+    target_race_id: target,
+    apex_ids: ids,
+    confirm: "ARCHIVE 1 TO 2"
+  });
+}
+
 async function archiveVerifiedRoster(env, body) {
   const source = Number(body?.source_race_id);
   const target = Number(body?.target_race_id);
@@ -5315,6 +5344,17 @@ export default {
         );
       }
 
+
+      if (url.pathname === "/api/archive/vratsa" && request.method === "POST") {
+        if (!env.ARCHIVE_TOKEN || request.headers.get("x-archive-token") !== env.ARCHIVE_TOKEN) {
+          return json({error:"Unauthorized"}, 401);
+        }
+        try {
+          return json(await archiveVratsaFromLiveGrid(env));
+        } catch (error) {
+          return json({error:String(error?.message || error)}, 409);
+        }
+      }
 
       if (url.pathname === "/api/archive/verified-roster" && request.method === "POST") {
         if (!env.ARCHIVE_TOKEN ||
