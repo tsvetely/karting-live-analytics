@@ -2915,6 +2915,13 @@ async function loadEvents(
 // HISTORY OVERVIEW
 // ============================================================
 
+async function loadHistoricalOverview() {
+  // Persisted race entries remain available even when historical stints fail.
+  const data = await api("/api/overview");
+  S.overview = Array.isArray(data.rows) ? data.rows : [];
+  S.loaded.overview = true;
+}
+
 function buildHistoricalOverview() {
   const latest =
     new Map();
@@ -3089,7 +3096,7 @@ async function loadFullRace(
       );
 
 
-      buildHistoricalOverview();
+      await loadHistoricalOverview();
 
       setStatus(
         true,
@@ -3141,7 +3148,7 @@ async function loadCurrentView(
       } else if (
         !S.loaded.overview
       ) {
-        buildHistoricalOverview();
+        await loadHistoricalOverview();
       }
       break;
 
@@ -4866,13 +4873,7 @@ function initReports() {
             const lap = Number(row.lap_number);
             if (!Number.isInteger(lap) || lap <= 0) continue;
             // Preserve the original timing cell, including its status marker.
-            // Protocol cells are milliseconds with an optional status prefix.
-            // Keep every lap, but export the human-readable time, not raw integers.
-            const ms = Number(row.lap_time);
-            if (!Number.isFinite(ms) || ms <= 0) {
-              throw new Error(`Invalid timing value for entry ${id}, lap ${lap}`);
-            }
-            original.set(lap, ms.toFixed(3));
+            original.set(lap, String(row.raw_time || ""));
           }
           if (!original.size) throw new Error(`No original laps for ${id}`);
           grouped.set(id, original);
@@ -5035,6 +5036,7 @@ function initReports() {
       throw new Error("Live field is unavailable; refusing to mix race records.");
     }
     const rankById = new Map(liveRows.filter(r => Number(r.position) > 0).map(r => [String(r.apex_id), Number(r.position)]));
+    if (!liveIds.size) throw new Error("Official finishing classification is unavailable; refusing an unverified pit report.");
     const ids = [...new Set(entries.map(r => String(r.apex_id)).filter(id => !liveIds.size || liveIds.has(id)))].sort((a,b) => {
       const ar = rankById.get(a), br = rankById.get(b);
       return (ar ?? Infinity) - (br ?? Infinity) || Number(a) - Number(b);
@@ -5059,7 +5061,9 @@ function initReports() {
           method: "POST", cache: "no-store", headers: {"content-type": "application/json"},
           body: JSON.stringify({race_id: Number(rid), apex_id: id,
             entries: byEntry.get(id) || [], pits: byPit.get(id) || [],
-            exclusions: byExclusion.get(id) || [], laps: byLap.get(id) || []})
+            exclusions: byExclusion.get(id) || [], laps: byLap.get(id) || [],
+            finish_lap: Number(liveRows.find(r => String(r.apex_id) === id)?.lap_count ?? liveRows.find(r => String(r.apex_id) === id)?.laps),
+            expected_pits: Number(liveRows.find(r => String(r.apex_id) === id)?.pits)})
         });
         if (!response.ok) throw new Error(`Pit stints ${id}: ${(await response.text()).slice(0, 400)}`);
         const data = await response.json();

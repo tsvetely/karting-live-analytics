@@ -3191,8 +3191,8 @@ function lapAnalysisByKart(lapRows, pitRows, exclusionRows, ids) {
   return result;
 }
 
-async function livePayload(env, rid, suppliedSnapshot = null) {
-  const isCurrentRace = Number(rid) === Number(raceId(env));
+async function livePayload(env, rid, suppliedSnapshot = null, forceHistory = false) {
+  const isCurrentRace = !forceHistory && Number(rid) === Number(raceId(env));
   // The live endpoint must remain bounded: no Durable Object calls and no
   // historical lap/stint scans. One grid request plus small database reads.
   const [entriesRaw, snapshot] = await Promise.all([
@@ -5449,7 +5449,8 @@ export default {
           await livePayload(
             env,
             rid,
-            snapshot
+            snapshot,
+            true
           );
 
 
