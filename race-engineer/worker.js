@@ -4157,23 +4157,40 @@ function buildFormattedPitPdf(stints, rid) {
     const displayName = `${kart ? `${kart} - ` : ''}${team}`;
     // Both Total columns have different meanings in the source report:
     // accumulated pit time and accumulated on-track time respectively.
-    const hms = value => {
-      const m = /^(\d+):(\d{2}):(\d{2})(?:\.(\d+))?$/.exec(String(value || ''));
-      return m ? Number(m[1])*3600+Number(m[2])*60+Number(m[3])+Number('0.'+(m[4]||'0')) : null;
+    const durationSeconds = value => {
+      const text = String(value ?? '').trim();
+      // Pit duration is MM:SS.mmm; on-track duration is HH:MM:SS.
+      const match = /^(\d+):(\d{2})(?::(\d{2}))?(?:\.(\d+))?$/.exec(text);
+      if (!match) return null;
+      const fraction = Number(`0.${match[4] || '0'}`);
+      return match[3] !== undefined
+        ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + fraction
+        : Number(match[1]) * 60 + Number(match[2]) + fraction;
     };
     const asHms = seconds => {
       if (!Number.isFinite(seconds)) return '';
       const n = Math.round(seconds);
-      return `${String(Math.floor(n/3600)).padStart(2,'0')}:${String(Math.floor(n%3600/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
+      return `${String(Math.floor(n / 3600)).padStart(2, '0')}:${String(Math.floor(n % 3600 / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
     };
-    let cumulativePit = 0, cumulativeTrack = 0;
-    const calculated = rows.map(r => {
-      const pitSeconds = hms(r.pit_time);
-      const trackSeconds = hms(r.on_track);
+    let cumulativePit = 0;
+    const trackByDriver = new Map();
+    const calculated = rows.map((r, index) => {
+      const pitSeconds = durationSeconds(r.pit_time);
+      const trackSeconds = durationSeconds(r.on_track);
+      const driver = String(cleanDriver(r.driver_name) || '').trim().toLocaleLowerCase();
+      const isFinal = index === rows.length - 1 && !r.pit_time;
       if (pitSeconds !== null) cumulativePit += pitSeconds;
-      if (trackSeconds !== null) cumulativeTrack += trackSeconds;
-      return {...r, report_pit_total: pitSeconds !== null ? asHms(cumulativePit) : '',
-        report_track_total: trackSeconds !== null ? asHms(cumulativeTrack) : ''};
+      if (driver && trackSeconds !== null) {
+        trackByDriver.set(driver, (trackByDriver.get(driver) || 0) + trackSeconds);
+      }
+      return {
+        ...r,
+        // The organiser leaves cumulative pit time empty on the finish row.
+        report_pit_total: isFinal ? '' : (pitSeconds !== null ? asHms(cumulativePit) : ''),
+        // This is cumulative ON-TRACK time for the individual driver, not the team.
+        report_track_total: driver && trackByDriver.has(driver) ? asHms(trackByDriver.get(driver)) : '',
+        report_finish: isFinal
+      };
     });
     const pageSize = 28;
     for (let start=0; start<calculated.length; start+=pageSize) {
@@ -4190,7 +4207,7 @@ function buildFormattedPitPdf(stints, rid) {
         const r=segment[i], y=top-rowHeight*(i+2);
         if (i%2===1) fill(c,16,y,806,rowHeight,'0.94');
         const cells=[r.stint_number,r.end_lap_count??r.current_lap_count,r.pit_hour,r.report_pit_total,r.on_track,r.total_laps,
-          cleanDriver(r.driver_name)||'',r.report_track_total,time(r.best_lap_time),time(r.avg_lap_time),r.pit_time,r.is_live?'(Finish)':r.pit_hour];
+          cleanDriver(r.driver_name)||'',r.report_track_total,time(r.best_lap_time),time(r.avg_lap_time),r.pit_time,r.report_finish?'(Finish)':r.pit_hour];
         cells.forEach((v,j)=>drawText(c,fmt(v).slice(0,j===6?29:15),x[j]+3,y+4,7,j===4||j===6));
       }
       const bottom=top-rowHeight*(segment.length+1);
