@@ -5481,10 +5481,18 @@ export default {
             keys.some(k => body[k].some(row => Number(row.race_id) !== sourceId || String(row.apex_id) !== id))) {
           return json({error: "Invalid bounded pit stint data"}, 400);
         }
-        const finishLap = Number(body.finish_lap);
-        const expectedPits = Number(body.expected_pits);
+        // A missing live-field value is not proof that stored race history is incomplete.
+        // Resolve it exclusively from the already race- and kart-scoped report rows.
+        const suppliedFinish = Number(body.finish_lap);
+        const suppliedPitCount = Number(body.expected_pits);
         const sortedPits = [...body.pits].sort((a,b) => Number(a.pit_number)-Number(b.pit_number));
         const maxPitLap = sortedPits.reduce((m,p) => Math.max(m, Number(p.pit_lap)||0),0);
+        const entryFinish = body.entries.reduce((m, row) => Math.max(m, Number(row.lap_count) || 0), 0);
+        const recordedFinish = body.laps.reduce((m, row) => Math.max(m, Number(row.lap_number) || 0), 0);
+        const finishLap = Number.isSafeInteger(suppliedFinish) && suppliedFinish > 0
+          ? suppliedFinish : Math.max(entryFinish, recordedFinish);
+        const expectedPits = Number.isSafeInteger(suppliedPitCount) && suppliedPitCount >= 0
+          ? suppliedPitCount : sortedPits.length;
         if (!Number.isSafeInteger(finishLap) || finishLap < 1 ||
             !Number.isSafeInteger(expectedPits) || expectedPits < 0 ||
             sortedPits.length !== expectedPits || maxPitLap > finishLap ||
