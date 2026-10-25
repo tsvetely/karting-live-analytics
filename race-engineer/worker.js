@@ -2477,7 +2477,7 @@ function calculateRawStintStats(apexId, lapRows, startLap, endLap, exclusions, o
 
 async function stintsPayload(env, rid, snapshot = null, preloaded = null) {
   const isCurrentRace = Number(rid) === Number(raceId(env));
-  const realSnapshot = isCurrentRace ? (snapshot || await collectorSnapshot(env).catch(() => null)) : null;
+  const realSnapshot = isCurrentRace && !preloaded ? (snapshot || await collectorSnapshot(env).catch(() => null)) : null;
 
   const [pitsRaw, entriesRaw, exclusionsRaw, teamMap] = preloaded
     ? [preloaded.pits, preloaded.entries, preloaded.exclusions,
@@ -2501,7 +2501,7 @@ async function stintsPayload(env, rid, snapshot = null, preloaded = null) {
 
   const lapRaw = preloaded ? preloaded.laps : await loadLapEventsForApexIds(env, rid, [...fieldIds]);
   const entries = filterCurrentField(entriesRaw, fieldIds);
-  const pits = isCurrentRace
+  const pits = isCurrentRace && !preloaded
     ? currentPitChain(filterCurrentField(pitsRaw, fieldIds), realSnapshot)
     : filterCurrentField(pitsRaw, fieldIds);
   const exclusions = manualExclusionSet(filterCurrentField(exclusionsRaw, fieldIds));
@@ -2562,8 +2562,11 @@ async function stintsPayload(env, rid, snapshot = null, preloaded = null) {
     const snapshotLap=Number(realSnapshot?.lapCounts?.[id]);
     const entryLap=Number(entry.lap_count);
     const lastRecordedLap = laps.reduce((max,row)=>Math.max(max,Number(row.lap_number)||0),0);
-    const currentLap=isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap) ? entryLap : lastRecordedLap);
-    const expectedPitCount=isCurrentRace ? Number(realSnapshot?.pitCounts?.[id]) : teamPits.length;
+    const reportLap = Number(preloaded?.finish_lap);
+    const currentLap = preloaded && Number.isSafeInteger(reportLap) && reportLap > 0
+      ? reportLap
+      : isCurrentRace && Number.isFinite(snapshotLap) ? snapshotLap : (Number.isFinite(entryLap) ? entryLap : lastRecordedLap);
+    const expectedPitCount=preloaded ? Number(preloaded.expected_pits) : isCurrentRace ? Number(realSnapshot?.pitCounts?.[id]) : teamPits.length;
     if (Number.isFinite(currentLap) && currentLap>=start) {
       const emptyStats={
         valid_laps:0, avg_lap_time:null, best_lap_time:null, best_lap_number:null,
@@ -2575,7 +2578,7 @@ async function stintsPayload(env, rid, snapshot = null, preloaded = null) {
       const stats=currentLap>start
         ? (calculateRawStintStats(id,laps,start,currentLap,exclusions,{globalExcluded,splitRange:splitById.get(id),rainStartLap:rainStartById.get(id)}) || emptyStats)
         : emptyStats;
-      const liveStintNumber=isCurrentRace && Number.isFinite(expectedPitCount)
+      const liveStintNumber=isCurrentRace && !preloaded && Number.isFinite(expectedPitCount)
         ? Math.max(1,Math.trunc(expectedPitCount)+1)
         : stintNumber;
       result.push({
@@ -2583,10 +2586,10 @@ async function stintsPayload(env, rid, snapshot = null, preloaded = null) {
         team_name:resolveTeam(id,teamMap,entry.team_name),
         driver_name:entry.current_driver||null,
         stint_number:liveStintNumber, start_lap_count:start,
-        end_lap_count:isCurrentRace?null:currentLap,
+        end_lap_count:isCurrentRace && !preloaded?null:currentLap,
         current_lap_count:currentLap, total_laps:Math.max(0,currentLap-start), ...stats,
         pit_hour:null,on_track:null,pit_time:null,total_time:null,
-        is_live:isCurrentRace,status:isCurrentRace?"LIVE":"COMPLETED",
+        is_live:isCurrentRace && !preloaded,status:isCurrentRace && !preloaded?"LIVE":"COMPLETED",
         data_complete:true, expected_pit_count:Number.isFinite(expectedPitCount)?Math.trunc(expectedPitCount):null, stored_pit_count:teamPits.length,
         direction_split_lap:directionSplitLap, global_rain_transition_lap:globalRainTransitionLap
       });
@@ -5478,9 +5481,17 @@ export default {
             keys.some(k => body[k].some(row => Number(row.race_id) !== sourceId || String(row.apex_id) !== id))) {
           return json({error: "Invalid bounded pit stint data"}, 400);
         }
-        const snapshot = sourceId === Number(raceId(env))
-          ? await collectorSnapshot(env).catch(() => null) : null;
-        const rows = await stintsPayload(env, sourceId, snapshot, {...body, reportFieldIds: [id]});
+        const finishLap = Number(body.finish_lap);
+        const expectedPits = Number(body.expected_pits);
+        const sortedPits = [...body.pits].sort((a,b) => Number(a.pit_number)-Number(b.pit_number));
+        const maxPitLap = sortedPits.reduce((m,p) => Math.max(m, Number(p.pit_lap)||0),0);
+        if (!Number.isSafeInteger(finishLap) || finishLap < 1 ||
+            !Number.isSafeInteger(expectedPits) || expectedPits < 0 ||
+            sortedPits.length !== expectedPits || maxPitLap > finishLap ||
+            sortedPits.some((p,i) => Number(p.pit_number) !== i+1)) {
+          return json({error: "Incomplete or mismatched pit history; refusing to label partial data as Finish", apex_id:id, finish_lap:finishLap, expected_pits:expectedPits, stored_pits:sortedPits.length}, 409);
+        }
+        const rows = await stintsPayload(env, sourceId, null, {...body, finish_lap:finishLap, expected_pits:expectedPits, reportFieldIds: [id]});
         return json({race_id: sourceId, apex_id: id, rows});
       }
 
