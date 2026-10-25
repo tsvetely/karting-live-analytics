@@ -1400,12 +1400,30 @@ async function directCronSync(env) {
   } catch (error) {
     console.warn("DIRECT_APEX_GRID_UNAVAILABLE", String(error));
   }
+  // Never replay an old race's stored IDs when the official live grid is unavailable.
+  // This is particularly important at a session change: the previous event must
+  // remain read-only until DEFAULT_RACE_ID is explicitly switched.
   if (!ids.length) {
-    const rows = await sbGet(env, "apex_entries", {
-      select: "apex_id", race_id: `eq.${Number(env.DEFAULT_RACE_ID || 1)}`,
-      order: "updated_at.desc", limit: "100"
-    });
-    ids = [...new Set(rows.map(row => String(row.apex_id)).filter(validApexId))].slice(0, 66).sort((a,b)=>Number(a)-Number(b));
+    console.warn("DIRECT_SYNC_PAUSED_NO_LIVE_GRID", JSON.stringify({race_id:raceId(env)}));
+    return;
+  }
+
+  // Refuse to mix a new official field into an existing race_id. The old
+  // database contains multiple events under race_id=1; we cannot repair that
+  // retrospectively by guessing, but we can prevent further contamination.
+  const existing = await sbGet(env, "apex_entries", {
+    select: "apex_id", race_id: `eq.${raceId(env)}`,
+    order: "updated_at.desc", limit: "1000"
+  });
+  const storedIds = new Set(existing.map(row => String(row.apex_id)));
+  const overlap = ids.filter(id => storedIds.has(id)).length;
+  if (storedIds.size >= 20 && ids.length >= 10 && overlap < Math.max(3, Math.ceil(ids.length * 0.1))) {
+    console.error("RACE_CHANGE_BLOCKED", JSON.stringify({
+      race_id: raceId(env), stored_teams: storedIds.size,
+      live_teams: ids.length, overlap,
+      action: "Create a new race and change DEFAULT_RACE_ID before resuming ingestion"
+    }));
+    return;
   }
   if (!ids.length) throw new Error("No Apex kart IDs available for direct sync");
   // Deterministic rotation; no Durable Object cursor and no database cursor writes.
