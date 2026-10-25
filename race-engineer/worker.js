@@ -1610,9 +1610,9 @@ function snapshotFromGrid(grid) {
         if (driver) drivers[id] = driver;
         continue;
       }
-      if (type === "dr") {
+      if (type === "dr" || (column === "5" && !teamNames[id])) {
         const team = stripHtml(value);
-        if (team) teamNames[id] = team;
+        if (team && !/^APEX\s+\d+$/i.test(team)) teamNames[id] = team;
         continue;
       }
       if (type === "pit" || (type === "" && column === "15")) {
@@ -3295,7 +3295,11 @@ async function livePayload(env, rid, suppliedSnapshot = null, forceHistory = fal
 
     current.push({
       race_id:Number(rid),apex_id:id,position:isCurrentRace&&Number.isFinite(pos)?pos:null,
-      team_name:resolveTeam(id,teamMap,entry.team_name,stint.team_name),
+      team_name:resolveTeam(id,
+        isCurrentRace && snapshot?.teamNames?.[id]
+          ? new Map([[id, snapshot.teamNames[id]]])
+          : teamMap,
+        entry.team_name,stint.team_name),
       driver_name:(isCurrentRace?snapshot?.drivers?.[id]:null)||stint.driver_name||entry.current_driver||null,
       current_driver:(isCurrentRace?snapshot?.drivers?.[id]:null)||stint.driver_name||entry.current_driver||null,
       race_lap:Number(lap)||0,live_lap_count:Number(lap)||0,pit_count:pitCount,
