@@ -1400,30 +1400,16 @@ async function directCronSync(env) {
   } catch (error) {
     console.warn("DIRECT_APEX_GRID_UNAVAILABLE", String(error));
   }
-  // Never replay an old race's stored IDs when the official live grid is unavailable.
-  // This is particularly important at a session change: the previous event must
-  // remain read-only until DEFAULT_RACE_ID is explicitly switched.
-  if (!ids.length) {
-    console.warn("DIRECT_SYNC_PAUSED_NO_LIVE_GRID", JSON.stringify({race_id:raceId(env)}));
-    return;
-  }
-
-  // Refuse to mix a new official field into an existing race_id. The old
-  // database contains multiple events under race_id=1; we cannot repair that
-  // retrospectively by guessing, but we can prevent further contamination.
-  const existing = await sbGet(env, "apex_entries", {
-    select: "apex_id", race_id: `eq.${raceId(env)}`,
-    order: "updated_at.desc", limit: "1000"
+  // Never revive an older race's roster when the live source is unavailable.
+  if (!ids.length) throw new Error("Live race grid unavailable; refusing historical writes");
+  const rid = Number(env.DEFAULT_RACE_ID || 1);
+  const existing = await sbGetAll(env, "apex_entries", {
+    select: "apex_id", race_id: `eq.${rid}`
   });
-  const storedIds = new Set(existing.map(row => String(row.apex_id)));
-  const overlap = ids.filter(id => storedIds.has(id)).length;
-  if (storedIds.size >= 20 && ids.length >= 10 && overlap < Math.max(3, Math.ceil(ids.length * 0.1))) {
-    console.error("RACE_CHANGE_BLOCKED", JSON.stringify({
-      race_id: raceId(env), stored_teams: storedIds.size,
-      live_teams: ids.length, overlap,
-      action: "Create a new race and change DEFAULT_RACE_ID before resuming ingestion"
-    }));
-    return;
+  const currentIds = new Set(ids);
+  const oldIds = new Set(existing.map(row => String(row.apex_id)));
+  if (oldIds.size && [...oldIds].filter(id => currentIds.has(id)).length === 0) {
+    throw new Error(`Race ${rid} contains a different roster; set a NEW DEFAULT_RACE_ID before syncing`);
   }
   if (!ids.length) throw new Error("No Apex kart IDs available for direct sync");
   // Deterministic rotation; no Durable Object cursor and no database cursor writes.
@@ -3463,6 +3449,69 @@ async function clearCurrentRaceData(env, rid) {
   ]);
 }
 
+// Explicit, non-destructive archival. The supplied roster must be independently
+// verified by the operator; timestamps and race_id=1 are NOT safe selectors.
+const ARCHIVE_TABLES = [
+  ["apex_entries", "race_id,apex_id"],
+  ["apex_lap_events", "race_id,apex_id,lap_number"],
+  ["apex_pit_stints", "race_id,apex_id,pit_number"],
+  ["manual_lap_exclusions", "race_id,apex_id,lap_number"]
+];
+
+async function archiveVerifiedRoster(env, body) {
+  const source = Number(body?.source_race_id);
+  const target = Number(body?.target_race_id);
+  const ids = body?.apex_ids;
+  if (!Number.isSafeInteger(source) || source < 1 ||
+      !Number.isSafeInteger(target) || target < 1 || target === source ||
+      target === Number(env.DEFAULT_RACE_ID || 1) ||
+      !Array.isArray(ids) || ids.length < 1 || ids.length > 200 ||
+      ids.some(id => !validApexId(String(id))) ||
+      new Set(ids.map(String)).size !== ids.length ||
+      body?.confirm !== `ARCHIVE ${source} TO ${target}`) {
+    throw new Error("Invalid archive request or confirmation");
+  }
+  // Refuse to mix with existing target data, including a partially copied archive.
+  for (const [table] of ARCHIVE_TABLES) {
+    const rows = await sbGet(env, table, {
+      select: "apex_id", race_id: `eq.${target}`, limit: "1"
+    });
+    if (rows.length) throw new Error(`Target race ${target} already has ${table} data`);
+  }
+  const result = {};
+  const idSet = new Set(ids.map(String));
+  const sourceEntries = await sbGetAll(env, "apex_entries", {
+    select: "apex_id", race_id: `eq.${source}`
+  });
+  const found = new Set(sourceEntries.map(row => String(row.apex_id)));
+  const missing = [...idSet].filter(id => !found.has(id));
+  if (missing.length) throw new Error(`Missing source entries: ${missing.join(",")}`);
+  for (const [table, conflict] of ARCHIVE_TABLES) {
+    const rows = [];
+    // Query each verified kart separately, never the entire mixed race.
+    for (const id of idSet) {
+      rows.push(...await sbGetAll(env, table, {
+        select: "*", race_id: `eq.${source}`, apex_id: `eq.${id}`
+      }));
+    }
+    for (let i = 0; i < rows.length; i += 150) {
+      await sbUpsert(env, table,
+        rows.slice(i, i + 150).map(row => stripDatabaseIdentity(row, target)), conflict);
+    }
+    const copied = await sbGetAll(env, table, {
+      select: "apex_id", race_id: `eq.${target}`
+    });
+    if (copied.length !== rows.length) {
+      throw new Error(`Archive verification failed for ${table}: ${copied.length}/${rows.length}`);
+    }
+    result[table] = copied.length;
+  }
+  return { source_race_id: source, archived_race_id: target,
+    roster_size: idSet.size, copied: result,
+    source_untouched: true,
+    next_step: `Set DEFAULT_RACE_ID to a NEW ID other than ${source} or ${target} before the next event` };
+}
+
 // ============================================================
 // RACES
 // ============================================================
@@ -5266,6 +5315,18 @@ export default {
         );
       }
 
+
+      if (url.pathname === "/api/archive/verified-roster" && request.method === "POST") {
+        if (!env.ARCHIVE_TOKEN ||
+            request.headers.get("x-archive-token") !== env.ARCHIVE_TOKEN) {
+          return json({error:"Unauthorized"}, 401);
+        }
+        try {
+          return json(await archiveVerifiedRoster(env, await request.json()));
+        } catch (error) {
+          return json({error:String(error?.message || error)}, 409);
+        }
+      }
 
       if (
         url.pathname ===
