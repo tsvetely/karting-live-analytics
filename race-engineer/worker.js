@@ -4155,9 +4155,29 @@ function buildFormattedPitPdf(stints, rid) {
     const team = rows[0]?.team_name || `Team ${rows[0]?.apex_id || ''}`;
     const kart = rows[0]?.kart_number || rows[0]?.kart || rows[0]?.kart_no || '';
     const displayName = `${kart ? `${kart} - ` : ''}${team}`;
+    // Both Total columns have different meanings in the source report:
+    // accumulated pit time and accumulated on-track time respectively.
+    const hms = value => {
+      const m = /^(\d+):(\d{2}):(\d{2})(?:\.(\d+))?$/.exec(String(value || ''));
+      return m ? Number(m[1])*3600+Number(m[2])*60+Number(m[3])+Number('0.'+(m[4]||'0')) : null;
+    };
+    const asHms = seconds => {
+      if (!Number.isFinite(seconds)) return '';
+      const n = Math.round(seconds);
+      return `${String(Math.floor(n/3600)).padStart(2,'0')}:${String(Math.floor(n%3600/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
+    };
+    let cumulativePit = 0, cumulativeTrack = 0;
+    const calculated = rows.map(r => {
+      const pitSeconds = hms(r.pit_time);
+      const trackSeconds = hms(r.on_track);
+      if (pitSeconds !== null) cumulativePit += pitSeconds;
+      if (trackSeconds !== null) cumulativeTrack += trackSeconds;
+      return {...r, report_pit_total: pitSeconds !== null ? asHms(cumulativePit) : '',
+        report_track_total: trackSeconds !== null ? asHms(cumulativeTrack) : ''};
+    });
     const pageSize = 28;
-    for (let start=0; start<rows.length; start+=pageSize) {
-      const segment = rows.slice(start,start+pageSize);
+    for (let start=0; start<calculated.length; start+=pageSize) {
+      const segment = calculated.slice(start,start+pageSize);
       const c=[];
       drawText(c, 'KARTING EVENTS BULGARIA', 20, 557, 18, true);
       drawText(c, `Race ${rid} - Pit stops`, 20, 531, 14, true);
@@ -4169,8 +4189,8 @@ function buildFormattedPitPdf(stints, rid) {
       for (let i=0;i<segment.length;i++) {
         const r=segment[i], y=top-rowHeight*(i+2);
         if (i%2===1) fill(c,16,y,806,rowHeight,'0.94');
-        const cells=[r.stint_number,r.end_lap_count??r.current_lap_count,r.pit_hour,r.total_time,r.on_track,r.total_laps,
-          cleanDriver(r.driver_name)||'',r.total_time,time(r.best_lap_time),time(r.avg_lap_time),r.pit_time,r.is_live?'(Finish)':r.pit_hour];
+        const cells=[r.stint_number,r.end_lap_count??r.current_lap_count,r.pit_hour,r.report_pit_total,r.on_track,r.total_laps,
+          cleanDriver(r.driver_name)||'',r.report_track_total,time(r.best_lap_time),time(r.avg_lap_time),r.pit_time,r.is_live?'(Finish)':r.pit_hour];
         cells.forEach((v,j)=>drawText(c,fmt(v).slice(0,j===6?29:15),x[j]+3,y+4,7,j===4||j===6));
       }
       const bottom=top-rowHeight*(segment.length+1);

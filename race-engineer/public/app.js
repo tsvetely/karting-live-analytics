@@ -4866,7 +4866,13 @@ function initReports() {
             const lap = Number(row.lap_number);
             if (!Number.isInteger(lap) || lap <= 0) continue;
             // Preserve the original timing cell, including its status marker.
-            original.set(lap, String(row.raw_time || ""));
+            // Protocol cells are milliseconds with an optional status prefix.
+            // Keep every lap, but export the human-readable time, not raw integers.
+            const ms = Number(row.lap_time);
+            if (!Number.isFinite(ms) || ms <= 0) {
+              throw new Error(`Invalid timing value for entry ${id}, lap ${lap}`);
+            }
+            original.set(lap, ms.toFixed(3));
           }
           if (!original.size) throw new Error(`No original laps for ${id}`);
           grouped.set(id, original);
